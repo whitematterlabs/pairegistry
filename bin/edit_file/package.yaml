@@ -1,0 +1,5 @@
+name: edit_file
+kind: bin
+version: 0.1.0
+description: File editor tool exposed to PAIs
+entrypoint: edit_file.py

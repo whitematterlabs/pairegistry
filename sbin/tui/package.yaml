@@ -1,0 +1,5 @@
+name: tui
+kind: sbin
+version: 0.1.0
+description: Owner-only terminal UI for fleet inspection and control
+entrypoint: __main__.py

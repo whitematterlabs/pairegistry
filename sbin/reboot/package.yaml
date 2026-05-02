@@ -1,0 +1,5 @@
+name: reboot
+kind: sbin
+version: 0.1.0
+description: Re-exec the kernel in place
+entrypoint: reboot.py

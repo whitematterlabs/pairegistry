@@ -1,0 +1,5 @@
+name: imessage_backfill
+kind: bin
+version: 0.1.0
+description: Backfill iMessage history into the driver event stream
+entrypoint: imessage_backfill.py

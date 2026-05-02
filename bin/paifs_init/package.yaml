@@ -1,0 +1,5 @@
+name: paifs_init
+kind: bin
+version: 0.1.0
+description: Provision the FHS runtime under PAI_ROOT
+entrypoint: paifs_init.py

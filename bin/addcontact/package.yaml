@@ -1,0 +1,5 @@
+name: addcontact
+kind: bin
+version: 0.1.0
+description: Add a contact entry
+entrypoint: addcontact.py

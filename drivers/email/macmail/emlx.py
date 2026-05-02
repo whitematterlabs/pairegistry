@@ -24,7 +24,7 @@ from email.message import Message
 from pathlib import Path
 from typing import Optional
 
-from . import shared
+from .. import shared
 
 MAIL_ROOT = Path.home() / "Library" / "Mail" / "V10"
 

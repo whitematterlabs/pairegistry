@@ -1,0 +1,5 @@
+name: paicron
+kind: bin
+version: 0.1.0
+description: Service scheduler: cron jobs, watchers, async work
+entrypoint: paicron.py

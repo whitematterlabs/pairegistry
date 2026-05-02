@@ -1,0 +1,5 @@
+name: resolve_contact
+kind: bin
+version: 0.1.0
+description: Resolve a contact handle
+entrypoint: resolve_contact.py

@@ -1,0 +1,5 @@
+name: reset
+kind: sbin
+version: 0.1.0
+description: Wipe runtime state under PAI_ROOT (destructive)
+entrypoint: reset.py

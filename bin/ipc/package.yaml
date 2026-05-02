@@ -1,0 +1,5 @@
+name: ipc
+kind: bin
+version: 0.1.0
+description: Inter-PAI message passing CLI
+entrypoint: ipc.py

@@ -1,0 +1,5 @@
+name: paidel
+kind: bin
+version: 0.1.0
+description: Remove a PAI instance
+entrypoint: paidel.py

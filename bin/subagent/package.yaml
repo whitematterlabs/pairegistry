@@ -1,0 +1,5 @@
+name: subagent
+kind: bin
+version: 0.1.0
+description: Spawn a subagent process
+entrypoint: subagent.py

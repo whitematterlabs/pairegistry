@@ -1,0 +1,5 @@
+name: migrate
+kind: sbin
+version: 0.1.0
+description: Migrate runtime state across schema versions
+entrypoint: migrate.py

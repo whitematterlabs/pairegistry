@@ -1,0 +1,5 @@
+name: clear
+kind: bin
+version: 0.1.0
+description: Clear a PAI's transcript
+entrypoint: clear.py

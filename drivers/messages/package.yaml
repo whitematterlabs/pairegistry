@@ -1,0 +1,4 @@
+name: messages
+kind: driver
+version: 0.1.0
+description: Messages driver (stub)

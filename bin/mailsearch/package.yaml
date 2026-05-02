@@ -1,4 +1,5 @@
 name: mailsearch
 kind: bin
 version: 0.1.0
+description: Search indexed mail
 entrypoint: mailsearch.py

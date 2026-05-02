@@ -1,0 +1,4 @@
+name: contacts
+kind: driver
+version: 0.1.0
+description: Contacts driver (stub)

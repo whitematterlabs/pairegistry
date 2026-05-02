@@ -1,0 +1,5 @@
+name: paiadd
+kind: bin
+version: 0.1.0
+description: Configure a new PAI instance from a bundle
+entrypoint: paiadd.py

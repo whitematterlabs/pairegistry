@@ -1,0 +1,5 @@
+name: ps
+kind: bin
+version: 0.1.0
+description: List PAI processes
+entrypoint: ps.py

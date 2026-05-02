@@ -30,7 +30,7 @@ import yaml
 from boot import paths
 from boot import processes as P
 
-from . import shared
+from .. import shared
 from . import accounts as A
 from . import emlx as E
 
