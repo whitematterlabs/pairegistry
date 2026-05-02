@@ -1,0 +1,4 @@
+name: mailsearch
+kind: bin
+version: 0.1.0
+entrypoint: mailsearch.py

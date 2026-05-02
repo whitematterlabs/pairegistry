@@ -1,0 +1,14 @@
+name: email
+kind: pai
+version: 0.1.0
+description: Email-handling PAI — triages and replies to incoming email
+provider: deepseek
+model: deepseek-v4-pro
+prompt: prompt.md
+wake_on:
+  - email:new
+  - email:backlog
+  - email:draft_failed
+deps:
+  - macmail
+  - mailsearch
