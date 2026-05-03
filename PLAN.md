@@ -19,14 +19,14 @@ pairegistry/
 
 ## Manifest convention
 
-Every installable unit (driver/bin/sbin/pai/lib) has a `package.yaml` at its root:
+Every installable unit has a `package.yaml` at its root — uniformly, no exemptions:
 
 ```yaml
 name: <slug>
-kind: driver | bin | sbin | pai | lib
+kind: driver | bin | sbin | pai | lib | skill | prompt
 version: 0.1.0
 description: <one line>
-entrypoint: <file>     # bin/sbin only
+entrypoint: <file>     # bin/sbin/prompt only
 deps: [<slug>, ...]    # other registry packages required
 # pai-only:
 provider: <name>
@@ -35,9 +35,9 @@ prompt: <file>
 wake_on: [event:type, ...]
 ```
 
-**Skills** are exempt — their `SKILL.md` (with YAML frontmatter) already serves as the manifest. paiman discovers skills by walking `skills/*/SKILL.md`.
+**Skills** still ship `SKILL.md` as their runtime body (read by the agent at use-time), but `package.yaml` next to it is what paiman reads to install the skill.
 
-**Prompts** are exempt — they're single files copied wholesale into `/usr/share/prompts/`.
+**Prompts** are dir-wrapped: `prompts/<name>/{package.yaml, prompt.md}`. `entrypoint:` resolves to `prompt.md` inside the bundle dir.
 
 ## FHS install targets
 

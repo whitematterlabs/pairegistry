@@ -1,0 +1,5 @@
+name: subagent
+kind: prompt
+version: 0.1.0
+description: Default ephemeral subagent prompt
+entrypoint: prompt.md

@@ -1,0 +1,5 @@
+name: pai_default
+kind: prompt
+version: 0.1.0
+description: Default owner-facing PAI prompt — catch-all for unclaimed events
+entrypoint: prompt.md

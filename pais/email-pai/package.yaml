@@ -1,4 +1,4 @@
-name: email
+name: email-pai
 kind: pai
 version: 0.1.0
 description: Email-handling PAI — triages and replies to incoming email
@@ -10,5 +10,5 @@ wake_on:
   - email:backlog
   - email:draft_failed
 deps:
-  - macmail
-  - mailsearch
+  - email          # the email driver (ships macmail)
+  - mailsearch     # the bin

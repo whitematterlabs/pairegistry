@@ -14,6 +14,14 @@
 driver: imessage
 description: Inbound and outbound iMessage routing.
 
+processes:
+  - slug: imessage-in
+    module: drivers.imessage.inbound
+    entrypoint: run
+  - slug: imessage-out
+    module: drivers.imessage.outbound
+    entrypoint: run
+
 events:
   - kind: imessage:new
     description: A new message arrived from a contact, or Arda sent

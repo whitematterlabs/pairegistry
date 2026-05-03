@@ -6,6 +6,14 @@
 driver: macmail
 description: Inbound and outbound email via the macOS Mail.app.
 
+processes:
+  - slug: macmail-in
+    module: drivers.email.macmail.inbound
+    entrypoint: run
+  - slug: macmail-out
+    module: drivers.email.macmail.outbound
+    entrypoint: run
+
 events:
   - kind: email:new
     description: A new email landed in INBOX, or an outbound message

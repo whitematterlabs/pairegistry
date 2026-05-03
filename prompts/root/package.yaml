@@ -1,0 +1,5 @@
+name: root
+kind: prompt
+version: 0.1.0
+description: Root PAI prompt — kernel-internal events and errored nudges
+entrypoint: prompt.md

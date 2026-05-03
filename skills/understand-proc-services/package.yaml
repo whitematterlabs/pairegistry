@@ -1,0 +1,4 @@
+name: understand-proc-services
+kind: skill
+version: 0.1.0
+description: "Process directory anatomy — spec.yaml shapes, status values, log format, restart policy. Read before reasoning about a /proc/<slug>/ entry."
