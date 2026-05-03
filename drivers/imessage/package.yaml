@@ -1,6 +1,6 @@
 name: imessage
 kind: driver
 version: 0.1.0
-description: iMessage driver: tails chat.db, sends via AppleScript
+description: "iMessage driver: tails chat.db, sends via AppleScript"
 deps:
   - tailer
