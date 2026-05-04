@@ -113,6 +113,28 @@ needs go under `/sys/drivers/<name>/`. The driver owns this dir.
 Read-mostly for everyone else — it's the sysfs-style introspection
 window.
 
+## Prefer native APIs over raw DB access
+
+Before reading a SQLite file directly, check whether the OS or a
+well-maintained library already exposes the same data through a
+stable API. Native APIs handle schema migrations, permissions, and
+change notifications for you.
+
+| Surface | Prefer | Over |
+|---|---|---|
+| macOS Calendar | `EventKit` via PyObjC (`EventKit.EKEventStore`) | `~/Library/Calendars/*.sqlitedb` |
+| macOS Contacts | `Contacts.CNContactStore` via PyObjC | `~/Library/Application Support/AddressBook/` |
+| macOS Reminders | `EventKit.EKEventStore` (same store as Calendar) | raw SQLite |
+| macOS Mail | `~/Library/Mail/` MBOX files | Mail.app SQLite indexes |
+| iOS/macOS Health | `HealthKit` (requires entitlement — skip unless owner grants) | `~/Library/Health/` SQLite |
+
+**Decision rule:** if a native framework exists for the platform,
+use it. Fall back to SQLite/file parsing only when:
+- No native API exists (iMessage → `chat.db` is the only interface), or
+- The API requires entitlements the process can't get, or
+- The API is significantly slower than direct DB access for the required polling frequency (rare — and if you're polling, rethink the design first).
+
+
 ## Don't
 
 - Don't put driver code under `/usr/src/boot/`. That's kernel.
@@ -121,6 +143,8 @@ window.
   `/usr/lib/drivers/<name>/events.yaml`.
 - Don't have the kernel interpret your payload. It routes by
   `kind` only; the receiving PAI parses the rest.
+- Don't read `~/Library/Calendars/*.sqlitedb` directly when
+  `EventKit` is available — Apple changes that schema without notice.
 
 ## Read these next
 

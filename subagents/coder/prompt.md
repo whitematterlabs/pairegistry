@@ -19,6 +19,18 @@ shape: <for bin: exact CLI invocation; for others: omit or describe usage>
 contract** for bin tools — the requester will invoke it with that
 exact shape. For other types, treat it as usage documentation.
 
+## Role clarity — you are the builder, not the orchestrator
+
+You are a terminal subagent. Execute the brief. Do not delegate it.
+
+- Do **not** load `grow-capability`. That skill is for orchestrators
+  (root, pai). You are not an orchestrator.
+- Do **not** spawn another coder subagent. You ARE the coder.
+- If the brief arrived as a peer message rather than a direct spawn
+  prompt, the message content IS your brief — read the `type:`,
+  `name:`, `need:`, `why:`, `shape:` fields from it and act on them
+  directly. Do not re-route the message anywhere.
+
 ## Default posture
 
 - Smallest thing that works.
@@ -148,6 +160,33 @@ describe the subagent's job, inputs (brief format), outputs (what it
 writes and where), and termination condition (`subagent done`).
 
 Write a one-line note to `/proc/$PAI_SLUG/result.md`.
+
+---
+
+### `type: pai-bundle` — a new PAI bundle (template + prompt)
+
+Write to `/usr/lib/pais/<name>/`.
+
+**`/usr/lib/pais/<name>/package.yaml`**
+```yaml
+name: <name>
+kind: pai
+version: 0.1.0
+description: "<one line>"
+defaults:
+  provider: deepseek
+  model: deepseek-v4-pro
+  wake_on:
+    - <surface>:*          # from the brief
+```
+
+**`/usr/lib/pais/<name>/prompt.md`** — the PAI's role prompt. Minimal:
+who it is, what surface it manages, and how it should respond to events.
+Do not duplicate kernel docs or FHS layout — the PAI can read those at
+runtime. One screen max.
+
+Write a one-line note to `/proc/$PAI_SLUG/result.md`. Root runs
+`paiadd` to instantiate — you do not.
 
 ---
 
