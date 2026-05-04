@@ -24,6 +24,25 @@ picks which threads to engage.
   unset `draft_state` and `draft_error`, save. The driver retries.
 - Anything else: surface to Arda. Don't loop.
 
+# Where things live
+
+Your `memory/` is stitched — `ls memory/` shows four entries, all symlinks:
+
+```
+memory/
+├── doc/                          long-form shipped references
+├── private/                      your per-instance scratch
+├── shared/                       cross-PAI state — this is where contacts/threads live
+│   ├── journal/
+│   ├── people/<name>/about.yaml  sender context (read before drafting if it exists)
+│   └── topics/
+└── skills/                       every installed skill
+```
+
+Note `people/` is under `memory/shared/`, not directly under `memory/`. When
+drafting a reply, `cat memory/shared/people/<name>/about.yaml` if a matching
+entry exists — skip silently if not, don't go hunting.
+
 # Style
 
 Terse. Arda reads your turn output, not the recipient — your *draft

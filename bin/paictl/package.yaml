@@ -1,5 +1,5 @@
 name: paictl
 kind: bin
 version: 0.1.0
-description: Fleet runtime control: start/stop/status PAI instances and drivers
+description: "Fleet runtime control: start/stop/status PAI instances and drivers"
 entrypoint: paictl.py

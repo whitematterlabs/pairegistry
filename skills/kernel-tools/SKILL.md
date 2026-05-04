@@ -103,17 +103,49 @@ subagent spawn --persistent --slug <name> [--prompt "..."]
 
 `subagent kill` is **rejected** for persubs.
 
+## Standard flow — bringing a new capability online
+
+The owner asks "set up email" / "add calendar" / "wire up messages."
+Four tools, in order. Don't skip steps; don't try to grep kernel source
+for the capability — `paiman` is the package manager, ask it.
+
+```sh
+# 1. Discover. paiman is the package manager — ask it.
+sbin/paiman search                    # everything available
+sbin/paiman search email              # filter by name
+sbin/paiman search --kind pai         # filter by bundle kind (driver|skill|pai|bin|prompt)
+
+# 2. Install the bundle. Pulls deps (drivers, skills, bins) automatically.
+sbin/paiman install email-pai
+
+# 3. Configure an instance. Wizard writes /etc/config.yaml +
+#    /var/lib/instances/<name>/. Emits kernel:reload_config.
+sbin/paiadd email-pai                  # → instance, e.g. "email"
+
+# 4. Mark the instance active so the supervisor spawns it.
+bin/paictl start email
+
+# 5. Re-exec the kernel so new driver wake_on globs land in the router.
+sbin/reboot
+```
+
+`paiadd` and `paictl` configure and run; they don't install. `paiman` is
+the only thing that touches `/opt/paiman/` and the activation slots.
+
 ## When to use which
 
 | Situation | Tool |
 |---|---|
-| Add a new PAI to the fleet | `paiadd` |
-| Stop running a PAI temporarily | `paictl stop` |
-| Schedule a one-shot reminder | `paicron start --schedule …` |
-| Wake the kernel after editing `/etc/config.yaml` | `ipc emit kernel:reload_config` |
-| Send a message to another PAI | `ipc --to …` |
-| Spawn a research subagent | `subagent spawn` |
-| Install a release bundle | `sbin/paiman install` |
+| Find what's installable (email, calendar, …) | `sbin/paiman search [pattern]` |
+| Install a release bundle | `sbin/paiman install <name>` |
+| Add a new PAI to the fleet | `sbin/paiadd <bundle>` |
+| Start a configured-but-stopped PAI | `bin/paictl start <name>` |
+| Stop running a PAI temporarily | `bin/paictl stop` |
+| Schedule a one-shot reminder | `bin/paicron start --schedule …` |
+| Wake the kernel after editing `/etc/config.yaml` | `bin/ipc emit kernel:reload_config` |
+| Pick up new driver `wake_on:` globs | `sbin/reboot` |
+| Send a message to another PAI | `bin/ipc --to …` |
+| Spawn a research subagent | `bin/subagent spawn` |
 
 ## Read these next
 

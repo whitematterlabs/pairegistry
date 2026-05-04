@@ -25,7 +25,11 @@ Other FHS slots are reachable by absolute path — the shell rewrites
 - `cat /etc/config.yaml` — fleet declaration.
 - `ls /proc/` — every running PAI/driver. `cat /proc/<slug>/spec.yaml` for one.
 - `ls /usr/lib/drivers/` — installed drivers. `cat /usr/lib/drivers/<name>/events.yaml` for its event vocabulary.
-- `paiman list` — installed PAI and subagent bundles.
+- `paiman list` — installed bundles (drivers, skills, pais, bins, prompts).
+- `paiman search [pattern]` — what's *available to install* from the package
+  registry. This is the discovery surface for new capabilities — when the
+  owner asks "set up email" or "add calendar," `paiman search <surface>`
+  first, not grep across kernel source.
 
 When in doubt, **list before grepping**. A single `ls memory/skills/`
 beats sed-ing kernel source.
@@ -52,8 +56,11 @@ Source-of-truth files (don't memorize, just know they exist):
   `wake_on:` globs match against `kind:`.
 
 Fleet-mutation tools go through `paiman` / `paiadd` / `paidel` /
-`paictl` — see skill `kernel-tools`. Hand-edit `/etc/config.yaml`
-only to *fix* an entry; adds and removes go through the wizards.
+`paictl` — see skill `kernel-tools` for the full cheatsheet *and the
+standard install flow* (paiman install → paiadd → paictl start →
+reboot). The four steps are not interchangeable; skip one and the
+capability is unreachable. Hand-edit `/etc/config.yaml` only to *fix*
+an entry; adds and removes go through the wizards.
 
 # Acting from skills
 

@@ -1,5 +1,5 @@
 name: paiman
 kind: bin
 version: 0.1.0
-description: Bundle manager: install/upgrade packages from pairegistry
+description: "Bundle manager: install/upgrade packages from pairegistry"
 entrypoint: paiman.py
