@@ -40,6 +40,19 @@ ENVELOPE_INDEX = ENVELOPE_DIR / "Envelope Index"
 CURSOR_DIR = P.HOME_DIR / "tmp" / "drivers" / "macmail"
 CURSOR_PATH = CURSOR_DIR / "cursor.yaml"
 
+PARKED_DIR = paths.PAI_ROOT / "sys" / "drivers" / "macmail"
+PARKED_PATH = PARKED_DIR / "parked.yaml"
+
+# ~30 minutes at 60s tick. Mail.app finishes downloads well within that;
+# anything still parked past this point is almost certainly a row whose
+# body Mail abandoned (.partial.emlx orphaned, or message deleted before
+# full download). Drop it so the parked map doesn't grow without bound.
+MAX_PARK_ATTEMPTS = 30
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+
 
 def _build_delta_sql(cfg: A.AccountsConfig) -> tuple[str, list[str]]:
     """Build the cursor-bounded delta query for the current account list.
@@ -80,31 +93,102 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
-def _load_cursor() -> Optional[int]:
+def _load_cursor() -> Optional[tuple[int, int]]:
+    """Return (last_rowid, last_announced_rowid) or None if no cursor.
+
+    Cursor files written before the announce-tracking change have only
+    `last_rowid`. We default `last_announced_rowid` to 0 in that case —
+    that's the migration trigger that re-announces the existing on-disk
+    backlog exactly once on the next boot.
+    """
     if not CURSOR_PATH.exists():
         return None
     with CURSOR_PATH.open() as f:
         data = yaml.safe_load(f) or {}
     val = data.get("last_rowid")
-    return int(val) if val is not None else None
+    if val is None:
+        return None
+    last_announced = data.get("last_announced_rowid", 0)
+    return int(val), int(last_announced)
 
 
-def _save_cursor(last_rowid: int) -> None:
+def _save_cursor(last_rowid: int, last_announced_rowid: int) -> None:
     CURSOR_DIR.mkdir(parents=True, exist_ok=True)
     tmp = CURSOR_PATH.with_suffix(".yaml.tmp")
     with tmp.open("w") as f:
-        yaml.safe_dump({"last_rowid": last_rowid}, f)
+        yaml.safe_dump(
+            {"last_rowid": last_rowid, "last_announced_rowid": last_announced_rowid},
+            f,
+        )
     os.replace(tmp, CURSOR_PATH)
 
 
-def _bootstrap_cursor() -> int:
+def _bootstrap_cursor() -> tuple[int, int]:
     with _connect() as conn:
         row = conn.execute(
             "SELECT COALESCE(MAX(ROWID), 0) AS m FROM messages"
         ).fetchone()
     last = int(row["m"])
-    _save_cursor(last)
-    return last
+    # Fresh install: nothing to announce; align both fields to MAX(ROWID).
+    _save_cursor(last, last)
+    return last, last
+
+
+def _load_parked() -> dict[int, dict]:
+    if not PARKED_PATH.exists():
+        return {}
+    with PARKED_PATH.open() as f:
+        data = yaml.safe_load(f) or {}
+    out: dict[int, dict] = {}
+    for k, v in data.items():
+        try:
+            out[int(k)] = dict(v) if isinstance(v, dict) else {"first_seen": _now_iso(), "attempts": 0}
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _save_parked(parked: dict[int, dict]) -> None:
+    PARKED_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = PARKED_PATH.with_suffix(".yaml.tmp")
+    with tmp.open("w") as f:
+        yaml.safe_dump({int(k): v for k, v in parked.items()}, f, sort_keys=True)
+    os.replace(tmp, PARKED_PATH)
+
+
+def _query_rowids_in(rowids: list[int], cfg: A.AccountsConfig) -> Optional[list]:
+    """Fetch a specific set of rowids (used to retry the parked map)."""
+    if not rowids:
+        return []
+    patterns = [pat for pat, _role in cfg.url_like_patterns()]
+    if not patterns:
+        return []
+    placeholders = ",".join(["?"] * len(rowids))
+    url_clause = "(" + " OR ".join(["mb.url LIKE ?"] * len(patterns)) + ")"
+    sql = f"""
+SELECT
+    m.ROWID AS rowid,
+    m.date_received AS date_received,
+    m.conversation_id AS conversation_id,
+    mb.url AS url
+FROM messages m
+JOIN mailboxes mb ON mb.ROWID = m.mailbox
+WHERE m.ROWID IN ({placeholders})
+  AND {url_clause}
+ORDER BY m.ROWID ASC
+"""
+    try:
+        conn = _connect()
+    except sqlite3.OperationalError as e:
+        print(f"[macmail-in] cannot open Envelope Index: {e}", flush=True)
+        return None
+    try:
+        return conn.execute(sql, (*rowids, *patterns)).fetchall()
+    except sqlite3.OperationalError as e:
+        print(f"[macmail-in] parked retry query failed: {e}", flush=True)
+        return None
+    finally:
+        conn.close()
 
 
 def _mac_date_to_dt(secs: int) -> datetime:
@@ -279,28 +363,98 @@ def _query_rows(last_rowid: int, cfg: A.AccountsConfig) -> Optional[list]:
 _last_live_log: tuple[int, int] | None = None
 
 
-def _drain_live(last_rowid: int, cfg: A.AccountsConfig) -> int:
+def _park_failure(parked: dict[int, dict], rowid: int) -> None:
+    """Bump retry counter for a rowid whose body isn't on disk yet.
+    Drops the entry once attempts hit the cap."""
+    entry = parked.setdefault(rowid, {"first_seen": _now_iso(), "attempts": 0})
+    entry["attempts"] = int(entry.get("attempts", 0)) + 1
+    if entry["attempts"] >= MAX_PARK_ATTEMPTS:
+        print(
+            f"[macmail-in] giving up on rowid={rowid} after {entry['attempts']} attempts "
+            f"(likely deleted before full download)",
+            flush=True,
+        )
+        parked.pop(rowid, None)
+
+
+def _retry_parked(parked: dict[int, dict], cfg: A.AccountsConfig) -> list[tuple[int, dict, object]]:
+    """Re-run ingest_row against currently-parked rowids.
+
+    Returns a list of (rowid, result, row) tuples for rowids that were
+    successfully processed (result not None). Successful rowids are
+    removed from `parked`; failures bump their attempt counter via
+    `_park_failure`. Rowids that no longer appear in the index (deleted
+    before completion) are dropped.
+    """
+    if not parked:
+        return []
+    rowids = sorted(parked.keys())
+    rows = _query_rowids_in(rowids, cfg)
+    if rows is None:
+        return []
+    seen = {int(r["rowid"]): r for r in rows}
+    # Rowids that vanished from the index entirely — Mail discarded them.
+    for rid in list(parked.keys()):
+        if rid not in seen:
+            print(f"[macmail-in] parked rowid={rid} no longer in index; dropping", flush=True)
+            parked.pop(rid, None)
+
+    successes: list[tuple[int, dict, object]] = []
+    for rid, row in seen.items():
+        result = ingest_row(row, cfg)
+        if result is None:
+            _park_failure(parked, rid)
+            continue
+        parked.pop(rid, None)
+        successes.append((rid, result, row))
+    return successes
+
+
+def _drain_live(last_rowid: int, cfg: A.AccountsConfig, last_announced: int) -> tuple[int, int]:
     global _last_live_log
+    parked = _load_parked()
+    orig_announced = last_announced
+
+    # Retry any previously-parked rowids first. These are below `last_rowid`
+    # by definition, so they don't affect cursor advancement.
+    retry_results = _retry_parked(parked, cfg)
+    for rid, result, _row in retry_results:
+        if result.get("_skip"):
+            continue
+        if not result.get("_created", True):
+            continue
+        payload = {k: v for k, v in result.items() if not k.startswith("_")}
+        payload = {"source": "macmail", "kind": "new_email", **payload}
+        P.emit_event(payload)
+        print(
+            f"[macmail-in] emitted (unparked) rowid={rid} → {result['account']} ({result['direction']})",
+            flush=True,
+        )
+        if rid > last_announced:
+            last_announced = rid
+
     rows = _query_rows(last_rowid, cfg)
     if rows is None:
-        return last_rowid
+        _save_parked(parked)
+        if last_announced != orig_announced:
+            _save_cursor(last_rowid, last_announced)
+        return last_rowid, last_announced
     if rows:
         sig = (last_rowid, len(rows))
         if sig != _last_live_log:
             print(f"[macmail-in] live drain: {len(rows)} rows since rowid={last_rowid}", flush=True)
             _last_live_log = sig
 
-    lowest_parked: Optional[int] = None
     max_processed = last_rowid
     for row in rows:
         rowid = int(row["rowid"])
         result = ingest_row(row, cfg)
         if result is None:
-            # Body not on disk yet (.partial.emlx). Don't advance cursor past
-            # this rowid — but keep scanning later rows; subsequent emlx
-            # files may already be ready and writes are idempotent.
-            if lowest_parked is None or rowid < lowest_parked:
-                lowest_parked = rowid
+            # Body not on disk yet (.partial.emlx). Park it for retry but
+            # let the cursor advance — write_message_yaml is idempotent
+            # and the parked map handles the retry on subsequent ticks.
+            _park_failure(parked, rowid)
+            max_processed = max(max_processed, rowid)
             continue
         max_processed = max(max_processed, rowid)
         if result.get("_skip"):
@@ -312,41 +466,32 @@ def _drain_live(last_rowid: int, cfg: A.AccountsConfig) -> int:
         payload = {"source": "macmail", "kind": "new_email", **payload}
         P.emit_event(payload)
         print(f"[macmail-in] emitted rowid={rowid} → {result['account']} ({result['direction']})", flush=True)
+        if rowid > last_announced:
+            last_announced = rowid
 
-    new_last = min(lowest_parked - 1, max_processed) if lowest_parked is not None else max_processed
-    new_last = max(new_last, last_rowid)
-    if new_last != last_rowid:
-        _save_cursor(new_last)
-    return new_last
+    _save_parked(parked)
+    new_last = max(max_processed, last_rowid)
+    if new_last != last_rowid or last_announced != orig_announced:
+        _save_cursor(new_last, last_announced)
+    return new_last, last_announced
 
 
-def _drain_catchup(last_rowid: int, cfg: A.AccountsConfig) -> int:
+def _drain_catchup(last_rowid: int, cfg: A.AccountsConfig, last_announced: int) -> tuple[int, int]:
     """Boot-time pass — coalesce all missed mail into ONE backlog event so
-    PAI gets a single nudge instead of N."""
-    rows = _query_rows(last_rowid, cfg)
-    if rows is None:
-        return last_rowid
-    if not rows:
-        return last_rowid
-
-    print(f"[macmail-in] catchup: {len(rows)} rows since rowid={last_rowid}", flush=True)
+    PAI gets a single nudge instead of N. Announcement is gated on
+    `last_announced_rowid`, not the on-disk write idempotency, so a crash
+    between yaml-write and event-emit recovers on the next boot.
+    """
+    parked = _load_parked()
     summaries: dict[str, dict] = {}
     earliest: Optional[datetime] = None
-    lowest_parked: Optional[int] = None
-    max_processed = last_rowid
-    for row in rows:
-        rowid = int(row["rowid"])
-        result = ingest_row(row, cfg)
-        if result is None:
-            if lowest_parked is None or rowid < lowest_parked:
-                lowest_parked = rowid
-            continue
-        max_processed = max(max_processed, rowid)
+
+    def _record(result: dict, row, rowid: int) -> None:
+        nonlocal earliest
         if result.get("_skip"):
-            continue
-        if not result.get("_created", True):
-            # Already ingested in a prior boot — don't double-count in backlog.
-            continue
+            return
+        if rowid <= last_announced:
+            return  # already announced in a prior boot
         acc = result["account"]
         bucket = summaries.setdefault(acc, {"account": acc, "count": 0, "last_subject": ""})
         bucket["count"] += 1
@@ -354,6 +499,34 @@ def _drain_catchup(last_rowid: int, cfg: A.AccountsConfig) -> int:
         ts = _mac_date_to_dt(int(row["date_received"] or 0))
         if earliest is None or ts < earliest:
             earliest = ts
+
+    # Retry parked rowids first — these are <= last_rowid but may now
+    # have their body on disk. Successful ones still count toward the
+    # backlog announcement if they're above last_announced.
+    for rid, result, row in _retry_parked(parked, cfg):
+        _record(result, row, rid)
+
+    rows = _query_rows(last_rowid, cfg)
+    if rows is None:
+        _save_parked(parked)
+        return last_rowid, last_announced
+
+    if rows:
+        print(f"[macmail-in] catchup: {len(rows)} rows since rowid={last_rowid}", flush=True)
+
+    max_processed = last_rowid
+    new_announced = last_announced
+    for row in rows:
+        rowid = int(row["rowid"])
+        result = ingest_row(row, cfg)
+        if result is None:
+            _park_failure(parked, rowid)
+            max_processed = max(max_processed, rowid)
+            continue
+        max_processed = max(max_processed, rowid)
+        _record(result, row, rowid)
+        if not result.get("_skip") and rowid > new_announced:
+            new_announced = rowid
 
     if summaries:
         total = sum(b["count"] for b in summaries.values())
@@ -366,13 +539,14 @@ def _drain_catchup(last_rowid: int, cfg: A.AccountsConfig) -> int:
         })
         print(f"[macmail-in] emitted backlog (total={total}, accounts={len(summaries)})", flush=True)
 
-    new_last = min(lowest_parked - 1, max_processed) if lowest_parked is not None else max_processed
-    new_last = max(new_last, last_rowid)
-    if new_last != last_rowid:
-        _save_cursor(new_last)
-    if lowest_parked is not None:
-        print(f"[macmail-in] catchup parked at rowid={lowest_parked} (partial emlx); will retry", flush=True)
-    return new_last
+    _save_parked(parked)
+    new_last = max(max_processed, last_rowid)
+    final_announced = max(new_announced, last_announced)
+    if new_last != last_rowid or final_announced != last_announced:
+        _save_cursor(new_last, final_announced)
+    if parked:
+        print(f"[macmail-in] catchup: {len(parked)} rowid(s) parked for retry", flush=True)
+    return new_last, final_announced
 
 
 # ---------- kqueue watcher (lifted from imessage/inbound.py) ---------------
@@ -505,22 +679,28 @@ async def run() -> None:
     cfg = await A.refresh()
     print(f"[macmail-in] discovered accounts: {A.summarize(cfg)}", flush=True)
 
-    last_rowid = _load_cursor()
-    if last_rowid is None:
+    cursor = _load_cursor()
+    if cursor is None:
         try:
-            last_rowid = _bootstrap_cursor()
-            print(f"[macmail-in] bootstrap cursor last_rowid={last_rowid}", flush=True)
+            cursor = _bootstrap_cursor()
+            print(f"[macmail-in] bootstrap cursor last_rowid={cursor[0]}", flush=True)
         except sqlite3.OperationalError as e:
             print(f"[macmail-in] cannot bootstrap (FDA granted?): {e}", flush=True)
             return
+    last_rowid, last_announced = cursor
 
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue()
     watcher = _KqueueWatcher(loop, queue)
     watcher.start()
-    print(f"[macmail-in] started, last_rowid={last_rowid}", flush=True)
+    print(
+        f"[macmail-in] started, last_rowid={last_rowid}, last_announced_rowid={last_announced}",
+        flush=True,
+    )
 
-    last_rowid = await asyncio.to_thread(_drain_catchup, last_rowid, cfg)
+    last_rowid, last_announced = await asyncio.to_thread(
+        _drain_catchup, last_rowid, cfg, last_announced
+    )
 
     # Periodic safety-net poll: kqueue catches WAL writes, but a row stuck on
     # `.partial.emlx` only unparks when Mail finishes the download — which may
@@ -553,7 +733,9 @@ async def run() -> None:
                 if fresh.accounts and fresh.accounts != cfg.accounts:
                     print(f"[macmail-in] accounts refreshed: {A.summarize(fresh)}", flush=True)
                     cfg = fresh
-            last_rowid = await asyncio.to_thread(_drain_live, last_rowid, cfg)
+            last_rowid, last_announced = await asyncio.to_thread(
+                _drain_live, last_rowid, cfg, last_announced
+            )
     except asyncio.CancelledError:
         raise
     finally:

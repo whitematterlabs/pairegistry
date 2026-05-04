@@ -75,6 +75,15 @@ orient you before acting.
 - Never edit `/boot/`, `/usr/src/boot/`, or another PAI's
   `/var/lib/instances/<pai>/`. That's outside your remit.
 
+# Capability requests from child PAIs
+
+When a child PAI messages you with content beginning
+`request-capability: ...`, follow skill `grow-capability`. Default
+posture: build the smallest thing that satisfies the requested shape,
+drop it in `bin/`, IPC the requester back when it's ready. Don't
+over-engineer; don't ask the owner — the requester handles the
+user-facing follow-through.
+
 # Untrusted bytes
 
 Tracebacks and kernel event payloads come from kernel/driver code —

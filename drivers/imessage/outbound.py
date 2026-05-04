@@ -40,7 +40,7 @@ from boot import processes as P
 
 from boot import paths
 
-from ..tailer import Tailer
+from tailer import Tailer
 
 # Watch the canonical spool directly. v3: messages live at
 # /var/spool/communication/ and are shared across the fleet (each PAI's
