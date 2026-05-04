@@ -164,6 +164,22 @@ def _persub_rows() -> list[tuple[str, str, str, str]]:
     return rows
 
 
+def _subagent_rows() -> list[tuple[str, str, str, str]]:
+    """Walk /proc for ephemeral kind:pai subagents (have `parent`, no `persub`)."""
+    rows: list[tuple[str, str, str, str]] = []
+    for slug, spec in P._iter_pai_specs():
+        if spec.get("persub"):
+            continue
+        if "parent" not in spec:
+            continue
+        parent = spec["parent"]
+        desc = spec.get("description", "")
+        desc_with_parent = f"parent={parent}  {desc}".strip()
+        rows.append((slug, "-", _runtime_status(slug), desc_with_parent))
+    rows.sort(key=lambda r: r[0])
+    return rows
+
+
 def cmd_ls(args: argparse.Namespace) -> int:
     data = _load_raw(C.CONFIG_PATH)
     pais = data.get("pais") or []
@@ -176,13 +192,14 @@ def cmd_ls(args: argparse.Namespace) -> int:
         pai_rows.append((name, "yes" if active else "no", _runtime_status(name),
                          entry.get("description", "")))
     persub_rows = _persub_rows()
+    subagent_rows = _subagent_rows()
     drv_rows = _driver_rows()
 
-    if not pai_rows and not persub_rows and not drv_rows:
+    if not pai_rows and not persub_rows and not subagent_rows and not drv_rows:
         print("(no fleet entries)")
         return 0
 
-    all_rows = pai_rows + persub_rows + drv_rows
+    all_rows = pai_rows + persub_rows + subagent_rows + drv_rows
     name_w = max(len(r[0]) for r in all_rows)
     status_w = max(len(r[2]) for r in all_rows)
 
@@ -196,6 +213,7 @@ def cmd_ls(args: argparse.Namespace) -> int:
 
     _print_section("PAIs:", pai_rows)
     _print_section("Persubs:", persub_rows)
+    _print_section("Subagents:", subagent_rows)
     _print_section("Drivers:", drv_rows)
     return 0
 

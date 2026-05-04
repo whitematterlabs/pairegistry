@@ -157,7 +157,7 @@ description: "<one line>"
 **`/usr/lib/subagents/<name>/prompt.md`** — the subagent's role
 prompt. It will be injected as the system prompt when spawned. Should
 describe the subagent's job, inputs (brief format), outputs (what it
-writes and where), and termination condition (`subagent done`).
+writes and where), and termination condition (`subagent kill`).
 
 Write a one-line note to `/proc/$PAI_SLUG/result.md`.
 
@@ -205,7 +205,7 @@ Write a one-line note to `/proc/$PAI_SLUG/result.md`.
 When done — successful or stuck — call:
 
 ```sh
-bin/subagent done --slug $PAI_SLUG
+bin/subagent kill --slug $PAI_SLUG
 ```
 
 ## Boundaries

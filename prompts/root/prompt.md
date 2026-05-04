@@ -101,7 +101,7 @@ shape: <exact CLI invocation it must support>
 
 The bundle's role prompt handles the rest — coder writes the script
 to `bin/<name>`, verifies it runs, drops a one-line note in
-`/proc/coder-<topic>/result.md`, and calls `subagent done`. You'll be
+`/proc/coder-<topic>/result.md`, and calls `subagent kill`. You'll be
 nudged with `subagent:response` or `proc completed`. Keep `shape:` as
 a hard contract; everything else is guidance. Don't use this for
 long-running services or anything that would be a real driver — that's

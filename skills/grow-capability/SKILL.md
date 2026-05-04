@@ -113,6 +113,15 @@ Pull the authoring skill first:
 cat memory/skills/author-driver/SKILL.md
 ```
 
+**Before designing anything**, research how to reach the external surface:
+
+- Web search `<surface> macOS API python` — look for prior art.
+- If no data API exists, check the Accessibility API (`AXUIElement`),
+  `ScriptingBridge`, `NSDistributedNotificationCenter`, or the app's
+  own XPC/socket IPC. See the `author-driver` skill for a full list.
+- If still uncertain, run a quick spike (10-line script) to confirm
+  the approach works before writing the full driver.
+
 Then design the filesystem layout before writing any code (see
 `pai-dogma` §"Canonical filesystem layout"). Answer these before
 building:
@@ -226,8 +235,11 @@ in `/proc/` after `kernel:reload_config`.
 - Do **not** ask the owner for clarification — work from the
   requester's `why:` and `shape:`. If those are too thin, IPC the
   requester (not the owner) for a refined request.
-- Don't over-engineer. No polling, filesystem-first, simplest thing
-  that works — the design dogma is in your system prompt.
+- Don't over-engineer. Keep the FHS contract: **data is a file**
+  (flat YAML under `/calendar/`, `/contacts/`, etc.), **tools are
+  binaries** (one-shot CLIs under `/bin/`), and **long-horizon work
+  is a new PAI instance** (scope C, not a polling loop in a bin tool).
+  No polling, filesystem-first, simplest thing that works.
 
 ## Logging
 

@@ -134,6 +134,38 @@ use it. Fall back to SQLite/file parsing only when:
 - The API requires entitlements the process can't get, or
 - The API is significantly slower than direct DB access for the required polling frequency (rare — and if you're polling, rethink the design first).
 
+## When you don't know the right approach
+
+If you're unsure how to reach the external surface:
+
+1. **Web search first.** Query for the app or data source + "macOS API",
+   "PyObjC", "python", "reverse engineer". Look for prior art — someone
+   has likely hit the same wall.
+
+2. **Try the Accessibility API.** Any app that renders UI is readable via
+   `ApplicationServices.AXUIElement`. Use it when there's no data API but
+   you can observe state or trigger actions through the app's UI:
+
+   ```python
+   from ApplicationServices import AXUIElementCreateApplication, AXUIElementCopyAttributeValue
+   import AppKit
+   ```
+
+   Common use cases: scraping displayed data, driving a GUI app
+   programmatically, listening for focus/selection changes.
+
+3. **Other Apple developer APIs worth knowing:**
+   - `NSWorkspace` — app launch/quit events, frontmost app, file associations
+   - `CoreData` / `NSPersistentContainer` — read iCloud-backed stores
+   - `FSEvents` via `watchdog` — low-latency filesystem change notifications
+   - `ScriptingBridge` — AppleScript-over-Python for scriptable apps
+   - `CFNotificationCenter` / `NSDistributedNotificationCenter` — inter-app
+     broadcast events (e.g. media player state)
+
+4. **Check the app's own IPC.** Many apps expose XPC services, UNIX sockets,
+   or named pipes under `~/Library/` or `/tmp/`. `lsof -U` and
+   `ls /tmp/*.{sock,pipe}` often reveal them.
+
 
 ## Don't
 
