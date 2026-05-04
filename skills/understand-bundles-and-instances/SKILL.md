@@ -59,8 +59,18 @@ with all memory/workspace.
 - `/run/pai/events/` for the event inbox
 - `/usr/bin/` for tools
 - `/proc/` for process visibility
+- bundle-declared channel views (e.g. `mail/`, `drafts/`) — see below
 
 PID 1 (root) lives at `/root/` instead. Same stitching pattern.
+
+**Bundle-declared home links.** The kernel only seeds the universals
+(`bin`, `inbox`, `workspace`, `memory/*`, `tmp`); channel-specific views
+come from the bundle's `home.links` block in `package.yaml`. An
+`email-pai` bundle declares `mail → var/spool/communication/email` and
+`drafts → .../email/drafts`, so the email PAI sees just its own surface
+— not `messages/`, not the whole `communication/` tree. Bundleless PAIs
+(seeds `root` and pid-2 `pai`) keep the broad `communication/` view.
+See skill `author-pai-bundle` for the schema.
 
 A PAI's identity (name, owner, role) is **not** a text file in the
 home — it's already in `/etc/config.yaml` and `/proc/<pid>/spec.yaml`.

@@ -12,3 +12,9 @@ wake_on:
 deps:
   - email          # the email driver (ships macmail)
   - mailsearch     # the bin
+home:
+  links:
+    - link: mail
+      target: var/spool/communication/email
+    - link: drafts
+      target: var/spool/communication/email/drafts

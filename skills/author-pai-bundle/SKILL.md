@@ -54,7 +54,35 @@ defaults:
   model: deepseek-v4-pro
   wake_on:
     - gcal:*
+
+# optional: declare which symlinks the kernel stitches into the
+# instance's home. If omitted, the instance gets only the universal
+# seeds (bin, inbox, workspace, memory/*, tmp) — no `communication/`,
+# no per-channel views.
+home:
+  links:
+    - link: calendar               # name under $HOME
+      target: var/spool/communication/gcal   # path under PAI_ROOT
 ```
+
+### `home.links`
+
+A bundle is the right place to declare which slice of the filesystem its
+PAI sees. By default the kernel stitches only the universals; channel
+views (`mail/`, `drafts/`, `messages/`, …) come from the bundle.
+
+Rules:
+- `link` is a path under `$HOME`. Cannot collide with reserved seeds
+  (`bin`, `inbox`, `workspace`, `memory`, `tmp`) — collision is a hard
+  stitch error.
+- `target` is interpreted relative to `PAI_ROOT` and must stay inside it
+  (escape attempts via `..` are rejected at stitch time).
+- One link per channel surface — narrow is better. An email-pai gets
+  `mail/` and `drafts/`, not `communication/`. The point is *isolation*:
+  email-pai shouldn't see iMessage, and vice versa.
+- Bundleless PAIs (the seed `root` and pid-2 `pai`) get the broad
+  `communication/` view from the kernel; only bundle-instantiated PAIs
+  use `home.links`.
 
 ## prompt.md
 

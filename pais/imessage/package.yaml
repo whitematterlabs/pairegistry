@@ -1,0 +1,16 @@
+name: imessage
+kind: pai
+version: 0.1.0
+description: iMessage-handling PAI — short-form replies, knows when to nudge email or root
+provider: deepseek
+model: deepseek-v4-pro
+prompt: prompt.md
+wake_on:
+  - imessage:new
+  - imessage:owner
+  - imessage:backlog
+  - imessage:send_failed
+home:
+  links:
+    - link: messages
+      target: var/spool/communication/messages

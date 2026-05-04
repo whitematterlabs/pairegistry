@@ -18,11 +18,13 @@ email-pai prompt — this skill is the *how*, not the *whether*.
 ## Where drafts live
 
 ```
-communication/email/drafts/{name}.yaml
+drafts/{name}.yaml
 ```
 
-**Single shared dir, NOT per-account.** The `from:` field on the yaml
-picks which Mail.app account sends it. Pick a descriptive `{name}` like
+`drafts/` is a bundle-declared symlink in your home pointing at
+`var/spool/communication/email/drafts/`. **Single shared dir, NOT
+per-account.** The `from:` field on the yaml picks which Mail.app
+account sends it. Pick a descriptive `{name}` like
 `re-lunch-thursday` or `re-mom-grocery-list` — it's just a filename, not
 exposed anywhere else. Same name twice = overwrite, so be specific.
 
@@ -101,7 +103,8 @@ on the same hit is a no-op) and ready to `cat` or `grep`.
 ## Picking `from:`
 
 Use the **account dir the parent message lives in**:
-`communication/email/<account>/...` — that `<account>` is your `from:`.
+`mail/<account>/...` — that `<account>` is your `from:`. (`mail/` is
+the bundle-declared link to `var/spool/communication/email/`.)
 
 Do **not** read the parent's `to:` header. It often contains a
 Hide-My-Email relay alias, a mailing list, or a forwarder, which Mail.app
@@ -150,7 +153,7 @@ You never set these fields. Treat them as read-only from your side.
 ## Verification
 
 After a successful draft:
-1. `cat communication/email/drafts/{name}.yaml` — `draft_state: drafted`.
+1. `cat drafts/{name}.yaml` — `draft_state: drafted`.
 2. The draft appears in Mail.app's Drafts folder under the `from:` account.
 
 When Arda clicks Send, the message hits Sent → macmail-in ingests it as
