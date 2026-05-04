@@ -12,11 +12,15 @@ a different one to "make it work."
 
 Manages templates (`/opt/<pkg>/<ver>/`, `/usr/lib/pais/<name>/`).
 
+These are **sbin tools** — available in root's home as `sbin/paiman`
+etc., or by absolute FHS path `/sbin/paiman`. Non-root PAIs don't
+have `sbin/` in their home.
+
 ```sh
-paiman init <name>            # scaffold a new dev bundle at /usr/lib/pais/<name>/
-paiman install <bundle>       # install a release bundle into /opt/
-paiman uninstall <bundle>     # refused if any instance references it
-paiman list                   # available bundles
+sbin/paiman init <name>       # scaffold a new dev bundle at /usr/lib/pais/<name>/
+sbin/paiman install <bundle>  # install a release bundle into /opt/
+sbin/paiman uninstall <bundle># refused if any instance references it
+sbin/paiman list              # available bundles
 ```
 
 ## paiadd / paidel — instance layer
@@ -25,9 +29,9 @@ Configure / unconfigure a PAI. Wizard-style; writes
 `/etc/config.yaml` and `/var/lib/instances/<name>/`.
 
 ```sh
-paiadd <bundle>               # useradd-style wizard
-paidel <name>                 # remove fleet entry; preserves instance state (sacred)
-paidel <name> --purge         # also wipe /var/lib/instances/<name>/
+sbin/paiadd <bundle>               # useradd-style wizard
+sbin/paidel <name>                 # remove fleet entry; preserves instance state (sacred)
+sbin/paidel <name> --purge         # also wipe /var/lib/instances/<name>/
 ```
 
 Both end by emitting `kernel:reload_config`. **This is the supported
@@ -109,7 +113,7 @@ subagent spawn --persistent --slug <name> [--prompt "..."]
 | Wake the kernel after editing `/etc/config.yaml` | `ipc emit kernel:reload_config` |
 | Send a message to another PAI | `ipc --to …` |
 | Spawn a research subagent | `subagent spawn` |
-| Install a release bundle | `paiman install` |
+| Install a release bundle | `sbin/paiman install` |
 
 ## Read these next
 

@@ -1,6 +1,6 @@
 ---
 name: author-driver
-description: Howto for creating a new driver — three-location split, events.yaml manifest, registry in main.py, repo source layout. Reference when scaffolding a new event source.
+description: Howto for creating a new driver — three-location split, events.yaml manifest, filesystem-based kernel discovery, deploy flow. Reference when scaffolding a new event source.
 ---
 
 # Authoring a driver
@@ -13,19 +13,21 @@ not interpret them.
 
 | Slot | What you create | What you don't |
 |---|---|---|
-| `/usr/lib/drivers/<name>/` | code + `events.yaml` (symlinked from repo `src/drivers/<name>/`) | runtime state |
+| `/usr/lib/drivers/<name>/` | code + `events.yaml` + `package.yaml` | runtime state |
 | `/sys/drivers/<name>/` | (created at runtime by the driver) | code |
 | `/proc/<slug>/` | (created at runtime by the kernel) | code or runtime state |
 
-There is **no `/etc/drivers/`**. Drivers are a code-time registry
-in the kernel — see `DRIVER_SPECS` in `/usr/src/boot/main.py`.
+There is **no `/etc/drivers/`**. The kernel discovers drivers by
+scanning `/usr/lib/drivers/*/events.yaml` at boot — no code
+registration needed. Install the package, restart the kernel.
 
-## Repo layout
+## Package layout
 
 ```
-src/drivers/<name>/
+/usr/lib/drivers/<name>/
+├── package.yaml        # name, kind: driver, version, description
+├── events.yaml         # event vocabulary + process registry
 ├── __init__.py
-├── events.yaml         # event vocabulary + payload shapes
 ├── inbound.py          # if the driver emits events (e.g. iMessage in)
 └── outbound.py         # if the driver consumes events (e.g. iMessage out)
 ```
@@ -34,6 +36,9 @@ A driver may have either or both halves — `inbound`/`outbound` are
 conventional, not required by name. The split is reflected in the
 slug: process slugs are `<name>-in` / `<name>-out`; the package
 name (under `/usr/lib/drivers/`) omits the suffix.
+
+When authoring via coder, use `type: driver` in the brief — coder
+will write to `/usr/lib/drivers/<name>/` directly.
 
 ## events.yaml manifest
 
@@ -80,13 +85,26 @@ bin/ipc emit imessage:new \
   --field text="dinner thursday?"
 ```
 
-## Registering with the kernel
+## Deploying the driver
 
-Add an entry to `DRIVER_SPECS` in `src/boot/main.py`. This is
-where the kernel learns the driver exists, which proc slugs it
-owns, and how to start/stop it. **`paictl start <slug>` flips
-`/proc/<slug>/spec.yaml` `active:` and emits `kernel:reload_config`**
-— reconcile is event-driven, never polled.
+The kernel discovers drivers by scanning `/usr/lib/drivers/*/events.yaml`
+at boot. The full deploy flow once the code is written:
+
+```sh
+# 1. Install (if source isn't already at /usr/lib/drivers/<name>/)
+sbin/paiman install /path/to/driver-source
+
+# 2. Activate the process(es)
+bin/paictl start <name>-in     # if inbound
+bin/paictl start <name>-out    # if outbound
+
+# 3. Restart the kernel so it discovers the new events.yaml
+bin/ipc emit kernel:restart
+```
+
+After restart, paictl's `active: true` spec is already on disk —
+reconcile brings the driver up automatically. See skill
+`kernel-restart` for restart procedure and caveats.
 
 ## Runtime state
 
@@ -107,7 +125,8 @@ window.
 ## Read these next
 
 - `/usr/lib/drivers/imessage/` — reference implementation.
-- `/usr/src/boot/main.py` — `DRIVER_SPECS`, `_handle_event_file`,
+- `/usr/src/boot/main.py` — `_discover_driver_specs`, `_handle_event_file`,
   `_route_to_pids`.
+- Skill `kernel-restart` — how to restart the kernel after install.
 - Skill `understand-event-routing` — how `kind` becomes a nudge.
 - Skill `understand-filesystem` — the three-location driver split.

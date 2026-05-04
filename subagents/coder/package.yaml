@@ -1,0 +1,7 @@
+name: coder
+kind: subagent
+version: 0.1.0
+description: Ephemeral subagent that builds a small CLI tool from a brief and writes it to bin/. Spawned by root via grow-capability when a child PAI escalates a missing capability.
+prompt: usr/lib/subagents/coder/prompt.md
+provider: anthropic
+# model: claude-sonnet-4-6  # optional override; otherwise provider default

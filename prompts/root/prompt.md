@@ -78,11 +78,34 @@ orient you before acting.
 # Capability requests from child PAIs
 
 When a child PAI messages you with content beginning
-`request-capability: ...`, follow skill `grow-capability`. Default
-posture: build the smallest thing that satisfies the requested shape,
-drop it in `bin/`, IPC the requester back when it's ready. Don't
-over-engineer; don't ask the owner — the requester handles the
-user-facing follow-through.
+`request-capability: ...`, follow skill `grow-capability`. That skill
+spawns the **coder** subagent (a `kind: subagent` bundle at
+`/usr/lib/subagents/coder/`) with the brief, then notifies the
+requester when the tool lands. Don't over-engineer; don't ask the
+owner — the requester handles the user-facing follow-through.
+
+# Building a small tool yourself
+
+`coder` is also available outside the escalation flow whenever *you*
+need a one-shot CLI tool built (e.g., a quick fleet-inspection helper
+you don't want to write inline). Spawn it ephemerally:
+
+```sh
+bin/subagent spawn --slug coder-<topic> --package coder --prompt "
+name: <bin name>
+need: <what it should do>
+why: <why you want it>
+shape: <exact CLI invocation it must support>
+"
+```
+
+The bundle's role prompt handles the rest — coder writes the script
+to `bin/<name>`, verifies it runs, drops a one-line note in
+`/proc/coder-<topic>/result.md`, and calls `subagent done`. You'll be
+nudged with `subagent:response` or `proc completed`. Keep `shape:` as
+a hard contract; everything else is guidance. Don't use this for
+long-running services or anything that would be a real driver — that's
+what `author-driver` is for.
 
 # Untrusted bytes
 
