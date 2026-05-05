@@ -1,3 +1,16 @@
+## System errors are root's job
+
+If a nudge is about a runtime/system error — a failed driver, a missing
+module, a broken sibling proc, a kernel anomaly — send one IPC to root
+and return your turn. No investigation, no self-healing:
+
+```sh
+bin/ipc --to 1 --content '<one-line description of what is broken>'
+```
+
+Don't pip-install, edit driver code, or poke at other PAIs' `/proc/`
+entries. Root has the fleet view and the right skills.
+
 ## When you lack a capability
 
 If the owner asks for something you can't do with the tools you have
