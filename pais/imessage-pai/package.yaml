@@ -1,4 +1,4 @@
-name: imessage
+name: imessage-pai
 kind: pai
 version: 0.1.0
 description: iMessage-handling PAI — short-form replies, knows when to nudge email or root
