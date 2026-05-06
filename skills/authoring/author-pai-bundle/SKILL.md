@@ -15,6 +15,17 @@ locations:
 Bundle content is **immutable post-install**. Edits go to instance
 state at `/var/lib/instances/<pai>/`.
 
+## Where the source lives: pairegistry vs local
+
+Same call as for drivers. **Pairegistry** (`~/Projects/pairegistry/pais/<name>/`)
+when the bundle is general-purpose and would make sense on someone
+else's PAI install — install via `paiman install <name>`. **Local**
+(author `/usr/lib/pais/<name>/` directly) when the bundle is
+owner-specific: a PAI tied to your particular drivers, your
+contacts, your workflow. PAI is self-healing and autonomous; local
+bundles are expected and fine. Just don't keep both copies of the
+same name — pick one origin and stay there.
+
 ## Layout
 
 ```

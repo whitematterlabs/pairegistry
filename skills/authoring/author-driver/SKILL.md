@@ -21,6 +21,28 @@ There is **no `/etc/drivers/`**. The kernel discovers drivers by
 scanning `/usr/lib/drivers/*/events.yaml` at boot — no code
 registration needed. Install the package, restart the kernel.
 
+## Where the source lives: pairegistry vs local
+
+Two valid origins for a driver. Pick deliberately.
+
+| | pairegistry (`~/Projects/pairegistry/drivers/<name>/`) | local (`~/.pai/usr/lib/drivers/<name>/` direct) |
+|---|---|---|
+| Use when | Driver is general-purpose, will run on other PAI installs, deserves a version | Driver is *this owner's* situation: a quirky local API, a personal bridge, an experiment |
+| Install path | `paiman install <name>` (symlinks into `/usr/lib/drivers/`) | Author the directory in place |
+| Self-healing edits | Edit pairegistry source, reinstall | Edit `/usr/lib/drivers/<name>/` directly |
+| Reviewability | Has its own git history, package.yaml versioning | Lives only on this machine |
+
+Default to **pairegistry** for anything you'd describe to a stranger
+("an iMessage driver", "a Gmail driver"). Default to **local** for
+anything that needs the owner's name in the description ("Arda's
+WhatsApp scrape that depends on his ChatStorage layout"). When in
+doubt: local first, promote to pairegistry once it stabilizes.
+
+What you must **never** do is mix them — don't author a real
+directory at `~/.pai/usr/lib/drivers/<name>/` while a pairegistry
+copy of the same name exists. The symlink/real-dir split makes
+`paiman install` ambiguous and edits land in the wrong place.
+
 ## Package layout
 
 ```
@@ -106,29 +128,69 @@ never starts, and the entire fleet goes silent. Symptom in
                                   (no "driver started: <your-driver>" line follows)
 ```
 
-### Skeleton — correct
+### Don't poll. Subscribe.
+
+PAI is an event-driven system. A driver that wakes up every N seconds
+to ask "anything new?" is wrong by default — it burns power, adds
+latency floor equal to the poll interval, and wedges other drivers
+during slow ticks. Only fall back to polling when no notification
+mechanism exists, and even then justify it in a comment.
+
+By signal type:
+
+| Surface | Use | Don't use |
+|---|---|---|
+| File / directory changes | `watchdog` (FSEvents on macOS, inotify on Linux) | `os.path.getmtime` in a loop |
+| Subprocess output (Node bridge, tail, etc.) | `asyncio.create_subprocess_exec` + `await proc.stdout.readline()` | `Popen` + `read()` in a loop |
+| SQLite changes | `sqlite3` update hooks via `sqlite3_update_hook` (in C extensions) or `watchdog` on the DB file's `-wal` | `SELECT … WHERE id > cursor` in a poll loop |
+| HTTP / external services | webhook → server in driver, OR provider's streaming/long-poll endpoint (Gmail push, IMAP IDLE, etc.) | scheduled `requests.get` |
+| macOS app state | `NSDistributedNotificationCenter`, `CFNotificationCenter`, `NSWorkspace` notifications, AX observers | re-querying a UI tree every second |
+| iMessage (`chat.db`) | `watchdog.Observer` on `~/Library/Messages/chat.db-wal` + `chat.db-shm` | `SELECT MAX(ROWID) FROM message` in a loop |
+
+If the only available interface is polling (third-party API with no
+push, sqlite without WAL, etc.), the rule is: **slowest interval
+that meets the product requirement**, never sub-5-second by default,
+and always wrapped in `asyncio.to_thread` so the event loop stays
+free.
+
+### Skeleton — correct (FSEvents-driven)
 
 ```python
 import asyncio
+from pathlib import Path
 from boot import processes as P
+from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
 
-POLL_INTERVAL = 2.0  # seconds
+WATCH_PATH = Path.home() / "Library" / "Messages" / "chat.db-wal"
 
 async def run() -> None:
     print("[mydriver] starting", flush=True)
-    while True:
-        try:
-            await _tick()
-        except Exception as e:
-            print(f"[mydriver] tick error: {e!r}", flush=True)
-        await asyncio.sleep(POLL_INTERVAL)
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue()
 
-async def _tick() -> None:
-    # ... do work, emit events via P.emit_event(...) ...
-    pass
+    class Handler(FileSystemEventHandler):
+        def on_modified(self, event):
+            loop.call_soon_threadsafe(queue.put_nowait, event.src_path)
+
+    observer = Observer()
+    observer.schedule(Handler(), str(WATCH_PATH.parent), recursive=False)
+    observer.start()
+    try:
+        while True:
+            await queue.get()
+            try:
+                await _drain_new_rows()    # emits events via P.emit_event
+            except Exception as e:
+                print(f"[mydriver] drain error: {e!r}", flush=True)
+    except asyncio.CancelledError:
+        raise
+    finally:
+        observer.stop()
+        observer.join(timeout=2)
 ```
 
-### Skeleton — wrong (wedges the kernel)
+### Skeleton — wrong (polling + sync def + blocking sleep)
 
 ```python
 import time
@@ -136,9 +198,113 @@ import time
 def run() -> None:                    # ← sync def: BUG
     print("[mydriver] starting", flush=True)
     while True:
-        _tick()
+        _tick()                       # ← polling instead of subscribing
         time.sleep(2)                 # ← blocks the event loop: BUG
 ```
+
+## Non-Python artifacts (Node bridges, native helpers, etc.)
+
+Some external surfaces (WhatsApp Web, browser automation, Discord
+voice) only expose themselves through a non-Python ecosystem. Wrap
+them in a sidecar process the driver supervises — never embed JS/Go
+sources next to your Python.
+
+PAI follows FHS conventions: Python driver code lives in
+`/usr/lib/drivers/<name>/`, **non-Python sidecar helpers live in
+`/usr/libexec/<name>/`**. This is the same split Debian, Homebrew,
+and most distros use for "internal helper a program execs but the
+user never calls directly".
+
+**Layout — pairegistry source:**
+
+```
+~/Projects/pairegistry/drivers/<name>/
+├── package.yaml          # declares libexec subdir + install step
+├── events.yaml
+├── __init__.py
+├── inbound.py            # Python: owns events + on-disk shape
+├── outbound.py           # Python: launches the bridge as a child
+└── libexec/              # ← non-Python sidecar source ships here
+    ├── package.json      # OR Cargo.toml, OR go.mod, etc.
+    └── bridge.js
+```
+
+**Layout — installed:**
+
+```
+/usr/lib/drivers/<name>/        # Python only (paiman symlink)
+├── package.yaml
+├── events.yaml
+├── __init__.py
+├── inbound.py
+└── outbound.py
+
+/usr/libexec/<name>/             # paiman copies pairegistry's libexec/ here
+├── package.json
+├── bridge.js
+└── node_modules/                # populated at install time, NOT committed
+```
+
+`paiman install` lays out both halves: the Python tree gets symlinked
+into `/usr/lib/drivers/<name>/`, the `libexec/` subdir is installed
+to `/usr/libexec/<name>/`, then the declared install step (e.g.
+`npm install --omit=dev`) runs there to populate dependencies.
+
+Rules:
+
+1. **`/usr/lib/drivers/<name>/` is Python-only.** No `.js`, no
+   `package.json`, no `node_modules/` at the driver root. If you find
+   one there, it belongs in `/usr/libexec/<name>/`.
+
+2. **Never commit `node_modules/`, `target/`, `vendor/`, etc. in
+   pairegistry.** Add them to `.gitignore`. They get installed at
+   deploy time, not at author time.
+
+3. **Declare the install step in `package.yaml`** so paiman knows how
+   to populate `/usr/libexec/<name>/`:
+
+   ```yaml
+   name: whatsapp
+   kind: driver
+   libexec:
+     install: ["npm", "install", "--omit=dev"]   # argv list, run inside /usr/libexec/whatsapp/
+   ```
+
+4. **Resolve the runtime binary at startup, don't hard-code it.** Use
+   `shutil.which("node")` (or the equivalent) and fail loud with a
+   `print + return` if it's missing. Hard-coding `/opt/homebrew/bin/node`
+   makes the driver brittle to Apple Silicon vs Intel vs Linux vs
+   custom installs.
+
+   ```python
+   import os, shutil
+   from pathlib import Path
+
+   PAI_ROOT = Path(os.environ.get("PAI_ROOT", str(Path.home() / ".pai")))
+   BRIDGE_JS = PAI_ROOT / "usr" / "libexec" / "whatsapp" / "bridge.js"
+   NODE_BIN = shutil.which("node")
+
+   if not NODE_BIN:
+       print("[whatsapp] node binary not found on PATH; driver idle", flush=True)
+       return
+   if not BRIDGE_JS.exists():
+       print(f"[whatsapp] bridge.js not found at {BRIDGE_JS}; driver idle", flush=True)
+       return
+   ```
+
+5. **Supervise the sidecar with `asyncio.create_subprocess_exec`.**
+   Read its stdout line-by-line in an async task; restart it with
+   exponential backoff if it dies. The bridge owes you a JSON-per-line
+   wire protocol — that's it.
+
+6. **Bridge runtime state goes under `/sys/drivers/<name>/`** (auth
+   tokens, QR session dirs, cached cookies). `/usr/libexec/` is the
+   *code+deps* slot, not state. Same rule as Python state.
+
+If you find yourself authoring more than ~200 lines of non-Python
+code, stop and ask whether this should be its own package on the
+language's ecosystem (an npm package, a brew formula) that the
+driver depends on, rather than a vendored bridge.
 
 ### Blocking I/O inside an async driver
 
@@ -165,9 +331,12 @@ prefer `asyncio.create_subprocess_exec` over `subprocess.Popen` — its
 
 ### Periodic work
 
-Use `await asyncio.sleep(N)`, never `time.sleep(N)`. If you need
-multiple concurrent loops inside one driver, spawn them with
-`asyncio.create_task` and `await` them with `asyncio.gather`.
+Most drivers should be **subscription-driven**, not periodic — see
+"Don't poll. Subscribe." above. When you genuinely need a timer
+(e.g. a once-an-hour reconcile), use `await asyncio.sleep(N)`, never
+`time.sleep(N)`. If you need multiple concurrent loops inside one
+driver, spawn them with `asyncio.create_task` and `await` them with
+`asyncio.gather`.
 
 ### Cancellation
 
@@ -317,6 +486,19 @@ If you're unsure how to reach the external surface:
 - **Don't import `subprocess.Popen` for long-running children.**
   Use `asyncio.create_subprocess_exec` so reading the child's stdout
   doesn't block the kernel.
+- **Don't poll when a notification API exists.** PAI is event-driven;
+  a `while True: await asyncio.sleep(2); check()` loop against a file,
+  DB, or app is almost always wrong. Use `watchdog` / FSEvents,
+  `NSDistributedNotificationCenter`, IMAP IDLE, the bridge's stdout
+  stream, or whatever push channel the surface offers.
+- **Don't put non-Python code in `/usr/lib/drivers/<name>/`.** Sidecar
+  sources (Node bridges, Rust binaries) belong in `/usr/libexec/<name>/`.
+  Don't commit `node_modules/` / `target/` / `vendor/` in pairegistry —
+  paiman populates them at install time. Don't hard-code
+  `/opt/homebrew/bin/node` — resolve via `shutil.which`.
+- **Don't ship test files (`*_test.py`, `test_*.py`) in
+  `/usr/lib/drivers/<name>/`.** Tests live alongside source in
+  pairegistry; the runtime bundle is production code only.
 
 ## Read these next
 
