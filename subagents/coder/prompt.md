@@ -97,7 +97,7 @@ imports.
 ```python
 async def run():
     # tail / poll the external source
-    # write events via bin/ipc or directly to /run/pai/events/
+    # write events via bin/nudge or directly to /run/pai/events/
     pass
 ```
 
@@ -113,7 +113,7 @@ Emit events by writing a YAML file to `/run/pai/events/`:
 kind: <name>:<event>
 <payload fields>
 ```
-Or use `bin/ipc emit <kind> --field key=val`.
+Or use `bin/nudge emit <kind> --field key=val`.
 
 Write a one-line note to `/proc/$PAI_SLUG/result.md` describing the
 driver and its event kinds.

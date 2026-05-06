@@ -1,0 +1,5 @@
+name: understand-ipc
+kind: skill
+topic: understanding
+version: 0.1.0
+description: "How PAIs talk to each other — pai_message and subagent:response, the bin/nudge and bin/subagent CLIs, ephemeral vs persistent subagents."

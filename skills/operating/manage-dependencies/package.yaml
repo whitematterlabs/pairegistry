@@ -1,0 +1,5 @@
+name: manage-dependencies
+kind: skill
+topic: operating
+version: 0.1.0
+description: "Use when adding, removing, or inspecting a PAI's persistent subagents (persubs) — long-lived specialist children declared under `dependencies:` in /etc/config.yaml. Read before editing dependencies or when an operator asks for a memory/computer-use/etc. specialist."

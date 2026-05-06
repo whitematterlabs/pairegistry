@@ -1,4 +1,0 @@
-name: kernel-tools
-kind: skill
-version: 0.1.0
-description: "Cheatsheet for paiman, paiadd/paidel, paictl, paicron, ipc, subagent — what each does, when to use which. Read before invoking unfamiliar tooling."

@@ -1,4 +1,0 @@
-name: understand-filesystem
-kind: skill
-version: 0.1.0
-description: "The FHS map — what each top-level directory means, what's kernel vs userspace, where source vs runtime state lives. Read before touching unfamiliar paths."

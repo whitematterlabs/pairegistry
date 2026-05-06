@@ -1,4 +1,0 @@
-name: author-driver
-kind: skill
-version: 0.1.0
-description: "Howto for creating a new driver — three-location split, events.yaml manifest, registry in main.py, repo source layout. Reference when scaffolding a new event source."

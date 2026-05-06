@@ -1,0 +1,5 @@
+name: kernel-restart
+kind: skill
+topic: operating
+version: 0.1.0
+description: "Restart the kernel in-place (exec). Use after installing a new driver or making changes that require a fresh boot scan. Covers when to restart, how to trigger it, and what to expect."

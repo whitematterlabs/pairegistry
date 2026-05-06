@@ -1,0 +1,5 @@
+name: boot-sequence
+kind: skill
+topic: understanding
+version: 0.1.0
+description: "What happens from /sbin/init through reconcile to the first nudge — phases, ordering, what each phase touches. Read when diagnosing a boot-time failure."

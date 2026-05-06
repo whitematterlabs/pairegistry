@@ -1,0 +1,5 @@
+name: understand-supervisor
+kind: skill
+topic: understanding
+version: 0.1.0
+description: "How the kernel supervises PAI processes — start, nudge, restart policy, failure capture. Read before diagnosing a /proc/<pai>/ that's stuck or thrashing."

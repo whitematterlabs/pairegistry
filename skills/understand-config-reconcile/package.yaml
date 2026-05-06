@@ -1,4 +1,0 @@
-name: understand-config-reconcile
-kind: skill
-version: 0.1.0
-description: "How /etc/config.yaml becomes /proc/<pai>/spec.yaml — schema, managed vs preserved fields, when reconcile runs, and what triggers re-reconciliation."

@@ -1,0 +1,5 @@
+name: author-pai-bundle
+kind: skill
+topic: authoring
+version: 0.1.0
+description: "Howto for creating a new PAI bundle — package.yaml, prompt, paiman init scaffolding, paiadd to instantiate. Reference when adding a new fleet member."

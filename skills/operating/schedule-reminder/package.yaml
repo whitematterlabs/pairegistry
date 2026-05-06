@@ -1,0 +1,6 @@
+name: schedule-reminder
+kind: skill
+topic: operating
+version: 0.1.0
+description: How to schedule a one-shot or recurring timer with paicron — wake the PAI at a specific moment or on a cron, with the timezone convention spelled out.
+entrypoint: SKILL.md

@@ -1,0 +1,5 @@
+name: reload-config
+kind: skill
+topic: diagnosing
+version: 0.1.0
+description: "Use when a `kernel:reload_failed` event lands or you've edited `/etc/config.yaml` and need the kernel to re-reconcile."

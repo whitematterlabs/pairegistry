@@ -1,4 +1,0 @@
-name: diagnose-crash
-kind: skill
-version: 0.1.0
-description: "Use when a `proc failed` event lands or `/proc/<slug>/status` is `failed`, to classify cause as transient vs structural before deciding to restart or surface."

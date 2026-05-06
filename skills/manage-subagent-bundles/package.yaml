@@ -1,4 +1,0 @@
-name: manage-subagent-bundles
-kind: skill
-version: 0.1.0
-description: "Use when authoring, listing, or inspecting reusable persub specialist templates at /usr/lib/subagents/. Read before scaffolding a new specialist (memory, computer-use, etc.) or when an operator asks \"what specialists are installed?\". For wiring a bundle into a parent's config, use manage-dependencies instead."

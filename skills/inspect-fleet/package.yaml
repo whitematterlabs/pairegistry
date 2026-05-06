@@ -1,4 +1,0 @@
-name: inspect-fleet
-kind: skill
-version: 0.1.0
-description: "Use to survey current fleet state — what PAIs/drivers exist, which are running, which are failed. The reflex when an event is ambiguous or you need ground truth before acting."

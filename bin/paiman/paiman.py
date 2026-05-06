@@ -80,7 +80,7 @@ provider: anthropic
 #
 # Subagent bundles are referenced from a parent's dependencies: entry
 # via `package: {name}`. They have no wake_on/fallback — the parent
-# addresses them directly via bin/ipc, not the kernel router.
+# addresses them directly via bin/nudge, not the kernel router.
 """
 
 PAI_PROMPT_MD_TEMPLATE = """\
@@ -124,9 +124,15 @@ def _validate_name(name: str) -> None:
         raise SystemExit(f"paiman: invalid name {name!r}")
 
 
-def _activation_slot(kind: str, name: str, entrypoint: str | None) -> tuple[Path, Path]:
+def _activation_slot(
+    kind: str,
+    name: str,
+    entrypoint: str | None,
+    topic: str | None = None,
+) -> tuple[Path, Path]:
     """Return (slot_path, symlink_target) for the activation symlink."""
-    bundle_dir = paths.opt_paiman() / name
+    rel = f"{topic}/{name}" if topic else name
+    bundle_dir = paths.opt_paiman() / rel
     if kind == "bin":
         if not entrypoint:
             raise SystemExit("paiman: bin bundle requires entrypoint")
@@ -134,6 +140,8 @@ def _activation_slot(kind: str, name: str, entrypoint: str | None) -> tuple[Path
     if kind == "driver":
         return paths.usr_lib_drivers() / name, bundle_dir
     if kind == "skill":
+        if topic:
+            return paths.usr_lib_skills() / topic / name, bundle_dir
         return paths.usr_lib_skills() / name, bundle_dir
     if kind == "prompt":
         if not entrypoint:
@@ -202,11 +210,18 @@ class _Registry:
 
     def lookup(self, name: str) -> Path:
         pkg_dir = self.root() / name
-        if not (pkg_dir / "package.yaml").is_file():
-            raise SystemExit(
-                f"paiman: {name!r} not found in registry {self.root()}"
-            )
-        return pkg_dir
+        if (pkg_dir / "package.yaml").is_file():
+            return pkg_dir
+        # Topic-foldered: <root>/<topic>/<name>/package.yaml
+        for topic_dir in sorted(self.root().iterdir()):
+            if not topic_dir.is_dir() or topic_dir.name.startswith("."):
+                continue
+            candidate = topic_dir / name
+            if (candidate / "package.yaml").is_file():
+                return candidate
+        raise SystemExit(
+            f"paiman: {name!r} not found in registry {self.root()}"
+        )
 
 
 def _resolve_source(arg: str, registry: _Registry, work: Path) -> Path:
@@ -250,6 +265,7 @@ def _install_from_source(src: Path, src_arg: str, registry: _Registry, work: Pat
     name = manifest.get("name")
     kind = manifest.get("kind")
     entrypoint = manifest.get("entrypoint")
+    topic = manifest.get("topic") if kind == "skill" else None
     if not name or not isinstance(name, str):
         raise SystemExit(f"paiman: package.yaml at {src} missing 'name'")
     _validate_name(name)
@@ -276,20 +292,33 @@ def _install_from_source(src: Path, src_arg: str, registry: _Registry, work: Pat
         for dep in deps:
             if not isinstance(dep, str):
                 raise SystemExit(f"paiman: dep entries must be strings, got {dep!r}")
-            if (paths.opt_paiman() / dep).is_dir():
+            if _find_installed_bundle(dep) is not None:
                 continue  # already installed; mutable, leave it alone
             dep_src = registry.lookup(dep)
             _install_from_source(dep_src, dep, registry, work, seen)
 
-    # Copy to /opt/paiman/<name>/ (overwrite).
-    dest = paths.opt_paiman() / name
+    # Clean up old flat install if migrating into a topic subdir.
+    if topic:
+        old_opt = paths.opt_paiman() / name
+        if old_opt.is_symlink():
+            old_opt.unlink()
+        elif old_opt.is_dir():
+            shutil.rmtree(old_opt)
+        old_link = paths.usr_lib_skills() / name
+        if old_link.is_symlink():
+            old_link.unlink()
+        elif old_link.is_dir():
+            shutil.rmtree(old_link)
+
+    # Copy to /opt/paiman/[<topic>/]<name>/ (overwrite).
+    dest = paths.opt_paiman() / (f"{topic}/{name}" if topic else name)
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists() or dest.is_symlink():
         shutil.rmtree(dest)
     shutil.copytree(src, dest, ignore=COPY_IGNORE, symlinks=False)
 
     # Activate.
-    slot, target = _activation_slot(kind, name, entrypoint)
+    slot, target = _activation_slot(kind, name, entrypoint, topic=topic)
     _atomic_symlink(target, slot)
     if kind == "bin":
         try:
@@ -312,18 +341,34 @@ def cmd_install(args: argparse.Namespace) -> int:
     return 0
 
 
-def _bundles_depending_on(name: str) -> list[str]:
-    """Return the names of installed pai bundles that list `name` in their deps."""
-    out: list[str] = []
+def _iter_installed_bundles() -> list[tuple[str, Path]]:
+    """Return (name, bundle_dir) for every installed bundle, flat or
+    topic-foldered (`<opt>/<topic>/<name>/package.yaml`)."""
+    out: list[tuple[str, Path]] = []
     root = paths.opt_paiman()
     if not root.exists():
         return out
     for entry in sorted(root.iterdir()):
-        if not entry.is_dir() or entry.name == name:
+        if not entry.is_dir() or entry.name.startswith("."):
             continue
-        pkg = entry / "package.yaml"
-        if not pkg.is_file():
+        if (entry / "package.yaml").is_file():
+            out.append((entry.name, entry))
             continue
+        for sub in sorted(entry.iterdir()):
+            if not sub.is_dir() or sub.name.startswith("."):
+                continue
+            if (sub / "package.yaml").is_file():
+                out.append((sub.name, sub))
+    return out
+
+
+def _bundles_depending_on(name: str) -> list[str]:
+    """Return the names of installed pai bundles that list `name` in their deps."""
+    out: list[str] = []
+    for bname, bdir in _iter_installed_bundles():
+        if bname == name:
+            continue
+        pkg = bdir / "package.yaml"
         try:
             with pkg.open() as f:
                 data = yaml.safe_load(f) or {}
@@ -332,15 +377,34 @@ def _bundles_depending_on(name: str) -> list[str]:
         if data.get("kind") != "pai":
             continue
         if name in (data.get("deps") or []):
-            out.append(entry.name)
+            out.append(bname)
     return out
+
+
+def _find_installed_bundle(name: str) -> Path | None:
+    """Return the on-disk bundle dir for `name`, flat or topic-foldered."""
+    flat = paths.opt_paiman() / name
+    if (flat / "package.yaml").is_file():
+        return flat
+    root = paths.opt_paiman()
+    if not root.exists():
+        return None
+    for entry in sorted(root.iterdir()):
+        if not entry.is_dir() or entry.name.startswith("."):
+            continue
+        if (entry / "package.yaml").is_file():
+            continue  # leaf bundle, not a topic dir
+        candidate = entry / name
+        if (candidate / "package.yaml").is_file():
+            return candidate
+    return None
 
 
 def cmd_remove(args: argparse.Namespace) -> int:
     name: str = args.name
     _validate_name(name)
-    bundle_dir = paths.opt_paiman() / name
-    if not bundle_dir.is_dir():
+    bundle_dir = _find_installed_bundle(name)
+    if bundle_dir is None or not bundle_dir.is_dir():
         raise SystemExit(f"paiman: {name!r} is not installed")
     dependents = _bundles_depending_on(name)
     if dependents and not args.force:
@@ -351,8 +415,9 @@ def cmd_remove(args: argparse.Namespace) -> int:
     manifest = _load_manifest(bundle_dir)
     kind = manifest.get("kind")
     entrypoint = manifest.get("entrypoint")
+    topic = manifest.get("topic") if kind == "skill" else None
     if kind in INSTALLABLE_KINDS:
-        slot, _ = _activation_slot(kind, name, entrypoint)
+        slot, _ = _activation_slot(kind, name, entrypoint, topic=topic)
         if slot.is_symlink() or slot.exists():
             slot.unlink()
     shutil.rmtree(bundle_dir)
@@ -385,22 +450,15 @@ def _iter_legacy_bundles(bundle_type: str) -> list[tuple[str, dict]]:
 
 
 def _iter_installed() -> list[tuple[str, dict]]:
-    root = paths.opt_paiman()
-    if not root.exists():
-        return []
     out: list[tuple[str, dict]] = []
-    for entry in sorted(root.iterdir()):
-        if not entry.is_dir():
-            continue
-        pkg = entry / "package.yaml"
-        if not pkg.exists():
-            continue
+    for name, bdir in _iter_installed_bundles():
+        pkg = bdir / "package.yaml"
         try:
             with pkg.open() as f:
                 data = yaml.safe_load(f) or {}
         except yaml.YAMLError as e:
             data = {"_error": str(e)}
-        out.append((entry.name, data))
+        out.append((name, data))
     return out
 
 
@@ -437,7 +495,10 @@ def cmd_list(args: argparse.Namespace) -> int:
 
 def cmd_show(args: argparse.Namespace) -> int:
     name: str = args.name
-    candidates = [paths.opt_paiman() / name / "package.yaml"]
+    candidates: list[Path] = []
+    bundle_dir = _find_installed_bundle(name)
+    if bundle_dir is not None:
+        candidates.append(bundle_dir / "package.yaml")
     for bundle_type in ("pai", "subagent"):
         root_fn, _, _ = SCAFFOLD_TYPES[bundle_type]
         candidates.append(root_fn() / name / "package.yaml")

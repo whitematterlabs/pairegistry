@@ -1,0 +1,5 @@
+name: restart-driver
+kind: skill
+topic: diagnosing
+version: 0.1.0
+description: "Use when a kernel-owned driver (imessage-in, imessage-out, gmail-in, proc-watcher, tailer) crashed with a transient cause and needs to be bounced."

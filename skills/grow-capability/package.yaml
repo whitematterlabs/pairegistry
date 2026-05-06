@@ -1,7 +1,0 @@
-name: grow-capability
-kind: skill
-version: 0.1.0
-description: Handle a `request-capability:` IPC from a child PAI by spawning the coder subagent and notifying the requester back. The "growth" half of the capability-gap escalation ceremony.
-entrypoint: SKILL.md
-deps:
-  - coder

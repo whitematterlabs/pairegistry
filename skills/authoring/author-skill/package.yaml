@@ -1,0 +1,5 @@
+name: author-skill
+kind: skill
+topic: authoring
+version: 0.1.0
+description: "Howto for writing a new skill — frontmatter, content shape, when to make one vs add to an existing skill. The convention this very file follows."
