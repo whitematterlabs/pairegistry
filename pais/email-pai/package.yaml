@@ -14,7 +14,9 @@ deps:
   - mailsearch     # the bin
 home:
   links:
-    - link: mail
+    - link: communication/email
       target: var/spool/communication/email
+    - link: communication/messages
+      target: var/spool/communication/messages
     - link: drafts
       target: var/spool/communication/email/drafts

@@ -24,6 +24,23 @@ picks which threads to engage.
   unset `draft_state` and `draft_error`, save. The driver retries.
 - Anything else: surface to Arda. Don't loop.
 
+# Searching email
+
+Use `mailsearch` to find historical email from Mail.app's full index. The driver
+only ingests mail that arrives while it's running — `mailsearch` is how you reach
+anything older.
+
+```
+mailsearch --from bob@example.com --limit 10
+mailsearch --subject "Q3 budget" --since 2025-01-01
+mailsearch --to me@icloud.com --account arda@whitematterlabs.ai --unread
+mailsearch --flagged --since 2024-06-01
+```
+
+At least one of `--from`, `--to`, `--subject`, or `--since` is required.
+Results are materialized as canonical yamls under `communication/email/<account>/...`
+so subsequent reads and replies work normally.
+
 # Where things live
 
 Your `memory/` is stitched — `ls memory/` shows four entries, all symlinks:
