@@ -42,12 +42,20 @@ will write to `/usr/lib/drivers/<name>/` directly.
 
 ## events.yaml manifest
 
-This is the **routing vocabulary**. Every kind the driver may emit
-must appear here. Cross-referenced by every PAI's `wake_on:` list.
+Two top-level sections: `processes:` (what the kernel runs) and
+`events:` (the routing vocabulary).
 
 ```yaml
 driver: imessage
 description: Inbound and outbound iMessage routing.
+
+processes:
+  - slug: imessage-in              # what /proc/<slug>/ will be called
+    module: drivers.imessage.inbound   # importable Python module path
+    entrypoint: run                # async function to call (default: run)
+  - slug: imessage-out
+    module: drivers.imessage.outbound
+    entrypoint: run
 
 events:
   - kind: imessage:new          # the routing key — what wake_on matches
@@ -65,10 +73,123 @@ events:
     ...
 ```
 
-`kind` is what `wake_on:` globs match. `raw_kind` is the YAML
-`kind:` field on the event file dropped into `/run/pai/events/`.
-Often the same; the distinction matters only when a driver emits
-multiple routing kinds from one raw kind (or vice versa).
+**`processes:`** — the kernel walks every driver's `events.yaml` at
+boot, collects this list, and supervises one asyncio task per entry
+(see "Driver runtime contract" below). Omit the section for
+library-only drivers (e.g. `contacts/`, `messages/`) that don't run
+their own process.
+
+**`events:`** — `kind` is what `wake_on:` globs match. `raw_kind` is
+the YAML `kind:` field on the event file dropped into
+`/run/pai/events/`. Often the same; the distinction matters only when
+a driver emits multiple routing kinds from one raw kind (or vice versa).
+
+## Driver runtime contract
+
+Every entry in `processes:` becomes a long-lived asyncio task. The
+kernel's reconcile step calls `<module>.<entrypoint>()` to **build a
+coroutine**, then schedules it under `_supervise_driver`. This means:
+
+> **`entrypoint` MUST be `async def`. Calling it must return a
+> coroutine immediately — never enter a loop, never block, never
+> sleep synchronously.**
+
+If `run` is plain `def` with a `while True: ... time.sleep(N)`
+body, the call to `run()` enters the loop on the kernel's main
+thread and never returns. Reconcile wedges, the supervise loop
+never starts, and the entire fleet goes silent. Symptom in
+`kernel.log`:
+
+```
+[kernel] driver started: <other-driver>
+[<your-driver>] starting        ← your run() printed this, then blocked
+                                  (no "driver started: <your-driver>" line follows)
+```
+
+### Skeleton — correct
+
+```python
+import asyncio
+from boot import processes as P
+
+POLL_INTERVAL = 2.0  # seconds
+
+async def run() -> None:
+    print("[mydriver] starting", flush=True)
+    while True:
+        try:
+            await _tick()
+        except Exception as e:
+            print(f"[mydriver] tick error: {e!r}", flush=True)
+        await asyncio.sleep(POLL_INTERVAL)
+
+async def _tick() -> None:
+    # ... do work, emit events via P.emit_event(...) ...
+    pass
+```
+
+### Skeleton — wrong (wedges the kernel)
+
+```python
+import time
+
+def run() -> None:                    # ← sync def: BUG
+    print("[mydriver] starting", flush=True)
+    while True:
+        _tick()
+        time.sleep(2)                 # ← blocks the event loop: BUG
+```
+
+### Blocking I/O inside an async driver
+
+`requests`, sync `sqlite3`, `subprocess.run`, `os.read` on a regular
+file, anything that calls into a C library that holds the GIL — these
+freeze the event loop while they run. The kernel's other drivers
+stop, the timer heap stops firing, nudges queue up.
+
+Wrap synchronous I/O in `asyncio.to_thread` so the event loop stays
+responsive:
+
+```python
+async def _send(text: str) -> tuple[bool, str]:
+    return await asyncio.to_thread(_send_sync, text)
+
+def _send_sync(text: str) -> tuple[bool, str]:
+    r = requests.post(BRIDGE_URL, json={"text": text}, timeout=30)
+    return (r.ok, r.text)
+```
+
+For long-running subprocesses (a Node bridge, a tail of a log file),
+prefer `asyncio.create_subprocess_exec` over `subprocess.Popen` — its
+`stdout`/`stderr` are awaitable streams.
+
+### Periodic work
+
+Use `await asyncio.sleep(N)`, never `time.sleep(N)`. If you need
+multiple concurrent loops inside one driver, spawn them with
+`asyncio.create_task` and `await` them with `asyncio.gather`.
+
+### Cancellation
+
+The kernel cancels driver tasks on shutdown and on
+`paictl stop <slug>`. Honor `asyncio.CancelledError`:
+
+```python
+async def run() -> None:
+    try:
+        while True:
+            await _tick()
+            await asyncio.sleep(POLL_INTERVAL)
+    except asyncio.CancelledError:
+        # last-chance cleanup: close sockets, flush cursors
+        raise
+```
+
+### Reference implementations
+
+- `/usr/lib/drivers/imessage/inbound.py` — async loop, FSEvents watcher.
+- `/usr/lib/drivers/imessage/outbound.py` — async tailer + `osascript` via subprocess.
+- `/usr/lib/drivers/email/inbound.py` — async polling with `to_thread` for IMAP.
 
 ## Emitting an event
 
@@ -186,6 +307,16 @@ If you're unsure how to reach the external surface:
   `kind` only; the receiving PAI parses the rest.
 - Don't read `~/Library/Calendars/*.sqlitedb` directly when
   `EventKit` is available — Apple changes that schema without notice.
+- **Don't write a synchronous `def run()`.** The kernel calls it to
+  *get* a coroutine — anything but `async def` wedges boot. See
+  "Driver runtime contract" above.
+- **Don't `time.sleep` or `requests.post`/etc. inline.** Use
+  `await asyncio.sleep` and `await asyncio.to_thread(blocking_call)`.
+  A 30-second `requests` timeout in an async driver freezes every
+  other driver and every PAI nudge for 30 seconds.
+- **Don't import `subprocess.Popen` for long-running children.**
+  Use `asyncio.create_subprocess_exec` so reading the child's stdout
+  doesn't block the kernel.
 
 ## Read these next
 
