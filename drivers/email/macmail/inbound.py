@@ -19,6 +19,7 @@ import asyncio
 import os
 import select
 import sqlite3
+import tempfile
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -112,15 +113,30 @@ def _load_cursor() -> Optional[tuple[int, int]]:
     return int(val), int(last_announced)
 
 
+def _atomic_write_yaml(path: Path, data, **dump_kwargs) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
+    )
+    try:
+        with os.fdopen(fd, "w") as f:
+            yaml.safe_dump(data, f, **dump_kwargs)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except FileNotFoundError:
+            pass
+        raise
+
+
 def _save_cursor(last_rowid: int, last_announced_rowid: int) -> None:
-    CURSOR_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = CURSOR_PATH.with_suffix(".yaml.tmp")
-    with tmp.open("w") as f:
-        yaml.safe_dump(
-            {"last_rowid": last_rowid, "last_announced_rowid": last_announced_rowid},
-            f,
-        )
-    os.replace(tmp, CURSOR_PATH)
+    _atomic_write_yaml(
+        CURSOR_PATH,
+        {"last_rowid": last_rowid, "last_announced_rowid": last_announced_rowid},
+    )
 
 
 def _bootstrap_cursor() -> tuple[int, int]:
@@ -149,11 +165,11 @@ def _load_parked() -> dict[int, dict]:
 
 
 def _save_parked(parked: dict[int, dict]) -> None:
-    PARKED_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = PARKED_PATH.with_suffix(".yaml.tmp")
-    with tmp.open("w") as f:
-        yaml.safe_dump({int(k): v for k, v in parked.items()}, f, sort_keys=True)
-    os.replace(tmp, PARKED_PATH)
+    _atomic_write_yaml(
+        PARKED_PATH,
+        {int(k): v for k, v in parked.items()},
+        sort_keys=True,
+    )
 
 
 def _query_rowids_in(rowids: list[int], cfg: A.AccountsConfig) -> Optional[list]:
@@ -222,17 +238,13 @@ def _ensure_account_meta(account_dir: Path, account_address: str, account_uuid: 
     meta_path = account_dir / "meta.yaml"
     if meta_path.exists():
         return
-    account_dir.mkdir(parents=True, exist_ok=True)
     meta = {
         "account": account_address,
         "provider": "macmail",
         "account_uuid": account_uuid,
         "created": datetime.now().date().isoformat(),
     }
-    tmp = meta_path.with_suffix(".yaml.tmp")
-    with tmp.open("w") as f:
-        yaml.safe_dump(meta, f, sort_keys=False)
-    os.replace(tmp, meta_path)
+    _atomic_write_yaml(meta_path, meta, sort_keys=False)
     print(f"[macmail-in] auto-created meta.yaml for {account_address}", flush=True)
 
 
