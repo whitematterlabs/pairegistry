@@ -20,6 +20,8 @@ PY_DEPS=(openwakeword onnxruntime sounddevice webrtcvad numpy soundfile)
 if [[ -x "$VENV_PY" ]]; then
   echo "[voice/install] installing Python deps into FHS venv: ${PY_DEPS[*]}"
   uv pip install --python "$VENV_PY" "${PY_DEPS[@]}"
+  echo "[voice/install] downloading openwakeword ONNX models (one-time)"
+  "$VENV_PY" -c "from openwakeword.utils import download_models; download_models()"
 else
   echo "[voice/install] WARNING: FHS venv not found at $VENV_PY — run paifs-init first" >&2
 fi
