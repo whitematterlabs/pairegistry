@@ -31,16 +31,24 @@ WAKE_MODEL = "hey_jarvis"
 WAKE_THRESHOLD = 0.7        # default 0.5 false-fires on ambient noise
 WAKE_COOLDOWN_S = 1.5       # ignore new wake hits for this long after one fires
 MIN_UTTERANCE_S = 0.5       # drop captures shorter than this (likely false trigger)
-MIN_RMS = 250               # int16 RMS floor; below this is effectively silence
+MIN_PEAK_RMS = 80           # int16 peak-RMS floor over a 250ms window
 MAX_UTTERANCE_S = 15
 SILENCE_TAIL_MS = 1000
 
 
-def _rms(frames: list[np.ndarray]) -> float:
+def _peak_rms(frames: list[np.ndarray], window_ms: int = 250) -> float:
+    """RMS of the loudest `window_ms` slice — robust to silence tails."""
     if not frames:
         return 0.0
     audio = np.concatenate(frames).astype(np.float32)
-    return float(np.sqrt(np.mean(audio * audio)))
+    win = SAMPLE_RATE * window_ms // 1000
+    if len(audio) <= win:
+        return float(np.sqrt(np.mean(audio * audio)))
+    # Sliding-window RMS via cumulative sum of squares.
+    sq = audio * audio
+    cs = np.cumsum(sq)
+    win_sums = cs[win:] - cs[:-win]
+    return float(np.sqrt(win_sums.max() / win))
 
 
 def _write_wav(path: Path, frames: list[np.ndarray]) -> None:
@@ -146,11 +154,18 @@ async def _audio_loop() -> None:
                 if elapsed >= MAX_UTTERANCE_S:
                     print(f"[voice-in] max utterance cap hit ({MAX_UTTERANCE_S}s)", flush=True)
 
-                rms = _rms(captured)
+                rms = _peak_rms(captured)
                 cooldown_until = now + WAKE_COOLDOWN_S
-                if elapsed < MIN_UTTERANCE_S or rms < MIN_RMS:
+                # Reset the wake model so its sliding-window buffer doesn't
+                # carry stale audio from the just-finished utterance and
+                # immediately re-fire on the next frame after cooldown.
+                try:
+                    wake.model.reset()
+                except Exception:
+                    pass
+                if elapsed < MIN_UTTERANCE_S or rms < MIN_PEAK_RMS:
                     print(f"[voice-in] dropping false trigger "
-                          f"(elapsed={elapsed:.2f}s rms={rms:.0f})", flush=True)
+                          f"(elapsed={elapsed:.2f}s peak_rms={rms:.0f})", flush=True)
                 else:
                     wav_path = CAPTURES_DIR / f"{capture_iso.replace(':', '')}.wav"
                     _write_wav(wav_path, captured)
