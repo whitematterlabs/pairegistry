@@ -27,7 +27,8 @@ class WakeDetector:
 
     def __init__(self, model_names: list[str], threshold: float = 0.5):
         from openwakeword.model import Model
-        self.model = Model(wakeword_models=model_names)
+        # ONNX framework — tflite-runtime has no Py3.14 wheel; onnxruntime does.
+        self.model = Model(wakeword_models=model_names, inference_framework="onnx")
         self.threshold = threshold
         self.model_names = model_names
 
