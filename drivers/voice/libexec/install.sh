@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Provisions /usr/libexec/voice/ with whisper.cpp binary + ggml-base.en model,
-# and installs the driver's Python deps into the FHS venv.
-# Idempotent: skips clone+build if binary already present (use --force to redo).
+# installs the driver's Python deps into the FHS venv, downloads openWakeWord
+# ONNX models, and ensures system deps (portaudio, tmux) are present.
+#
+# Idempotent. The whisper.cpp clone+build is the only step gated by --force;
+# everything else is safe to re-run (uv pip / brew / download_models all no-op
+# when satisfied).
 set -euo pipefail
 
 FORCE=0
@@ -15,6 +19,22 @@ SRC="$HERE/whisper.cpp"
 PAI_ROOT="${PAI_ROOT:-$HOME/.pai}"
 VENV_PY="$PAI_ROOT/usr/lib/venv/bin/python"
 
+# ── system deps via brew ──────────────────────────────────────────────
+brew_install() {
+  local pkg="$1"
+  if brew list "$pkg" &>/dev/null; then
+    return 0
+  fi
+  if ! command -v brew >/dev/null; then
+    echo "[voice/install] WARNING: brew not found; cannot install $pkg" >&2
+    return 1
+  fi
+  echo "[voice/install] brew install $pkg"
+  brew install "$pkg"
+}
+
+brew_install portaudio   # sounddevice runtime dep
+
 # ── Python deps into FHS venv ────────────────────────────────────────
 PY_DEPS=(openwakeword onnxruntime sounddevice webrtcvad setuptools numpy soundfile)
 if [[ -x "$VENV_PY" ]]; then
@@ -26,18 +46,9 @@ else
   echo "[voice/install] WARNING: FHS venv not found at $VENV_PY — run paifs-init first" >&2
 fi
 
-# ── portaudio system dep (sounddevice needs it) ──────────────────────
-if ! pkg-config --exists portaudio-2.0 2>/dev/null && ! brew list portaudio &>/dev/null; then
-  if command -v brew >/dev/null; then
-    echo "[voice/install] installing portaudio via brew (required by sounddevice)"
-    brew install portaudio
-  else
-    echo "[voice/install] WARNING: portaudio not found and brew unavailable; sounddevice will fail at runtime" >&2
-  fi
-fi
-
+# ── whisper.cpp build (gated) ────────────────────────────────────────
 if [[ -x "$BIN" && -f "$MODEL" && $FORCE -eq 0 ]]; then
-  echo "[voice/install] whisper-cli + model already present; skipping (use --force to redo)"
+  echo "[voice/install] whisper-cli + model already present; skipping build (use --force to rebuild)"
   exit 0
 fi
 
