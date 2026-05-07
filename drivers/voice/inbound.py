@@ -80,6 +80,11 @@ async def _transcribe_and_emit(wav_path: Path, wake_word: str, duration_ms: int,
         "wake_word": wake_word,
         "duration_ms": duration_ms,
         "captured_at": captured_at,
+        "reply_with": (
+            "The owner spoke to you. Reply by voice: run `say \"your reply\"` "
+            "in your shell. Plain prose, no markdown, short sentences. "
+            "The transcript may have STT errors — interpret charitably."
+        ),
     })
     print(f"[voice-in] emitted utterance ({duration_ms}ms): {text[:80]}", flush=True)
 
