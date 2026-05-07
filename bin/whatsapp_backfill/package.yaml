@@ -1,0 +1,5 @@
+name: whatsapp_backfill
+kind: bin
+version: 0.1.0
+description: Backfill WhatsApp history into the driver event stream
+entrypoint: whatsapp_backfill.py

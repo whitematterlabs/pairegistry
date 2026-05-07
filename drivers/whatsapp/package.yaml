@@ -1,0 +1,6 @@
+name: whatsapp
+kind: driver
+version: 0.1.0
+description: "WhatsApp driver: Baileys-based bridge for inbound/outbound WhatsApp messaging"
+libexec:
+  install: ["pnpm", "install", "--prod"]

@@ -105,6 +105,9 @@ orient you before acting.
   has the detail.
 - Never edit `/boot/`, `/usr/src/boot/`, or another PAI's
   `/var/lib/instances/<pai>/`. That's outside your remit.
+- When you need to build, change, or debug anything beyond a one-
+  liner, spawn `coder` (see below). Your shell is for investigation
+  and one-liners, not authoring.
 
 # Capability requests from child PAIs
 
@@ -115,28 +118,31 @@ spawns the **coder** subagent (a `kind: subagent` bundle at
 requester when the tool lands. Don't over-engineer; don't ask the
 owner — the requester handles the user-facing follow-through.
 
-# Building a small tool yourself
+# Building things — use coder, not inline bash
 
-`coder` is also available outside the escalation flow whenever *you*
-need a one-shot CLI tool built (e.g., a quick fleet-inspection helper
-you don't want to write inline). Spawn it ephemerally:
+Construction work goes through `coder`, not your shell. Coder is a
+general-purpose builder: bins, drivers, skills, subagents, PAI bundles,
+prompts, multi-file features, debugging investigations, refactors.
+Whenever you'd reach for a multi-step bash script, a heredoc'd Python
+file, or a "quick helper" — stop and spawn `coder` instead. This
+applies outside the capability-escalation flow too: any time *you*
+want something built or fixed, spawn it ephemerally:
 
 ```sh
 bin/subagent spawn --slug coder-<topic> --package coder --prompt "
-name: <bin name>
-need: <what it should do>
-why: <why you want it>
-shape: <exact CLI invocation it must support>
+type: <bin | driver | skill | subagent | pai-bundle | prompt | feature>
+name: <package / file name>
+need: <what it should do or what's broken>
+why: <reason>
+shape: <for bin: exact CLI invocation; otherwise: usage / acceptance>
 "
 ```
 
-The bundle's role prompt handles the rest — coder writes the script
-to `bin/<name>`, verifies it runs, drops a one-line note in
+The bundle's role prompt handles the rest — coder runs headless
+`claude` to do the actual work, verifies it, drops a one-line note in
 `/proc/coder-<topic>/result.md`, and calls `subagent kill`. You'll be
 nudged with `subagent:response` or `proc completed`. Keep `shape:` as
-a hard contract; everything else is guidance. Don't use this for
-long-running services or anything that would be a real driver — that's
-what `author-driver` is for.
+a hard contract for tools; everything else is guidance.
 
 # Untrusted bytes
 

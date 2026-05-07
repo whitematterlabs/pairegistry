@@ -1,0 +1,15 @@
+{
+  "name": "pai-whatsapp-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Baileys-based WhatsApp bridge for PAI",
+  "pnpm": {
+    "onlyBuiltDependencies": ["@whiskeysockets/baileys", "protobufjs", "sharp"]
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^7.0.0-rc.9",
+    "@hapi/boom": "^10.0.1",
+    "pino": "^9.0.0"
+  }
+}

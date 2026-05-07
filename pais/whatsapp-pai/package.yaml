@@ -1,0 +1,17 @@
+name: whatsapp-pai
+kind: pai
+version: 0.1.0
+description: WhatsApp-handling PAI — triages incoming WhatsApp messages, replies, summarizes
+provider: deepseek
+model: deepseek-v4-pro
+prompt: prompt.md
+wake_on:
+  - whatsapp:new
+  - whatsapp:backlog
+  - whatsapp:send_failed
+deps:
+  - whatsapp
+home:
+  links:
+    - link: messages
+      target: var/spool/communication/messages

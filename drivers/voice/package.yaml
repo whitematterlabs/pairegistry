@@ -1,0 +1,6 @@
+name: voice
+kind: driver
+version: 0.1.0
+description: "Voice I/O driver: openWakeWord + whisper.cpp STT inbound, `say` TTS outbound. Fully local, no cloud."
+libexec:
+  install: ["bash", "install.sh"]

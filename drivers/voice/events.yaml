@@ -1,0 +1,37 @@
+driver: voice
+description: Local wake-word + STT inbound, `say`-based TTS outbound. No cloud.
+
+processes:
+  - slug: voice-in
+    module: drivers.voice.inbound
+    entrypoint: run
+  - slug: voice-out
+    module: drivers.voice.outbound
+    entrypoint: run
+
+events:
+  - kind: voice:utterance
+    description: Wake word fired and an utterance was transcribed.
+    emitted_by: drivers/voice/inbound.py
+    raw_kind: utterance
+    payload:
+      text: string
+      audio_path: string
+      wake_word: string
+      duration_ms: int
+      captured_at: string
+
+  - kind: voice:wake_failed
+    description: Listener crashed or mic disappeared. Logged for diagnostics.
+    emitted_by: drivers/voice/inbound.py
+    raw_kind: wake_failed
+    payload:
+      reason: string
+
+  - kind: voice:say_failed
+    description: TTS subprocess failed to speak a reply file.
+    emitted_by: drivers/voice/outbound.py
+    raw_kind: say_failed
+    payload:
+      path: string
+      reason: string

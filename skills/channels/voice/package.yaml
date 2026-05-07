@@ -1,0 +1,5 @@
+name: voice
+kind: skill
+topic: channels
+version: 0.1.0
+description: "How PAI uses the voice channel — when to speak, how to format text for `say`, capture-path conventions. Read when the active wake_on includes voice:utterance."

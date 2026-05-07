@@ -1,0 +1,55 @@
+driver: whatsapp
+description: Inbound and outbound WhatsApp messaging via Baileys bridge.
+
+processes:
+  - slug: whatsapp-in
+    module: drivers.whatsapp.inbound
+    entrypoint: run
+  - slug: whatsapp-out
+    module: drivers.whatsapp.outbound
+    entrypoint: run
+
+events:
+  - kind: whatsapp:new
+    description: A new WhatsApp message arrived from a contact.
+    emitted_by: drivers/whatsapp/inbound.py
+    raw_kind: new_message
+    payload:
+      thread: string
+      sender: string
+      text: string
+      day_file: string
+
+  - kind: whatsapp:backlog
+    description: Messages that landed while PAI was offline. Coalesced
+      into a single nudge instead of N.
+    emitted_by: drivers/whatsapp/inbound.py
+    raw_kind: messages_backlog
+    payload:
+      since: string
+      threads:
+        - thread: string
+          inbound: int
+          outbound: int
+          last_text: string
+      total: int
+
+  - kind: whatsapp:send_failed
+    description: An outbound message couldn't be delivered (bridge
+      error, recipient not on WhatsApp, etc.). The line is already
+      in the thread day-file but was never sent.
+    emitted_by: drivers/whatsapp/outbound.py
+    raw_kind: send_failed
+    payload:
+      thread: string
+      text: string
+      reason: string
+
+  - kind: whatsapp:qr_ready
+    description: QR code string available for first-time WhatsApp Web
+      pairing. Owner scans it with WhatsApp mobile to link the session.
+      After pairing, sessions persist — no re-scan needed.
+    emitted_by: drivers/whatsapp/inbound.py
+    raw_kind: qr_ready
+    payload:
+      qr: string
