@@ -1,6 +1,6 @@
 # channels/voice
 
-Use when a `voice:utterance` event arrives and you need to reply by voice — or when deciding whether voice is the right channel for a given response.
+Use when a `voice:utterance` event arrives. Tells you how to reply by voice and how to format text so it sounds right through TTS.
 
 ## How voice works end-to-end
 
@@ -15,8 +15,7 @@ Use when a `voice:utterance` event arrives and you need to reply by voice — or
    captured_at: 2026-05-06T14:22:09
    ```
 2. **You receive it** if `voice:utterance` is in your `wake_on:`.
-3. **You reply** by writing a plain `.txt` file into `outbox/voice/<anything>.txt` inside your instance dir.
-4. **Outbound.** `voice-out` watches that dir, runs `say` on the text, and moves the file to `.sent/`.
+3. **You reply** by running `say "your reply text"` in your shell. That's it. No outbox, no file.
 
 ## When to use voice vs. stay text-only
 
@@ -36,21 +35,29 @@ Use when a `voice:utterance` event arrives and you need to reply by voice — or
 - **No URLs.** A URL read aloud is noise. Summarize ("I sent it to your inbox") or omit.
 - **Numbers.** Whisper transcribes "two thousand twenty-six" as "2026". When speaking back, prefer the digit form for years and counts; words for small ordinals ("first", not "1st").
 - **Length.** Default to under 30 seconds spoken (~75 words). If the answer is longer, give the headline aloud and offer to send the rest as text.
+- **STT errors.** The transcript may have errors — "set a timer for ten" might come in as "send a timer for ten". Interpret charitably; ask only when truly ambiguous.
+
+## Quoting
+
+`say` is invoked via shell, so quote with care:
+
+```
+say "Got it. The build is green."
+```
+
+If your reply contains literal double-quotes, escape them or use single quotes.
 
 ## Path conventions
 
 - **Captures:** `sys/drivers/voice/captures/<iso>.wav` — read-only audit trail. You normally don't need to open these; the transcript is in the event payload.
-- **Your outbox:** `~/.pai/var/lib/instances/<your-name>/outbox/voice/<filename>.txt` — anything you write here gets spoken. Filename is arbitrary; a unix timestamp is conventional.
-- **Sent audit:** `outbox/voice/.sent/` — files moved here after a successful `say`. Don't write here directly.
 
 ## Troubleshooting
 
-- **You spoke and nothing happened.** Check `/proc/voice-in/log` and `/proc/voice-out/log`. Was wake detected? Was a capture WAV written? Did STT produce text?
+- **You spoke and nothing happened.** Check `/proc/voice-in/log`. Was wake detected? Was a capture WAV written? Did STT produce text?
 - **`voice:wake_failed` events appearing.** Mic likely disconnected, or whisper-cli/model is missing from `usr/libexec/voice/`. Re-run `paiman install voice --force` to rebuild.
-- **`voice:say_failed` events.** Check the `reason:` field. The original `.txt` is preserved (not moved to `.sent/`) so you can diagnose.
 
 ## Future knobs (not yet in MVP)
 
 - Custom "PAI" wake model (training planned).
-- ElevenLabs TTS swap (single-knob change in `outbound.py`).
+- ElevenLabs TTS swap (replace `say` invocation).
 - Barge-in (interrupting `say` when wake fires again).

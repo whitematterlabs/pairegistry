@@ -28,8 +28,19 @@ PAI_ROOT = Path(os.environ.get("PAI_ROOT", str(Path.home() / ".pai")))
 CAPTURES_DIR = PAI_ROOT / "sys" / "drivers" / "voice" / "captures"
 
 WAKE_MODEL = "hey_jarvis"
+WAKE_THRESHOLD = 0.7        # default 0.5 false-fires on ambient noise
+WAKE_COOLDOWN_S = 1.5       # ignore new wake hits for this long after one fires
+MIN_UTTERANCE_S = 0.5       # drop captures shorter than this (likely false trigger)
+MIN_RMS = 250               # int16 RMS floor; below this is effectively silence
 MAX_UTTERANCE_S = 15
 SILENCE_TAIL_MS = 1000
+
+
+def _rms(frames: list[np.ndarray]) -> float:
+    if not frames:
+        return 0.0
+    audio = np.concatenate(frames).astype(np.float32)
+    return float(np.sqrt(np.mean(audio * audio)))
 
 
 def _write_wav(path: Path, frames: list[np.ndarray]) -> None:
@@ -69,7 +80,7 @@ async def _audio_loop() -> None:
     """Pull mic frames, run wake detection, capture utterances, dispatch STT."""
     import sounddevice as sd
 
-    wake = WakeDetector([WAKE_MODEL])
+    wake = WakeDetector([WAKE_MODEL], threshold=WAKE_THRESHOLD)
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue[np.ndarray] = asyncio.Queue(maxsize=64)
 
@@ -95,28 +106,33 @@ async def _audio_loop() -> None:
     captured: list[np.ndarray] = []
     capture_started_at: float | None = None
     capture_iso: str = ""
+    cooldown_until: float = 0.0
     silence = SilenceDetector(aggressiveness=2, silence_ms=SILENCE_TAIL_MS)
 
     with stream:
-        print(f"[voice-in] listening on default input device, wake_word={WAKE_MODEL}", flush=True)
+        print(f"[voice-in] listening on default input device, "
+              f"wake_word={WAKE_MODEL} threshold={WAKE_THRESHOLD}", flush=True)
         while True:
             frame = await queue.get()
+            now = loop.time()
 
             if not capturing:
+                if now < cooldown_until:
+                    continue
                 hit = wake.feed(frame)
                 if hit is None:
                     continue
                 print(f"[voice-in] wake hit: {hit.model} score={hit.score:.2f}", flush=True)
                 capturing = True
                 captured = [frame]
-                capture_started_at = loop.time()
+                capture_started_at = now
                 capture_iso = datetime.now().isoformat(timespec="seconds")
                 silence.reset()
                 continue
 
             # capturing
             captured.append(frame)
-            elapsed = loop.time() - (capture_started_at or loop.time())
+            elapsed = now - (capture_started_at or now)
 
             # Slice the WAKE_BLOCK frame into VAD_FRAME-sized chunks for the VAD.
             done = False
@@ -129,11 +145,20 @@ async def _audio_loop() -> None:
             if done or elapsed >= MAX_UTTERANCE_S:
                 if elapsed >= MAX_UTTERANCE_S:
                     print(f"[voice-in] max utterance cap hit ({MAX_UTTERANCE_S}s)", flush=True)
-                wav_path = CAPTURES_DIR / f"{capture_iso.replace(':', '')}.wav"
-                _write_wav(wav_path, captured)
-                duration_ms = int(elapsed * 1000)
-                # Fire-and-forget transcription; the audio loop keeps listening.
-                asyncio.create_task(_transcribe_and_emit(wav_path, WAKE_MODEL, duration_ms, capture_iso))
+
+                rms = _rms(captured)
+                cooldown_until = now + WAKE_COOLDOWN_S
+                if elapsed < MIN_UTTERANCE_S or rms < MIN_RMS:
+                    print(f"[voice-in] dropping false trigger "
+                          f"(elapsed={elapsed:.2f}s rms={rms:.0f})", flush=True)
+                else:
+                    wav_path = CAPTURES_DIR / f"{capture_iso.replace(':', '')}.wav"
+                    _write_wav(wav_path, captured)
+                    duration_ms = int(elapsed * 1000)
+                    asyncio.create_task(
+                        _transcribe_and_emit(wav_path, WAKE_MODEL, duration_ms, capture_iso)
+                    )
+
                 capturing = False
                 captured = []
                 capture_started_at = None
