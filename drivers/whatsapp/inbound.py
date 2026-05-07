@@ -29,7 +29,7 @@ from boot import paths
 # ── paths ──────────────────────────────────────────────────────────
 PAI_ROOT = Path(os.environ.get("PAI_ROOT", str(Path.home() / ".pai")))
 BRIDGE_JS = PAI_ROOT / "usr" / "libexec" / "whatsapp" / "bridge.js"
-MESSAGES_ROOT = paths.var_spool_messages()
+MESSAGES_ROOT = paths.var_spool_communication() / "whatsapp"
 PEOPLE_ROOT = paths.var_lib_memory() / "people"
 OUTBOX_DIR = PAI_ROOT / "sys" / "drivers" / "whatsapp" / "outbox"
 

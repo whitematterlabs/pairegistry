@@ -1,12 +1,8 @@
 """WhatsApp outbound driver.
 
-Watches communication/messages/ for new bare lines in WhatsApp threads.
+Watches communication/whatsapp/ for new bare lines in thread day-files.
 A bare line (no `[HH:MM] sender:` prefix) is a send request from a PAI.
 We write it to the outbox; whatsapp-in forwards it to the Baileys bridge.
-
-WhatsApp threads are identified by:
-- meta.yaml channel == "whatsapp" (set by inbound on first message)
-- OR thread slug looks like a phone number (digits, optional leading +)
 
 On successful send, we append the canonical [HH:MM] me: line to the
 day-file so it's recorded and suppressed on next tail. On failure, we
@@ -33,7 +29,7 @@ from tailer import Tailer
 
 # ── paths ──────────────────────────────────────────────────────────
 PAI_ROOT = Path(os.environ.get("PAI_ROOT", str(Path.home() / ".pai")))
-MESSAGES_ROOT = paths.var_spool_messages()
+MESSAGES_ROOT = paths.var_spool_communication() / "whatsapp"
 PEOPLE_ROOT = paths.var_lib_memory() / "people"
 OUTBOX_DIR = PAI_ROOT / "sys" / "drivers" / "whatsapp" / "outbox"
 
@@ -44,47 +40,11 @@ _PHONE_SLUG = re.compile(r"^\+?\d{7,}$")
 _BRACKET_LINE = re.compile(r"^\[")
 
 
-def _is_whatsapp_thread(thread_dir: Path) -> bool:
-    """Check if this thread should route through WhatsApp."""
-    slug = thread_dir.name
-
-    # Phone number slugs → WhatsApp
-    if _PHONE_SLUG.match(slug):
-        return True
-
-    # Check meta.yaml channel
-    meta_path = thread_dir / "meta.yaml"
-    if meta_path.exists():
-        try:
-            meta = yaml.safe_load(meta_path.read_text()) or {}
-        except yaml.YAMLError:
-            return False
-        if meta.get("channel") == "whatsapp":
-            return True
-
-    # Check if contact has a WhatsApp handle
-    person_dir = PEOPLE_ROOT / slug
-    about_path = person_dir / "about.yaml"
-    if about_path.exists():
-        try:
-            about = yaml.safe_load(about_path.read_text()) or {}
-        except yaml.YAMLError:
-            return False
-        handles = about.get("handles", [])
-        for h in handles:
-            if isinstance(h, str) and _PHONE_SLUG.match(h):
-                return True
-
-    return False
-
-
 def _owned(path: Path) -> bool:
-    """True if this day file belongs to a WhatsApp thread."""
+    """True if this day file lives under our spool root."""
     if path.suffix != ".md":
         return False
-    if path.parent.parent != MESSAGES_ROOT.resolve() and path.parent.parent != MESSAGES_ROOT:
-        return False
-    return _is_whatsapp_thread(path.parent)
+    return path.parent.parent in (MESSAGES_ROOT, MESSAGES_ROOT.resolve())
 
 
 def _resolve_handle(thread_slug: str) -> str:
