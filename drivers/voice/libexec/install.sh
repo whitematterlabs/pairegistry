@@ -16,7 +16,7 @@ PAI_ROOT="${PAI_ROOT:-$HOME/.pai}"
 VENV_PY="$PAI_ROOT/usr/lib/venv/bin/python"
 
 # ── Python deps into FHS venv ────────────────────────────────────────
-PY_DEPS=(openwakeword onnxruntime sounddevice webrtcvad numpy soundfile)
+PY_DEPS=(openwakeword onnxruntime sounddevice webrtcvad setuptools numpy soundfile)
 if [[ -x "$VENV_PY" ]]; then
   echo "[voice/install] installing Python deps into FHS venv: ${PY_DEPS[*]}"
   uv pip install --python "$VENV_PY" "${PY_DEPS[@]}"
