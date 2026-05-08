@@ -1,10 +1,10 @@
 name: claudecode
 kind: subagent
 version: 0.1.0
-description: Ephemeral subagent that wraps a `claude -p` (ClaudeCode headless) invocation. Spawned by root or any PAI when a build/edit task is best handed to ClaudeCode end-to-end.
+description: Ephemeral subagent with a cheap deepseek outer brain whose only job is to compose a brief and shell out to `claude -p` (ClaudeCode headless). The real intelligence and harness live inside the `claude -p` subprocess.
 prompt: usr/lib/subagents/claudecode/prompt.md
-provider: anthropic
-# model: claude-sonnet-4-6  # optional override; otherwise provider default
+provider: deepseek
+model: deepseek-v4-pro
 
 # Pre-handoff debugger pass: after the subagent turn completes, an out-of-band
 # reviewer LLM re-reads files it touched and may rewrite them. Paths are
