@@ -1,12 +1,9 @@
 driver: voice
-description: Local wake-word + STT inbound, `say`-based TTS outbound. No cloud.
+description: Local wake-word + STT inbound. PAIs reply by running `say` directly in their shell — there is no outbound driver. No cloud.
 
 processes:
   - slug: voice-in
     module: drivers.voice.inbound
-    entrypoint: run
-  - slug: voice-out
-    module: drivers.voice.outbound
     entrypoint: run
 
 events:
@@ -26,12 +23,4 @@ events:
     emitted_by: drivers/voice/inbound.py
     raw_kind: wake_failed
     payload:
-      reason: string
-
-  - kind: voice:say_failed
-    description: TTS subprocess failed to speak a reply file.
-    emitted_by: drivers/voice/outbound.py
-    raw_kind: say_failed
-    payload:
-      path: string
       reason: string

@@ -17,6 +17,8 @@ Use when a `voice:utterance` event arrives. Tells you how to reply by voice and 
 2. **You receive it** if `voice:utterance` is in your `wake_on:`.
 3. **You reply** by running `say "your reply text"` in your shell. That's it. No outbox, no file.
 
+If you `say` something, that IS your reply — don't also write the same sentence as your turn output. The user already heard it; repeating it as text puts a duplicate line in the chat.
+
 ## When to use voice vs. stay text-only
 
 - The user just spoke to you → reply by voice. Always.

@@ -89,10 +89,10 @@ Signals:
 
 ## Step 3A — build a bin tool
 
-Spawn the `coder` subagent with the brief:
+Spawn the `claudecode` subagent with the brief:
 
 ```sh
-bin/subagent spawn --slug coder-<topic> --package coder --prompt "
+bin/subagent spawn --slug claudecode-<topic> --package claudecode --prompt "
 type: bin
 name: <name>
 need: <verbatim from request>
@@ -132,10 +132,10 @@ building:
 4. What events does the driver emit? (`<surface>:new`, `<surface>:changed`, `<surface>:removed`)
 5. Is there an existing external DB/API to read? (e.g. SQLite at `~/Library/Calendars/`)
 
-Spawn the `coder` subagent with a **driver brief**:
+Spawn the `claudecode` subagent with a **driver brief**:
 
 ```sh
-bin/subagent spawn --slug coder-<topic> --package coder --prompt "
+bin/subagent spawn --slug claudecode-<topic> --package claudecode --prompt "
 type: driver
 name: <name>
 need: <what the driver must do>
@@ -178,10 +178,10 @@ Design the bundle:
 2. What is its role in one sentence? (this becomes the bundle's prompt)
 3. Does it need any `bin/` tools beyond what exists?
 
-Spawn coder for the bundle:
+Spawn claudecode for the bundle:
 
 ```sh
-bin/subagent spawn --slug coder-<bundle-topic> --package coder --prompt "
+bin/subagent spawn --slug claudecode-<bundle-topic> --package claudecode --prompt "
 type: pai-bundle
 name: <name>-pai
 need: A PAI that handles <surface> operations for the owner.
@@ -193,7 +193,7 @@ required_drivers:
 "
 ```
 
-After coder finishes, instantiate the new PAI:
+After claudecode finishes, instantiate the new PAI:
 
 ```sh
 sbin/paiadd <bundle-name>
@@ -208,8 +208,8 @@ Then go to **Step 4**.
 Read the result files to confirm success:
 
 ```sh
-cat proc/coder-<topic>/result.md
-cat proc/coder-<topic>/log.md
+cat proc/claudecode-<topic>/result.md
+cat proc/claudecode-<topic>/log.md
 ```
 
 On success:

@@ -1,0 +1,5 @@
+name: read_file
+kind: bin
+version: 0.1.0
+description: Bounded file reader. Refuses files >100 lines without an explicit --range/--head/--tail flag, mirroring the coder file-reading discipline.
+entrypoint: read_file.py

@@ -1,0 +1,17 @@
+name: claudecode
+kind: subagent
+version: 0.1.0
+description: Ephemeral subagent that wraps a `claude -p` (ClaudeCode headless) invocation. Spawned by root or any PAI when a build/edit task is best handed to ClaudeCode end-to-end.
+prompt: usr/lib/subagents/claudecode/prompt.md
+provider: anthropic
+# model: claude-sonnet-4-6  # optional override; otherwise provider default
+
+# Pre-handoff debugger pass: after the subagent turn completes, an out-of-band
+# reviewer LLM re-reads files it touched and may rewrite them. Paths are
+# $PAI_ROOT-relative; excludes are prefix matches.
+debugger:
+  provider: deepseek
+  model: deepseek-v4-pro
+  watch_paths: [usr/bin, usr/lib, usr/share/prompts, etc]
+  exclude: [usr/lib/venv, usr/src, opt]
+  max_lines: 50
