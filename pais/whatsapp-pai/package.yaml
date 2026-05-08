@@ -13,5 +13,5 @@ deps:
   - whatsapp
 home:
   links:
-    - link: messages
-      target: var/spool/communication/messages
+    - link: whatsapp-messages
+      target: var/spool/communication/whatsapp

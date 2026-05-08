@@ -36,13 +36,13 @@ mutations. Restart is heavier: all running PAIs get a nudge gap.
    echo "[$(date -u +%FT%TZ)] kernel restart initiated — reason: <one line>" >> /proc/root/log.md
    ```
 
-3. **Emit the restart event.**
+3. **Trigger the restart.**
 
    ```sh
-   bin/nudge emit kernel:restart
+   bin/paictl restart
    ```
 
-   The kernel's event loop catches `kernel:restart`, flushes pending
+   `paictl restart` emits a `kernel:restart` event. The kernel's event loop catches it, flushes pending
    events, and calls `os.execvp` on itself. You will not receive a
    response — your next nudge will be the post-boot reconcile or a
    `proc completed` from a re-started driver.
@@ -67,11 +67,11 @@ The full flow is:
 /sbin/paiman install /path/to/driver-source
 
 # 2. Activate the process(es) it registered
-/sbin/paictl start <driver-slug>-in    # if inbound
-/sbin/paictl start <driver-slug>-out   # if outbound
+bin/paictl start <driver-slug>-in    # if inbound
+bin/paictl start <driver-slug>-out   # if outbound
 
 # 3. Restart so the kernel discovers the new events.yaml
-bin/nudge emit kernel:restart
+bin/paictl restart
 ```
 
 After restart, `paictl start` was already written to

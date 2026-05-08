@@ -1,0 +1,5 @@
+name: send-message
+kind: bin
+version: 0.1.0
+description: Inter-PAI peer message CLI (pai_message events)
+entrypoint: send_message.py

@@ -38,7 +38,7 @@ ls /usr/lib/drivers/             # is there a driver that already surfaces this 
 If yes, just IPC the requester pointing at the existing tool/skill:
 
 ```sh
-bin/nudge --to <requester pid> --content 'capability-exists: <name> — usage: <how to call>'
+bin/send-message --to <requester pid> --content 'capability-exists: <name> — usage: <how to call>'
 ```
 
 Done. Log a one-liner to `/proc/root/log.md` and return.
@@ -158,7 +158,7 @@ After the driver is built, install and activate it:
 ```sh
 sbin/paiman install /usr/lib/drivers/<name>/
 bin/paictl start <name>-in
-bin/nudge emit kernel:restart
+bin/paictl restart
 ```
 
 Then go to **Step 4**.
@@ -215,13 +215,13 @@ cat proc/claudecode-<topic>/log.md
 On success:
 
 ```sh
-bin/nudge --to <requester pid> --content 'capability-ready: <name> — usage: <cli or description>'
+bin/send-message --to <requester pid> --content 'capability-ready: <name> — usage: <cli or description>'
 ```
 
 On failure:
 
 ```sh
-bin/nudge --to <requester pid> --content 'capability-failed: <name> — reason: <one line>'
+bin/send-message --to <requester pid> --content 'capability-failed: <name> — reason: <one line>'
 ```
 
 The requester's next turn will see any new `bin/` tools automatically

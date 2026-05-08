@@ -15,7 +15,7 @@ Owner says any of:
 
 Use **paicron** for these. It is *not* the same as:
 
-- `bin/nudge` — fire an event right now (no delay).
+- `bin/send-message` — fire an event right now (no delay).
 - `bin/subagent spawn` — kick off background work to do *now*, not later.
 
 paicron is the only tool that arms a future-firing timer.
@@ -138,5 +138,5 @@ paicron stop   <full-slug>      # cancel before fire
   auto-cancel for cron expressions and no built-in TTL. Use a one-shot
   ISO for the next Tuesday and re-arm in the wake handler if the owner
   actually wants weekly.
-- "Right now" — use `bin/nudge` or `bin/subagent spawn`. paicron is for
+- "Right now" — use `bin/send-message` or `bin/subagent spawn`. paicron is for
   future moments only.

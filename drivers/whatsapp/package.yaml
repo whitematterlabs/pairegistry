@@ -2,5 +2,9 @@ name: whatsapp
 kind: driver
 version: 0.1.0
 description: "WhatsApp driver: Baileys-based bridge for inbound/outbound WhatsApp messaging"
+deps:
+  - whatsapp_pair
 libexec:
   install: ["pnpm", "install", "--prod"]
+post_install:
+  - whatsapp_pair

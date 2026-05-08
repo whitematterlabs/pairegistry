@@ -22,6 +22,7 @@ Usage:
     paictl stop NAME           set active: false, reload (resolves running proc)
     paictl logs NAME [-f]      print/tail /proc/<name>/log.md
     paictl reload              emit kernel:reload_config
+    paictl restart             emit kernel:restart (re-exec the kernel)
 """
 
 from __future__ import annotations
@@ -119,6 +120,12 @@ def cmd_stop(args: argparse.Namespace) -> int:
 def cmd_reload(args: argparse.Namespace) -> int:
     _emit_reload("paictl")
     print("kernel:reload_config emitted")
+    return 0
+
+
+def cmd_restart(args: argparse.Namespace) -> int:
+    P.emit_event({"source": "kernel", "kind": "kernel:restart"})
+    print("kernel:restart emitted")
     return 0
 
 
@@ -304,6 +311,9 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("reload", help="emit kernel:reload_config")
     p.set_defaults(func=cmd_reload)
+
+    p = sub.add_parser("restart", help="emit kernel:restart (re-exec the kernel)")
+    p.set_defaults(func=cmd_restart)
 
     args = ap.parse_args(argv)
     return args.func(args) or 0

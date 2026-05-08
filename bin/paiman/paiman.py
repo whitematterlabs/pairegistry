@@ -80,7 +80,7 @@ provider: anthropic
 #
 # Subagent bundles are referenced from a parent's dependencies: entry
 # via `package: {name}`. They have no wake_on/fallback — the parent
-# addresses them directly via bin/nudge, not the kernel router.
+# addresses them directly via bin/send-message, not the kernel router.
 """
 
 PAI_PROMPT_MD_TEMPLATE = """\

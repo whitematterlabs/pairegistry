@@ -142,9 +142,9 @@ the only thing that touches `/opt/paiman/` and the activation slots.
 | Start a configured-but-stopped PAI | `bin/paictl start <name>` |
 | Stop running a PAI temporarily | `bin/paictl stop` |
 | Schedule a one-shot reminder | `bin/paicron start --schedule …` |
-| Wake the kernel after editing `/etc/config.yaml` | `bin/nudge emit kernel:reload_config` |
+| Wake the kernel after editing `/etc/config.yaml` | `bin/paictl reload` |
 | Pick up new driver `wake_on:` globs | `sbin/reboot` |
-| Send a message to another PAI | `bin/nudge --to …` |
+| Send a message to another PAI | `bin/send-message --to …` |
 | Spawn a research subagent | `bin/subagent spawn` |
 
 ## Read these next

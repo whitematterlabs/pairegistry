@@ -1,0 +1,7 @@
+name: whatsapp_pair
+kind: bin
+version: 0.1.0
+description: One-time WhatsApp bridge pairing — prints QR to terminal, blocks until session is established
+entrypoint: whatsapp_pair.py
+deps:
+  - qrcode

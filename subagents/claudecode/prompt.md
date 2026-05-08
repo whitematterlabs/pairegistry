@@ -176,7 +176,7 @@ imports.
 ```python
 async def run():
     # tail / poll the external source
-    # write events via bin/nudge or directly to /run/pai/events/
+    # write events directly to /run/pai/events/ (or call P.emit_event)
     pass
 ```
 
@@ -192,7 +192,9 @@ Emit events by writing a YAML file to `/run/pai/events/`:
 kind: <name>:<event>
 <payload fields>
 ```
-Or use `bin/nudge emit <kind> --field key=val`.
+Or call `P.emit_event({"source": "<name>", "kind": "<event>", ...})` from
+inside the driver process. (`bin/send-message` is peer-to-peer IPC, not
+the driver event-emit path.)
 
 Write a one-line note to `/proc/$PAI_SLUG/result.md` describing the
 driver and its event kinds.

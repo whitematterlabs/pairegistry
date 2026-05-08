@@ -15,6 +15,8 @@ import asyncio
 import json
 import os
 import shutil
+import signal
+import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -122,6 +124,54 @@ async def _drain_outbox(queue: asyncio.Queue) -> None:
 
 
 # ── bridge supervision ─────────────────────────────────────────────
+def _reap_stale_bridges() -> None:
+    # The wwebjs-session user-data-dir is an exclusive lock. If a prior
+    # driver lifetime leaked its bridge or Chromium (kernel crash, orphan
+    # after reload, stranded process from a previous boot), the new bridge
+    # can't acquire the lock and stalls silently with no log output.
+    session_dir = PAI_ROOT / "sys" / "drivers" / "whatsapp" / "wwebjs-session"
+    patterns = (
+        r"node.*whatsapp.*bridge\.js",
+        f"--user-data-dir={session_dir}",
+    )
+    me = os.getpid()
+    pids: set[int] = set()
+    for pat in patterns:
+        try:
+            out = subprocess.run(
+                ["pgrep", "-f", pat], capture_output=True, text=True, timeout=2
+            )
+        except Exception:
+            continue
+        for line in out.stdout.splitlines():
+            line = line.strip()
+            if line.isdigit():
+                pid = int(line)
+                if pid != me:
+                    pids.add(pid)
+    if not pids:
+        return
+    print(
+        f"[whatsapp-in] reaping {len(pids)} stale bridge/chromium pids: {sorted(pids)}",
+        flush=True,
+    )
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except Exception as e:
+            print(f"[whatsapp-in] reap SIGTERM {pid}: {e!r}", flush=True)
+    time.sleep(1)
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except Exception as e:
+            print(f"[whatsapp-in] reap SIGKILL {pid}: {e!r}", flush=True)
+
+
 async def _run_bridge() -> None:
     global _bridge_stdin
 
@@ -129,6 +179,7 @@ async def _run_bridge() -> None:
     max_backoff = 60
 
     OUTBOX_DIR.mkdir(parents=True, exist_ok=True)
+    _reap_stale_bridges()
 
     while True:
         if not BRIDGE_JS.exists():
@@ -236,14 +287,13 @@ async def _read_bridge_stdout(proc: asyncio.subprocess.Process) -> None:
             print(f"[whatsapp-in] emitted message from {sender} → {slug}", flush=True)
 
         elif msg_type == "qr":
-            qr_str = data.get("qr", "")
-            if qr_str:
-                P.emit_event({
-                    "source": "whatsapp",
-                    "kind": "qr_ready",
-                    "qr": qr_str,
-                })
-                print("[whatsapp-in] emitted qr_ready event", flush=True)
+            # Pairing is a one-time interactive step. Runtime driver should
+            # never see this — if it does, the bridge has lost its session.
+            print(
+                "[whatsapp-in] bridge requested QR pairing — session is missing "
+                "or expired. Stop this driver and run `whatsapp-pair`.",
+                flush=True,
+            )
 
         elif msg_type == "status":
             state = data.get("state", "unknown")

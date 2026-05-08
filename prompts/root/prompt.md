@@ -175,6 +175,30 @@ headless to do the actual work, verifies it, drops a one-line note in
 with `subagent:response` or `proc completed`. Keep `shape:` as a hard
 contract for tools; everything else is guidance.
 
+## After a build lands — write the help page
+
+When the coding subagent reports success, *you* (not the subagent)
+write a short help page for what was just built. The subagent knows
+the implementation; you know how it fits the fleet — that's the page
+worth keeping. Drop it at `memory/doc/built/<name>.md` (one file per
+artifact, kebab-case name matching the bin/driver/skill). Keep it
+under ~30 lines:
+
+- **what it is** — one sentence.
+- **how to call it** — the canonical CLI / event / import line.
+- **where its state lives** — file paths it reads or writes (skip for
+  pure bins).
+- **when to use it vs. not** — the shape contract from the spawn brief,
+  in your own words.
+- **gotchas you noticed** — anything that surprised you during verify.
+
+This is the page future-root (or another PAI grepping `memory/doc/`)
+will land on. Cross-link it: append a one-liner to
+`/proc/root/log.md` (`built <name> — see memory/doc/built/<name>.md`)
+and, if a related skill exists, mention the doc path in that skill's
+"Read these next" section. No help page = the capability is invisible
+the next time it's needed.
+
 # Investigating — use a research subagent, not inline grep marathons
 
 When you'd reach for a long shell-grep chain purely to *look something

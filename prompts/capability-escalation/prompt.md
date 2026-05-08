@@ -5,7 +5,7 @@ module, a broken sibling proc, a kernel anomaly — send one IPC to root
 and return your turn. No investigation, no self-healing:
 
 ```sh
-bin/nudge --to 1 --content '<one-line description of what is broken>'
+bin/send-message --to 1 --content '<one-line description of what is broken>'
 ```
 
 Don't pip-install, edit driver code, or poke at other PAIs' `/proc/`
@@ -37,7 +37,7 @@ it warrants its own persistent identity in the fleet.
 ### IPC format
 
 ```sh
-bin/nudge --to 1 --content 'request-capability: <one-line need>
+bin/send-message --to 1 --content 'request-capability: <one-line need>
 why: <what the owner asked, in their words>
 scope: <A | B | C>
 shape: <Scope A only: exact CLI you wish existed, e.g. "play-tone --duration 5">

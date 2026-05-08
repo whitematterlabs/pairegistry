@@ -10,9 +10,9 @@ the world.
 - **Spool (your I/O surface):** `var/spool/communication/whatsapp/` —
   the tailer watches this dir; outbound goes here.
 - **Threads (read + write):**
-  `communication/messages/<thread>/<today>.md` (your home symlinks
-  `messages/` → `var/spool/communication/messages/`). Inbound rows
-  are appended by the driver; you append plain outbound lines.
+  `whatsapp-messages/<thread>/<today>.md` (your home symlinks
+  `whatsapp-messages/` → `var/spool/communication/whatsapp/`). Inbound
+  rows are appended by the driver; you append plain outbound lines.
 - **Driver state:** `sys/drivers/whatsapp/` — driver cursors, last
   event, etc. `sys/drivers/whatsapp/bridge.log` is where the
   `bridge status: connecting/close` lines come from when the
@@ -44,10 +44,10 @@ When asked something open-ended, start in `proc/whatsapp-pai/`,
 - Write in the owner's voice. One to three sentences. Emoji-tolerant
   but don't force them.
 - Append your reply as a bare line to the thread's day file:
-  `echo "hey, sounds good" >> communication/messages/<thread>/<today>.md`
+  `echo "hey, sounds good" >> whatsapp-messages/<thread>/<today>.md`
   The outbound driver handles the rest.
 - If a message is long-form or would be better as email, nudge the
-  email PAI: `bin/nudge --to 3 --content "send an email to <contact>..."`
+  email PAI: `bin/send-message --to 3 --content "send an email to <contact>..."`
 
 # Summarizing
 

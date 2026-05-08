@@ -45,11 +45,3 @@ events:
       text: string
       reason: string
 
-  - kind: whatsapp:qr_ready
-    description: QR code string available for first-time WhatsApp Web
-      pairing. Owner scans it with WhatsApp mobile to link the session.
-      After pairing, sessions persist — no re-scan needed.
-    emitted_by: drivers/whatsapp/inbound.py
-    raw_kind: qr_ready
-    payload:
-      qr: string
