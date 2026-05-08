@@ -1,4 +1,4 @@
-#!/Users/arda/.pai/usr/bin/env python
+#!/usr/bin/env python
 """whatsapp-pair — pair the WhatsApp Baileys bridge once.
 
 Spawns bridge.js, renders the QR it emits into your terminal, blocks
