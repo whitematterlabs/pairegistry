@@ -1,0 +1,15 @@
+name: librarian-pai
+kind: pai
+version: 0.1.0
+description: Nightly librarian — consolidates fleet journals into durable shared/topics, shared/people, and rewrites MEMORY.md indexes.
+provider: deepseek
+model: deepseek-v4-pro
+prompt: prompt.md
+wake_on:
+  - librarian:consolidate
+hooks:
+  # Idempotent on every kernel boot: register the nightly trigger.
+  # `paicron ensure` is a no-op if the slug already exists with the
+  # same spec; otherwise it replaces.
+  boot:
+    - 'bin/paicron ensure --slug librarian-nightly --schedule "0 3 * * *" --run "bin/ipc emit librarian:consolidate"'

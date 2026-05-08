@@ -1,0 +1,8 @@
+name: browse
+kind: subagent
+version: 0.1.0
+description: Drives a real browser to complete a web task. Wraps browser-use; reads cookies from a Chrome profile if requested.
+prompt: usr/lib/subagents/browse/prompt.md
+# provider/model intentionally omitted → cascade: parent PAI → fleet default
+libexec:
+  install: ["bash", "install.sh"]

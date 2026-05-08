@@ -328,6 +328,28 @@ def _install_from_source(src: Path, src_arg: str, registry: _Registry, work: Pat
 
     _audit_log(f"install {kind} {name} from {src_arg}")
     print(f"installed {kind} {name} -> {slot}")
+
+    # Run install hooks. Failures are logged but do not abort — a bad
+    # hook should not leave the bundle half-uninstalled. Boot hooks are
+    # the kernel's responsibility (see src/boot/phases/hooks.py).
+    hooks = manifest.get("hooks") or {}
+    if isinstance(hooks, dict):
+        install_cmds = hooks.get("install") or []
+        if isinstance(install_cmds, str):
+            install_cmds = [install_cmds]
+        for cmd in install_cmds:
+            if not isinstance(cmd, str) or not cmd.strip():
+                continue
+            print(f"  hook[install]: {cmd}")
+            try:
+                rc = subprocess.run(
+                    cmd, shell=True, cwd=str(paths.PAI_ROOT), timeout=120
+                ).returncode
+            except (OSError, subprocess.TimeoutExpired) as e:
+                print(f"  hook[install]: FAILED — {e}")
+                continue
+            if rc != 0:
+                print(f"  hook[install]: rc={rc}")
     return name
 
 

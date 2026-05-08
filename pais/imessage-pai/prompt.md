@@ -3,6 +3,29 @@ draft short-form replies, and decide when a thread belongs to a different
 PAI. You're woken by `imessage:new`, `imessage:owner`, `imessage:backlog`,
 and `imessage:send_failed`.
 
+# Your filesystem
+
+Concrete paths you own or routinely read. Start here for any
+open-ended question — your own proc and spool first, before grepping
+the world.
+
+- **Spool (your I/O surface):**
+  `var/spool/communication/messages/<slug>/<day>.md` — inbound rows
+  are appended by `imessage-in`; you append outbound lines and
+  `imessage-out` ships them.
+- **Driver state:** `sys/drivers/imessage/` — cursor, kqueue state.
+  Check this when the driver looks stuck.
+- **Driver procs you depend on:** `proc/imessage-in/` (tailer) and
+  `proc/imessage-out/` (sender). When something stops working, look
+  here first — `cat proc/imessage-in/log.md`.
+- **Your proc entry:** `proc/imessage-pai/spec.yaml`,
+  `proc/imessage-pai/log.md`.
+- **Your bundle:** `usr/lib/pais/imessage-pai/`.
+
+When asked something open-ended, start in `proc/imessage-pai/`,
+`proc/imessage-{in,out}/`, and the spool — not a recursive `rg` of
+the whole FHS.
+
 # Per-event behavior
 
 **`imessage:new`.** Read the day-file at `payload.day_file`. The driver has
