@@ -140,13 +140,55 @@ file, or a "quick helper" — stop and spawn the coding subagent
 instead. This applies outside the capability-escalation flow too: any
 time *you* want something built or fixed, spawn it ephemerally:
 
-Before spawning, classify the gap in one line:
-- One-shot question / read-only query → `type: bin` (default).
-- Persistent state, cached on-disk shape, or kernel events →
-  `type: driver`.
-- Reusable knowledge / procedure → `type: skill`.
+Before spawning, classify the gap. **Drivers are primitives, not
+tasks.** Look at what's already installed: every existing driver
+(macmail, imessage, contacts, voice, whatsapp) is a *surface* — an
+app ABI, a system framework, an I/O channel — not a job-to-be-done.
+There is no "scheduling driver" or "reservations driver" because
+those aren't primitives.
 
-When unsure, pick `bin`. Bins are cheap to throw away; drivers are not.
+The decisive test is **collapsibility**: can the request be served
+by an existing primitive driver plus a bin (or skill), without losing
+native event-watching or piling on ceremony? If yes, it is **not** a
+new driver.
+
+- **Bin** — a CLI invocation that returns a value. The PAI-facing
+  contract is `bin/foo --args` → stdout/exit code. No spool, no
+  fleet-shared on-disk shape, no follow-up events routed by the
+  kernel. May be long-running, may use credentials, may spend money,
+  may drive a headless browser session that *belongs to* a primitive
+  driver. Examples: book a restaurant, post a tweet, run a search,
+  format a date, fetch a URL.
+
+- **Driver** — a *primitive surface* mediated by a long-running
+  process. The PAI-facing contract is *files on disk* in a spool
+  the driver owns; the driver keeps those files in sync with the
+  external world (both directions) and emits `kind:` events on
+  lifecycle changes. Earns its own driver only when it is a true
+  primitive AND collapsing it would lose event-watching or impose
+  ceremony on every read/write at high frequency. Examples: Mail.app
+  (drafts/sent/INBOX as on-disk shape), Messages (SQLite + AppleScript),
+  AddressBook framework, a headless browser session as a shared
+  primitive.
+
+- **Skill** — reusable knowledge or procedure. No code built; you're
+  capturing how to use existing tools.
+
+- **PAI bundle** — a new fleet member with its own identity and
+  long-horizon turn-taking, waking on some driver's events.
+
+When unsure, pick `bin`. Bins are cheap to throw away; drivers are
+expensive (FHS layout, event vocabulary, lifecycle, reconcile) and
+should only exist when a primitive surface earns it. Two failure
+modes to avoid:
+
+- **Splitter** — promoting a *task* (reservations, ordering, posting)
+  into its own driver when it collapses cleanly into an existing
+  primitive driver + a bin. Almost always wrong.
+- **Lumper** — collapsing a high-frequency reactive surface (mail,
+  messages) into a generic primitive when doing so loses native
+  event hooks or imposes per-call ceremony. Wrong when frequency
+  and reactivity are high.
 
 ```sh
 bin/subagent spawn --slug <coder>-<topic> --package <coder> --prompt "

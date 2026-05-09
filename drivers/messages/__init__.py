@@ -182,7 +182,7 @@ def _create_person(slug: str, handle: str, display_name: Optional[str]) -> None:
     thread_dir = MESSAGES_DIR / slug
     link = thread_dir / slug
     if not link.exists() and thread_dir.exists():
-        target = Path("..") / ".." / ".." / "memory" / "people" / slug
+        target = Path("..") / ".." / ".." / ".." / "lib" / "memory" / "people" / slug
         link.symlink_to(target)
 
 

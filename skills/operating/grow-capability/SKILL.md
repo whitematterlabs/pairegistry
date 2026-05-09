@@ -45,43 +45,86 @@ Done. Log a one-liner to `/proc/root/log.md` and return.
 
 ## Step 2 — scope triage
 
-Classify the request into one of three scopes:
+**Drivers are primitives, not tasks.** Look at what's already
+installed under `/usr/lib/drivers/`: every driver is a *surface* —
+an app ABI (Mail.app, Messages), a system framework (AddressBook),
+an I/O channel (audio), or a long-lived session primitive. None of
+them are jobs-to-be-done like "scheduling", "ordering", or
+"reservations". Drivers exist because a primitive surface earns
+filesystem mediation; tasks ride on top of primitives as bins.
+
+Apply the **collapsibility test** before considering any new driver:
+
+> Can the request be served by an existing primitive driver
+> (`ls /usr/lib/drivers/`) plus a bin or skill, without losing
+> native event-watching or imposing per-call ceremony at the
+> frequency this surface will actually be hit?
+> If yes → Scope A. Always.
+
+Two failure modes:
+- **Splitter** — promoting a task ("reservations driver", "ordering
+  driver", "X-app driver" for a one-off) into a new driver when it
+  collapses cleanly into an existing primitive + a bin. Almost
+  always wrong.
+- **Lumper** — collapsing a high-frequency reactive surface
+  (mail, messages) into a generic primitive when doing so would
+  lose native event hooks or pile ceremony on every read/write.
+  Wrong when both frequency and reactivity are high.
+
+If you catch yourself building a driver for "book a reservation",
+"send a message via app X", "post a status", "buy this thing", "run
+a search" — **stop**. Those are bins on top of an existing primitive
+(usually browser, sometimes osascript or an app ABI driver that
+already exists). A new driver only happens when you've identified a
+*primitive surface* the fleet doesn't yet have.
 
 ### Scope A — bin tool
 
-A one-shot CLI utility. No persistent process. No external data source.
+A CLI invocation that returns a value. The PAI-facing contract is
+`bin/foo --args` → stdout/exit code. No spool, no fleet-wide on-disk
+shape, no follow-up events.
 
 Signals:
-- "I need to play a tone", "I need to fetch a URL", "I need to format a date"
-- The shape is a single command invocation
-- No ongoing sync with an external system
+- "book a reservation", "post a tweet", "fetch a URL", "format a
+  date", "play a tone", "drive a checkout flow", "run an osascript"
+- May be long-running, may use credentials, may drive a headless
+  browser session owned by an existing primitive driver, may spend
+  money. Still a bin.
 
 → Go to **Step 3A**.
 
 ### Scope B — driver
 
-The request implies reading from or writing to an **external data
-source** that changes over time (Calendar.app, Contacts, GitHub,
-Spotify, a database). PAI needs to react to those changes.
+A new *primitive surface*. The PAI-facing contract is *files on
+disk* in a spool the driver owns; the driver keeps those files in
+sync with the external world (both directions where applicable) and
+emits `kind:` events on lifecycle changes.
 
-Signals:
-- "I need calendar access", "I need contacts data", "sync X into PAI"
-- The data lives outside PAI and has its own schema
-- Multiple PAIs might want to consume the same data
+Earns its own driver only when **both** are true:
+- It is a real primitive (app ABI, system framework, I/O channel,
+  shared long-lived session like a headless browser).
+- Collapsing it into an existing primitive driver would cost native
+  event hooks or impose unacceptable ceremony at its real-world
+  frequency.
+
+Examples that earned drivers: Mail.app (drafts/sent/INBOX symmetry,
+high frequency, reactive), Messages (SQLite + native hooks), a
+shared headless browser session.
+
+Examples that do **not** earn drivers: reservations, ordering,
+weather, search, "X-app integration" for a one-off task — those are
+bins on top of an existing primitive.
 
 → Go to **Step 3B**.
 
 ### Scope C — driver + PAI bundle
 
-The request implies a new **fleet member** with its own identity: it
-needs dedicated reasoning, its own prompt, and wakes on the new
-driver's events.
+Scope B *and* the request warrants a dedicated fleet member with its
+own identity, prompt, and long-horizon turn-taking on those events.
 
 Signals:
-- "I need a calendar PAI", "add a scheduler", "I need something to
-  manage X autonomously"
-- The capability is broad enough that it warrants its own turn-taking
-  identity separate from the requesting PAI
+- "I need a calendar PAI", "add an autonomous scheduler", "something
+  that manages X on its own"
 
 → Go to **Step 3C** (driver first, then PAI bundle).
 

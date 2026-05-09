@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 import threading
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -114,18 +115,25 @@ def _normalize_phone_handle(raw: str) -> str:
     return re.sub(r"[\s\-\(\)]+", "", raw.strip())
 
 
-def sync_to_people(people_dir: Path) -> tuple[int, int]:
-    """For each macOS contact, create people/{slug}/about.yaml if missing.
+def _has_phone(handles: list[str]) -> bool:
+    return any("@" not in h for h in handles)
+
+
+def sync(people_dir: Path, messages_dir: Path) -> tuple[int, int, int]:
+    """For each macOS contact, create people/{slug}/about.yaml and (if the
+    contact has a phone) messages/{slug}/meta.yaml as an iMessage thread.
 
     First-write-wins (`mkdir` semantics): existing entries are left
-    untouched. Contacts without any phone/email are skipped.
+    untouched. Person stub is created for any contact with at least one
+    handle. Thread is only created for contacts with at least one phone
+    number — iMessage routing needs one to deliver outbound messages.
 
-    Returns (created, skipped).
+    Returns (people_created, threads_created, skipped).
     """
     try:
         import Contacts  # type: ignore[import-not-found]
     except ImportError:
-        return 0, 0
+        return 0, 0, 0
 
     # Lazy import to avoid a circular dep with kernel.messages.
     from drivers.messages import slugify
@@ -148,10 +156,13 @@ def sync_to_people(people_dir: Path) -> tuple[int, int]:
     )
     if not success:
         print(f"[contacts] sync fetch failed: {error}", flush=True)
-        return 0, 0
+        return 0, 0, 0
 
     people_dir.mkdir(parents=True, exist_ok=True)
-    created = 0
+    messages_dir.mkdir(parents=True, exist_ok=True)
+    today = datetime.now().date().isoformat()
+    people_created = 0
+    threads_created = 0
     skipped = 0
     for c in results:
         given = c.givenName() or ""
@@ -178,15 +189,47 @@ def sync_to_people(people_dir: Path) -> tuple[int, int]:
         about = person_dir / "about.yaml"
         if about.exists():
             skipped += 1
+        else:
+            person_dir.mkdir(parents=True, exist_ok=True)
+            with about.open("w") as f:
+                yaml.safe_dump(
+                    {"name": full, "handles": handles, "relationship": "", "entry": ""},
+                    f,
+                    sort_keys=False,
+                )
+            people_created += 1
+
+        if not _has_phone(handles):
             continue
-        person_dir.mkdir(parents=True, exist_ok=True)
-        with about.open("w") as f:
+        thread_dir = messages_dir / slug
+        meta = thread_dir / "meta.yaml"
+        if meta.exists():
+            continue
+        thread_dir.mkdir(parents=True, exist_ok=True)
+        with meta.open("w") as f:
             yaml.safe_dump(
-                {"name": full, "handles": handles, "relationship": "", "entry": ""},
+                {
+                    "description": "",
+                    "created": today,
+                    "group": False,
+                    "handles": handles,
+                    "display_name": full,
+                    "channel": "imessage",
+                },
                 f,
                 sort_keys=False,
             )
-        created += 1
+        # Symlink person into thread dir. Path is relative to the link's
+        # parent (var/spool/communication/messages/<slug>/), four levels up
+        # to var/, then into lib/memory/people/<slug>.
+        link = thread_dir / slug
+        if not link.exists():
+            link.symlink_to(Path("..") / ".." / ".." / ".." / "lib" / "memory" / "people" / slug)
+        threads_created += 1
 
-    print(f"[contacts] sync → {created} people created, {skipped} existing left alone", flush=True)
-    return created, skipped
+    print(
+        f"[contacts] sync → {people_created} people, {threads_created} threads created; "
+        f"{skipped} existing people left alone",
+        flush=True,
+    )
+    return people_created, threads_created, skipped

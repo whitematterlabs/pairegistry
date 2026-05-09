@@ -13,26 +13,59 @@ entries. Root has the fleet view and the right skills.
 
 ## When you lack a capability
 
-If the owner asks for something you can't do with the tools you have
-(`bin/`, skills, persubs), don't fake it and don't refuse silently.
-Classify the need, then send a capability request to root (pid 1).
+**Bash is not a capability — it's the substrate.** Capabilities are
+the named `bin/`, skills, drivers, and persubs that wrap a primitive.
+If you'd reach for `osascript`, AppleScript, `curl` against a
+third-party API, a headless browser, or a multi-line shell/python
+heredoc to touch an external system (calendar, contacts, mail, web
+session, app DB, etc.) — that **is** the capability gap. The fact
+that you *could* hack it together in the turn doesn't mean you have
+the tool. Don't ad-hoc primitives; escalate so root builds the
+durable thing.
+
+Same rule if the owner is likely to reference this surface again —
+one-shot inline scripts evaporate; named tools persist.
+
+Don't fake it and don't refuse silently. Classify the need, then
+send a capability request to root (pid 1).
 
 ### Classify before sending
 
-**Scope A — one-shot action or query**
-Signals: "play a tone", "fetch this URL", "format a date". The
-shape is a single command invocation; no ongoing external data.
+**Drivers are primitives, not tasks.** A driver is a *surface* —
+an app ABI, a system framework, a headless browser session — that
+the kernel mediates with the filesystem. It is never a job-to-be-done
+like "reservations" or "scheduling". Apply the **collapsibility
+test**: can this be served by an existing primitive driver plus a
+bin (or skill)? If yes → Scope A. Only when collapsing would lose
+native event-watching or impose ceremony on every interaction at
+high frequency does a request earn its own driver.
 
-**Scope B — ongoing external data access**
-Signals: "access my calendar", "read my contacts", "sync X into PAI".
-The data lives outside PAI, changes over time, and multiple PAIs
-might consume it. Do **not** describe this as a CLI bin tool — root
-needs to build a driver that surfaces the data to the filesystem.
+**Scope A — bin**
+A CLI invocation that returns a value. One PAI, one turn, no spool,
+no fleet-shared on-disk shape. May be long-running, may use
+credentials, may drive a headless browser owned by an existing
+primitive driver, may spend money.
+Examples: "book a reservation", "post a tweet", "search Google",
+"fetch a URL", "run an osascript", "play a tone".
 
-**Scope C — new autonomous fleet member**
-Signals: "I need a calendar PAI", "something that monitors X and
-acts on it", "add a scheduler". The capability is broad enough that
-it warrants its own persistent identity in the fleet.
+**Scope B — driver**
+A new *primitive surface* that earns its own filesystem mediation
+because (a) it's a real primitive (app ABI, framework, I/O channel,
+shared session), and (b) collapsing it into a more general driver
+would cost native event hooks or impose unacceptable per-call
+ceremony at the frequency it'll be used.
+Examples that earn drivers: Mail.app (drafts/sent/INBOX symmetry),
+Messages (native SQLite + event hooks), a headless browser session
+as a shared primitive across many bins.
+Examples that do **not** earn drivers: reservations, ordering,
+calendar tasks (those are bins/PAIs over a calendar primitive),
+"X-app integration" when X is a one-off task.
+
+**Scope C — driver + new PAI**
+Scope B *and* the request warrants a dedicated fleet member with its
+own identity, prompt, and long-horizon turn-taking on the new
+driver's events.
+Examples: "I need a calendar PAI", "add an autonomous scheduler".
 
 ### IPC format
 
@@ -40,8 +73,8 @@ it warrants its own persistent identity in the fleet.
 bin/send-message --to 1 --content 'request-capability: <one-line need>
 why: <what the owner asked, in their words>
 scope: <A | B | C>
-shape: <Scope A only: exact CLI you wish existed, e.g. "play-tone --duration 5">
-surface: <Scope B/C only: what external data source, e.g. "Calendar.app events">'
+shape: <Scope A only: exact CLI you wish existed, e.g. "book-reservation --party 4 --when 'sat 7pm'">
+surface: <Scope B/C only: what external surface emits change, e.g. "incoming iMessages">'
 ```
 
 Root follows its `grow-capability` skill: it scopes the need, builds
