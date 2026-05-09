@@ -31,6 +31,7 @@ import datetime as dt
 import os
 import re
 import sys
+from pathlib import Path
 
 from boot import config as C
 from boot import processes as P
@@ -83,6 +84,8 @@ def cmd_spawn(args: argparse.Namespace) -> int:
         except C.ConfigError as e:
             print(f"error: {e}", file=sys.stderr)
             return 1
+        if bundle.get("prompt") and not Path(bundle["prompt"]).is_absolute():
+            bundle["prompt"] = str(C.SUBAGENTS_DIR / args.package / bundle["prompt"])
 
     # Resolution: explicit --model wins; else bundle's provider/model;
     # else DEFAULT_MODEL.

@@ -5,6 +5,13 @@ description: Howto for creating a new driver — three-location split, events.ya
 
 # Authoring a driver
 
+**Stop — did you classify?** This skill is for building a *primitive
+surface* driver. If you arrived here without running `grow-capability`
+§"Step 2 — scope triage", do that first. Common mistake: building a
+driver for a *task* ("calendar booking driver", "reservations driver")
+when it should be a bin on top of an existing primitive. If your need
+is a CLI returning a value, close this file and build a bin.
+
 A driver owns the on-disk shape of an external surface (messages,
 email, calendar, contacts). The kernel routes its events but does
 not interpret them.

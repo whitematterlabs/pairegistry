@@ -2,7 +2,7 @@ name: claudecode
 kind: subagent
 version: 0.1.0
 description: Ephemeral subagent with a cheap deepseek outer brain whose only job is to compose a brief and shell out to `claude -p` (ClaudeCode headless). The real intelligence and harness live inside the `claude -p` subprocess.
-prompt: usr/lib/subagents/claudecode/prompt.md
+prompt: prompt.md
 provider: deepseek
 model: deepseek-v4-pro
 

@@ -5,6 +5,12 @@ description: Howto for creating a new PAI bundle — package.yaml, prompt, paima
 
 # Authoring a PAI bundle
 
+**Stop — did you classify?** A PAI bundle is a new fleet member with
+its own identity, waking on some driver's events. If you don't yet
+have a driver for that surface, you're at Scope B (driver), not
+Scope C (driver + bundle). Run `grow-capability` §"Step 2 — scope
+triage" first; come back here only after the driver exists.
+
 A PAI bundle is the **template** a PAI is instantiated from. Two
 locations:
 

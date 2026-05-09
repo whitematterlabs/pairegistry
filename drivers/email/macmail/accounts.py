@@ -161,14 +161,32 @@ _DISCOVERY_SCRIPT = (
 )
 
 
+_OSASCRIPT_TIMEOUT = 8.0
+
+
 async def _run_osascript(script: str) -> tuple[int, str, str]:
-    """Run an AppleScript via osascript -e. Returns (returncode, stdout, stderr)."""
+    """Run an AppleScript via osascript -e. Returns (returncode, stdout, stderr).
+
+    If Mail.app's AppleEvent dispatcher is wedged (we've seen sibling
+    Calendar.app calls return -1712), `osascript` will block forever. Cap
+    it so callers like `refresh()` can fall back to the persisted file.
+    """
     proc = await asyncio.create_subprocess_exec(
         "osascript", "-e", script,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, stderr = await proc.communicate()
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(), timeout=_OSASCRIPT_TIMEOUT
+        )
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        await proc.wait()
+        return (-1, "", f"osascript timed out after {_OSASCRIPT_TIMEOUT}s")
     return (
         proc.returncode if proc.returncode is not None else -1,
         stdout.decode("utf-8", errors="replace"),

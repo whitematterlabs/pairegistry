@@ -16,10 +16,13 @@ the requester owns the user-facing follow-through.
 The IPC envelope gives you:
 - `from: pai:<requester pid>` — the PAI that asked. Save this; you
   IPC them back at the end.
-- `content:` — three lines:
+- `content:` — two lines:
   - `request-capability: <need>`
   - `why: <owner's ask>`
-  - `shape: <desired CLI or description>`
+
+The requester does **not** classify scope, shape, or surface — that is
+your job here. You infer the build path from `why:` plus a sanity
+check against what's already installed.
 
 If a field is missing or unintelligible, IPC the requester back asking
 them to refine the request. Don't guess at intent.
@@ -140,7 +143,6 @@ type: bin
 name: <name>
 need: <verbatim from request>
 why: <verbatim why>
-shape: <verbatim shape>
 "
 ```
 
@@ -276,7 +278,7 @@ in `/proc/` after `kernel:reload_config`.
 - Build and notify. Do **not** invoke the new capability yourself.
 - Do **not** message the owner. The requester does that.
 - Do **not** ask the owner for clarification — work from the
-  requester's `why:` and `shape:`. If those are too thin, IPC the
+  requester's `need:` and `why:`. If those are too thin, IPC the
   requester (not the owner) for a refined request.
 - Don't over-engineer. Keep the FHS contract: **data is a file**
   (flat YAML under `/calendar/`, `/contacts/`, etc.), **tools are
