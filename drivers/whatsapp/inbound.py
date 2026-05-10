@@ -102,10 +102,16 @@ def _ensure_thread_dir(thread_slug: str) -> Path:
     return thread_dir
 
 
-def _write_message(thread_dir: Path, sender: str, text: str) -> Path:
-    today = datetime.now().strftime("%Y-%m-%d")
-    day_file = thread_dir / f"{today}.md"
-    hm = datetime.now().strftime("%H:%M")
+def _write_message(thread_dir: Path, sender: str, text: str, ts_iso: str | None = None) -> Path:
+    when = datetime.now()
+    if ts_iso:
+        try:
+            parsed = datetime.fromisoformat(ts_iso.replace("Z", "+00:00"))
+            when = parsed.astimezone().replace(tzinfo=None)
+        except ValueError:
+            pass
+    day_file = thread_dir / f"{when.strftime('%Y-%m-%d')}.md"
+    hm = when.strftime("%H:%M")
     line = f"[{hm}] {sender}: {text}\n"
     with day_file.open("a") as f:
         f.write(line)
@@ -301,7 +307,7 @@ async def _read_bridge_stdout(proc: asyncio.subprocess.Process) -> None:
             slug, display_name = _lookup_contact(phone)
             sender = display_name or phone
             thread_dir = _ensure_thread_dir(slug)
-            day_file = _write_message(thread_dir, sender, body)
+            day_file = _write_message(thread_dir, sender, body, data.get("timestamp"))
 
             if data.get("history"):
                 backlog_messages.append({
