@@ -96,7 +96,7 @@ def _append_canonical(day_file: Path, text: str) -> None:
         f.write(f"[{hm}] me: {text}\n")
 
 
-async def _handle_line(line: str, day_file: Path) -> None:
+async def _handle_line(day_file: Path, line: str) -> None:
     """Process one bare line from a WhatsApp thread day-file."""
     line = line.strip()
     if not line:
