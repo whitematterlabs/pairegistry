@@ -14,7 +14,7 @@ is the cheat sheet.
 |---|---|---|
 | `/boot/` | **Kernel image.** PID 1 supervisor + every helper it links against. Pure Python. | `src/boot/` |
 | `/sbin/` | KernelPAI / owner-only tools that mutate `/etc/`, the fleet, or system state: `init` (entrypoint), `paiman`, `paiadd`, `paidel`, `paifs-init`, `migrate`, `reset`, `tui`. | `src/sbin/` + privileged shims from `src/bin/` |
-| `/bin/`, `/usr/bin/` | PAI-callable tools (`paictl`, `paicron`, `ipc`, `subagent`, …). `/bin/` is a symlink to `usr/bin/`. | `src/bin/`, generated shims |
+| `/bin/`, `/usr/bin/` | PAI-callable tools (`paictl`, `paicron`, `send_message`, `subagent`, …). `/bin/` is a symlink to `usr/bin/`. | `src/bin/`, generated shims |
 | `/usr/` | Userspace. Drivers, skills, PAI bundles, shipped data. **Never kernel code.** | `src/usr/` + `src/drivers/` + `src/prompts/` |
 
 Kernel code never lives under `/usr/`. Userspace never lives under

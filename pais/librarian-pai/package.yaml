@@ -12,4 +12,4 @@ hooks:
   # `paicron ensure` is a no-op if the slug already exists with the
   # same spec; otherwise it replaces.
   boot:
-    - 'bin/paicron ensure --slug librarian-nightly --parent-slug librarian-pai --schedule "0 3 * * *" --run "bin/ipc emit librarian:consolidate"'
+    - 'bin/paicron ensure --slug librarian-nightly --parent-slug librarian-pai --schedule "0 3 * * *" --run "bin/send_message emit librarian:consolidate"'

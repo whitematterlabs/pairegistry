@@ -61,7 +61,7 @@ This commit mirrors `pai@6c8995d`:
 
 - `drivers/`: contacts, email (with nested macmail), imessage, messages
 - `lib/tailer/`: shared cursor-tailer primitive used by drivers
-- `bin/`: paictl, paiman, paiadd, paidel, paicron, paifs_init, ipc, subagent, ps, clear, compact, edit_file, addcontact, resolve_contact, imessage_backfill, mailsearch, pai
+- `bin/`: paictl, paiman, paiadd, paidel, paicron, paifs_init, send_message, subagent, ps, clear, compact, edit_file, addcontact, resolve_contact, imessage_backfill, mailsearch, pai
 - `sbin/`: migrate, reboot, reset, tui
 - `skills/`: 22 skills (author-driver, boot-sequence, etc.)
 - `prompts/`: pai_default, root, subagent, subagent-persistent
