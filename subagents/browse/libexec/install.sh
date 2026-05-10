@@ -18,10 +18,11 @@ echo "[browse/install] libexec=$LIBEXEC"
 # Package owns its own state slot under /var/lib/<name>/.
 mkdir -p "$PAI_ROOT/var/lib/browse/cookies"
 
-# entry.py + chrome_cookies_import.py live in the source tree; expose them
-# at the top of the libexec slot for the prompt's documented invocation.
-ln -sfn "$HERE/../entry.py" "$LIBEXEC/entry.py"
-ln -sfn "$HERE/chrome_cookies_import.py" "$LIBEXEC/chrome_cookies_import.py"
+# Note: entry.py (one level up) and chrome_cookies_import.py (here in libexec)
+# are already shipped from the registry into the bundle, so no symlinks are
+# needed. paiman makes $LIBEXEC == $HERE (one is a symlink to the other),
+# meaning earlier `ln -sfn $HERE/chrome_cookies_import.py $LIBEXEC/...` calls
+# created a self-referential symlink (Errno 62). Don't reintroduce them.
 
 # Isolated venv (separate from kernel venv to keep deps pinned & private).
 if [[ ! -x "$VENV/bin/python" ]]; then

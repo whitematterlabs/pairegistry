@@ -297,7 +297,12 @@ async def _read_bridge_stdout(proc: asyncio.subprocess.Process) -> None:
 
         elif msg_type == "status":
             state = data.get("state", "unknown")
-            print(f"[whatsapp-in] bridge status: {state}", flush=True)
+            reason = data.get("reason")
+            should_reconnect = data.get("shouldReconnect")
+            extra = ""
+            if reason is not None or should_reconnect is not None:
+                extra = f" (reason={reason}, shouldReconnect={should_reconnect})"
+            print(f"[whatsapp-in] bridge status: {state}{extra}", flush=True)
 
         elif msg_type == "error":
             err = data.get("error", "unknown")

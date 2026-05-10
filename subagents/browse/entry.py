@@ -11,11 +11,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import shutil
 import subprocess
 import sys
 import time
 import traceback
 from pathlib import Path
+from urllib import request as _urlreq
+from urllib.parse import urlparse
 
 import yaml
 
@@ -23,6 +26,15 @@ PAI_ROOT = Path(os.environ.get("PAI_ROOT", str(Path.home() / ".pai")))
 LIBEXEC = PAI_ROOT / "usr" / "libexec" / "subagents" / "browse"
 COOKIES_DIR = PAI_ROOT / "var" / "lib" / "browse" / "cookies"
 COOKIE_TTL = 24 * 3600
+
+# Hosts whose WAFs reliably block headless Chromium. Auto-route to CDP attach.
+WAF_HOSTS = {
+    "opentable.com", "resy.com", "exploretock.com", "tock.com",
+    "yelp.com", "sevenrooms.com",
+    "www.google.com",
+}
+
+CHROME_CDP_DEFAULT_PORT = 9222
 
 sys.path.insert(0, str(LIBEXEC / "vendor"))
 
@@ -86,19 +98,87 @@ def _build_llm(provider: str, model: str):
     sys.exit(f"entry.py: unsupported provider {provider!r}")
 
 
-async def _run(task: str, url: str, headless: bool, cookies_file: Path | None, llm):
+def _cdp_alive(url: str) -> bool:
+    try:
+        with _urlreq.urlopen(url.rstrip("/") + "/json/version", timeout=1.5) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
+def _ensure_chrome_cdp(port: int = CHROME_CDP_DEFAULT_PORT) -> str:
+    """Ensure the owner's real Chrome is running with CDP. Returns the http:// URL.
+
+    No-op if Chrome is already up on the port (so subsequent browse spawns reuse it).
+    Otherwise, invokes the gstack chrome-cdp script which sets up
+    ~/.gstack/cdp-profile/chrome (symlinked to the owner's Default profile +
+    Local State) and launches /Applications/Google Chrome.app with
+    --remote-debugging-port=<port>.
+    """
+    url = f"http://127.0.0.1:{port}"
+    if _cdp_alive(url):
+        return url
+
+    candidates = [
+        Path.home() / ".claude" / "skills" / "gstack" / "bin" / "chrome-cdp",
+    ]
+    on_path = shutil.which("chrome-cdp")
+    if on_path:
+        candidates.append(Path(on_path))
+    script = next((p for p in candidates if p.is_file()), None)
+    if not script:
+        sys.exit(
+            "entry.py: chrome-cdp script not found. Install the gstack skill "
+            "(~/.claude/skills/gstack/bin/chrome-cdp) or place chrome-cdp on $PATH."
+        )
+
+    subprocess.Popen(
+        [str(script), str(port)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if _cdp_alive(url):
+            return url
+        time.sleep(0.5)
+    sys.exit(f"entry.py: chrome-cdp did not come up on {url} within 30s")
+
+
+async def _run(
+    task: str,
+    url: str,
+    headless: bool,
+    cookies_file: Path | None,
+    llm,
+    cdp_url: str | None,
+):
     from browser_use import Agent
     from browser_use.browser import Browser, BrowserConfig
 
-    browser = Browser(config=BrowserConfig(
-        headless=headless,
-        cookies_file=str(cookies_file) if cookies_file else None,
-    ))
+    if cdp_url:
+        browser = Browser(config=BrowserConfig(cdp_url=cdp_url))
+    else:
+        browser = Browser(config=BrowserConfig(
+            headless=headless,
+            cookies_file=str(cookies_file) if cookies_file else None,
+        ))
     full_task = f"Start at {url}. {task}"
     agent = Agent(task=full_task, llm=llm, browser=browser)
     history = await agent.run()
     try:
-        await browser.close()
+        if cdp_url:
+            # Don't quit the owner's Chrome; only drop the Playwright connection.
+            disconnect = getattr(browser, "disconnect", None)
+            if callable(disconnect):
+                maybe = disconnect()
+                if asyncio.iscoroutine(maybe):
+                    await maybe
+            else:
+                await browser.close()
+        else:
+            await browser.close()
     except Exception:
         pass
     return history
@@ -129,18 +209,88 @@ def _truthy(s: str) -> bool:
     return s.strip().lower() in ("1", "true", "yes", "y", "on")
 
 
+def _registrable(host: str) -> str:
+    h = (host or "").lower().strip()
+    if h.startswith("www."):
+        h = h[4:]
+    return h
+
+
+def _waf_match(host: str) -> bool:
+    h = (host or "").lower()
+    if h in WAF_HOSTS:
+        return True
+    parent = _registrable(h)
+    return parent in WAF_HOSTS
+
+
+WAF_MARKERS = (
+    "access denied",
+    "pardon our interruption",
+    "are you a robot",
+    "unusual traffic",
+)
+
+
+def _detect_waf_block(history) -> bool:
+    """Heuristic: did the run hit a WAF wall? Best-effort, never raises."""
+    try:
+        text_blob = ""
+        for attr in ("extracted_content", "model_outputs", "errors"):
+            fn = getattr(history, attr, None)
+            if callable(fn):
+                try:
+                    val = fn()
+                    if val:
+                        text_blob += "\n" + "\n".join(str(x) for x in (val or []))
+                except Exception:
+                    pass
+        text_blob += "\n" + repr(history)
+        low = text_blob.lower()
+        if any(m in low for m in WAF_MARKERS):
+            return True
+        if "err_http2_protocol_error" in low or " 503" in low:
+            return True
+        if low.count("recaptcha") >= 3:
+            return True
+    except Exception:
+        return False
+    return False
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--task", required=True)
     ap.add_argument("--url", required=True)
     ap.add_argument("--headless", default="true")
     ap.add_argument("--profile", default="")
+    ap.add_argument("--cdp", default="", help="Attach to running Chrome at this CDP URL")
+    ap.add_argument(
+        "--cdp-auto",
+        default="false",
+        help="Auto-launch the owner's Chrome via chrome-cdp and attach over CDP",
+    )
     args = ap.parse_args()
 
     slug = _slug()
     ws = _workspace(slug)
     ws.mkdir(parents=True, exist_ok=True)
     result_path = ws / "result.md"
+
+    cdp_url = args.cdp.strip() or None
+    cdp_auto = _truthy(args.cdp_auto)
+    auto_routed = False
+
+    # Auto-route WAF-protected hosts to CDP attach when the caller didn't
+    # already request CDP.
+    if not cdp_url and not cdp_auto:
+        try:
+            host = (urlparse(args.url).hostname or "").lower()
+        except Exception:
+            host = ""
+        if host and _waf_match(host):
+            cdp_auto = True
+            auto_routed = host
 
     try:
         spec = _spec(slug)
@@ -149,17 +299,52 @@ def main() -> int:
         if not provider or not model:
             sys.exit("entry.py: spec.yaml missing provider/model")
 
-        cookies_file = _ensure_cookies(args.profile.strip())
+        if cdp_auto and not cdp_url:
+            cdp_url = _ensure_chrome_cdp()
+
+        cookies_file = None if cdp_url else _ensure_cookies(args.profile.strip())
         llm = _build_llm(provider, model)
         history = asyncio.run(
-            _run(args.task, args.url, _truthy(args.headless), cookies_file, llm)
+            _run(args.task, args.url, _truthy(args.headless), cookies_file, llm, cdp_url)
         )
         body = _summarize(history)
+
+        mode_line = (
+            f"- mode: cdp-attach (endpoint={cdp_url})\n"
+            if cdp_url
+            else f"- mode: bundled-chromium (headless={args.headless})\n"
+        )
+        auto_line = (
+            f"- auto-routed to CDP mode (host {auto_routed} matched WAF allowlist)\n"
+            if auto_routed
+            else ""
+        )
+
+        # WAF detection. If we got blocked even in CDP mode, escalate distinctly
+        # so the parent doesn't loop trying the same fix.
+        blocked = _detect_waf_block(history)
+        if blocked:
+            try:
+                host = (urlparse(args.url).hostname or "").lower()
+            except Exception:
+                host = ""
+            marker = "WAF_BLOCKED_CDP" if cdp_url else "WAF_BLOCKED"
+            result_path.write_text(
+                f"# browse result\n\n"
+                f"{marker}: {host}\n\n"
+                f"- task: {args.task}\n"
+                f"- start url: {args.url}\n"
+                f"{mode_line}{auto_line}"
+                f"- profile: {args.profile or '(none)'}\n\n"
+                f"## outcome\n\n{body}\n"
+            )
+            return 2
+
         result_path.write_text(
             f"# browse result\n\n"
             f"- task: {args.task}\n"
             f"- start url: {args.url}\n"
-            f"- headless: {args.headless}\n"
+            f"{mode_line}{auto_line}"
             f"- profile: {args.profile or '(none)'}\n\n"
             f"## outcome\n\n{body}\n"
         )

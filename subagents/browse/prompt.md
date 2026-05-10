@@ -36,6 +36,36 @@ its own `result.md` into your workspace. The agent's verbose
 think/act/observe loop stays inside that subprocess — your context only
 ever sees the final summary.
 
+### CDP attach mode (real Chrome)
+
+The bundled headless Chromium is detected and blocked by every modern WAF
+(OpenTable, Resy, Tock, Yelp, SevenRooms, Google captcha). For those
+hosts `entry.py` auto-attaches over CDP to the **owner's real Chrome** so
+the WAF sees a returning logged-in user, not a fresh bot.
+
+- `--cdp <url>` — attach to an already-running Chrome at this CDP endpoint
+  (e.g. `http://127.0.0.1:9222`). Skips bundled-Chromium launch.
+- `--cdp-auto true` — `entry.py` itself launches the owner's Chrome via
+  the gstack `chrome-cdp` script (which symlinks the user's Default
+  profile + Local State so cookies/TLS/IP reputation carry over) and
+  attaches to it. Long-lived: subsequent spawns reuse the same Chrome.
+
+Auto-routing: if the start `URL` host (or its registrable parent) is in
+the WAF allowlist (opentable.com, resy.com, exploretock.com, tock.com,
+yelp.com, sevenrooms.com, www.google.com), `--cdp-auto` is implied — you
+don't have to pass it. `result.md` will note `auto-routed to CDP mode`.
+To force the bundled headless Chromium anyway (debugging), pass an
+explicit `--cdp ""` and `--cdp-auto false`.
+
+### Exit codes
+
+- `0` — success, `result.md` written.
+- `1` — exception inside `entry.py` (traceback in `result.md`).
+- `2` — agent ran but the page wall-blocked us. `result.md` starts with
+  either `WAF_BLOCKED: <host>` (we were on bundled Chromium — parent
+  should retry with `--cdp-auto true`) or `WAF_BLOCKED_CDP: <host>` (we
+  were already on real Chrome — different fix needed; do not loop).
+
 If `entry.py` exits non-zero, capture stderr into `result.md` so the
 parent sees the failure. Do not retry; one shot then done.
 

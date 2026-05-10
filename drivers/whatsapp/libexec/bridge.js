@@ -34,7 +34,7 @@ fs.mkdirSync(AUTH_DIR, { recursive: true });
 
 // Quiet Pino logger to stderr only (stdout is the wire protocol)
 const logger = pino(
-  { level: 'warn' },
+  { level: 'info' },
   pino.destination(path.join(PAI_ROOT, 'sys', 'drivers', 'whatsapp', 'bridge.log'))
 );
 

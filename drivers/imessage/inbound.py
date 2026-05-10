@@ -48,7 +48,11 @@ SELECT
     m.date AS mac_date,
     h.id AS handle,
     c.guid AS chat_guid,
-    (SELECT COUNT(*) FROM chat_handle_join chj WHERE chj.chat_id = c.ROWID) AS participant_count
+    (SELECT COUNT(*) FROM chat_handle_join chj WHERE chj.chat_id = c.ROWID) AS participant_count,
+    (SELECT GROUP_CONCAT(h2.id, X'1F')
+       FROM chat_handle_join chj2
+       JOIN handle h2 ON h2.ROWID = chj2.handle_id
+      WHERE chj2.chat_id = c.ROWID) AS chat_handles
 FROM message m
 LEFT JOIN handle h ON m.handle_id = h.ROWID
 LEFT JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
@@ -189,6 +193,11 @@ def _row_payload(row) -> Optional[dict]:
     chat_guid = row["chat_guid"] or ""
     if chat_guid and int(row["participant_count"] or 0) > 1:
         payload["chat_guid"] = chat_guid
+        raw = row["chat_handles"] or ""
+        if raw:
+            # GROUP_CONCAT with X'1F' separator — handles can contain commas
+            # (unlikely, but emails technically allow them) so we use US.
+            payload["chat_handles"] = [h for h in raw.split("\x1f") if h]
     return payload
 
 

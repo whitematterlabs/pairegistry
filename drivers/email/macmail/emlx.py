@@ -1,10 +1,20 @@
 """emlx file format helpers.
 
 Mail.app stores each message at:
-    ~/Library/Mail/V10/{account-uuid}/{Mailbox}.mbox/{store-uuid}/Data/[{rowid//1000}/]Messages/{rowid}.emlx
+    ~/Library/Mail/V10/{account-uuid}/{Mailbox-segments}/{store-uuid}/Data/{bucket-path}/Messages/{rowid}.emlx
 
-The bucket subdir (`Data/{N}/`) is omitted when the bucket index is 0 — i.e.
-ROWIDs 0–999 live directly under `Data/Messages/`.
+Two layout quirks Mail.app imposes:
+
+1. Nested mailboxes get `.mbox` on **every** path segment. URL `[Gmail]/All Mail`
+   lives at `[Gmail].mbox/All Mail.mbox/`, not `[Gmail]/All Mail.mbox/`.
+
+2. The `Data/{bucket}` subdir splits into two decimal levels once `rowid >= 10000`:
+       bucket = rowid // 1000
+       path   = Data/{bucket % 10}/{bucket // 10}/Messages/   when bucket >= 10
+              = Data/{bucket}/Messages/                       when 1 <= bucket < 10
+              = Data/Messages/                                when bucket == 0
+   The high level is omitted when zero, which is why rowids < 10000 worked under
+   the old single-level code by coincidence.
 
 `.emlx` framing:
     <byte-count><spaces?>\\n         # ASCII decimal length of the MIME blob
@@ -36,11 +46,24 @@ def emlx_path(account_uuid: str, mailbox_name: str, rowid: int) -> Optional[Path
     exists — caller should leave the cursor parked and wait for the next
     WAL kick.
     """
-    mbox_dir = MAIL_ROOT / account_uuid / f"{mailbox_name}.mbox"
+    # Nested mailboxes: ".mbox" on every path segment.
+    segments = [seg for seg in mailbox_name.split("/") if seg]
+    if not segments:
+        return None
+    mbox_dir = MAIL_ROOT / account_uuid
+    for seg in segments:
+        mbox_dir = mbox_dir / f"{seg}.mbox"
     if not mbox_dir.is_dir():
         return None
+
     bucket = rowid // 1000
-    bucket_part = "" if bucket == 0 else f"{bucket}/"
+    if bucket == 0:
+        bucket_part = ""
+    elif bucket < 10:
+        bucket_part = f"{bucket}/"
+    else:
+        bucket_part = f"{bucket % 10}/{bucket // 10}/"
+
     # The store-uuid dir under the .mbox is opaque; there's typically one,
     # but we glob in case Mail has rotated stores.
     for store in mbox_dir.iterdir():
@@ -49,6 +72,12 @@ def emlx_path(account_uuid: str, mailbox_name: str, rowid: int) -> Optional[Path
         candidate = store / "Data" / f"{bucket_part}Messages" / f"{rowid}.emlx"
         if candidate.exists():
             return candidate
+        # Fallback: some rowids may use a deeper split we haven't seen.
+        # rglob is bounded — one store per mailbox, only Data/ subtree.
+        data_dir = store / "Data"
+        if data_dir.is_dir():
+            for hit in data_dir.rglob(f"{rowid}.emlx"):
+                return hit
     return None
 
 

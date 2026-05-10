@@ -7,6 +7,7 @@ for that ingest path. It never touches PAI — the caller does the nudge.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -134,26 +135,89 @@ def _unique_slug(base: str, handle: str = "") -> str:
         n += 1
 
 
+def _group_slug(chat_guid: str) -> str:
+    return "group-" + hashlib.sha1(chat_guid.encode("utf-8")).hexdigest()[:8]
+
+
+def _person_slug_for_handle(handle: str) -> Optional[str]:
+    """Find an existing person slug whose about.yaml lists this handle."""
+    if not PEOPLE_DIR.exists() or not handle:
+        return None
+    norm = _normalize_handle(handle)
+    for person_dir in PEOPLE_DIR.iterdir():
+        if not person_dir.is_dir() or person_dir.name.startswith("."):
+            continue
+        about = person_dir / "about.yaml"
+        if not about.exists():
+            continue
+        try:
+            with about.open() as f:
+                data = yaml.safe_load(f) or {}
+        except yaml.YAMLError:
+            continue
+        if any(_normalize_handle(h) == norm for h in (data.get("handles") or [])):
+            return person_dir.name
+    return None
+
+
+def _resolve_sender(handle: str) -> str:
+    """Pick a per-line sender label for a group message.
+
+    Person-slug match → Contacts first name → last-4-digits like `…4567`
+    (or local-part for emails) → raw normalized handle.
+    """
+    if not handle:
+        return "unknown"
+    person = _person_slug_for_handle(handle)
+    if person:
+        return _sender_name(person, None)
+    name = contacts.resolve(handle)
+    if name:
+        return name.split()[0].lower()
+    norm = _normalize_handle(handle)
+    if "@" in norm:
+        return norm.split("@", 1)[0]
+    digits = re.sub(r"\D", "", norm)
+    if len(digits) >= 4:
+        return f"…{digits[-4:]}"
+    return norm or "unknown"
+
+
 def _create_thread(
     slug: str,
     handle: str,
     display_name: Optional[str],
     chat_guid: Optional[str],
     source: Optional[str] = None,
+    chat_handles: Optional[list[str]] = None,
 ) -> None:
     thread_dir = MESSAGES_DIR / slug
     thread_dir.mkdir(parents=True, exist_ok=True)
 
-    meta: dict = {
-        "description": "",
-        "created": datetime.now().date().isoformat(),
-        "group": bool(chat_guid),
-        "handles": [_normalize_handle(handle)] if handle else [],
-    }
     if chat_guid:
-        meta["chat_guid"] = chat_guid
-    if display_name:
-        meta["display_name"] = display_name
+        # Group thread: meta.handles is the participant roster, not a single
+        # peer. Skip display_name (we use a structural slug for groups).
+        roster = [_normalize_handle(h) for h in (chat_handles or []) if h]
+        # Make sure the first sender is in the roster even if chat_handle_join
+        # lagged the message write.
+        if handle and _normalize_handle(handle) not in roster:
+            roster.append(_normalize_handle(handle))
+        meta: dict = {
+            "description": "",
+            "created": datetime.now().date().isoformat(),
+            "group": True,
+            "handles": roster,
+            "chat_guid": chat_guid,
+        }
+    else:
+        meta = {
+            "description": "",
+            "created": datetime.now().date().isoformat(),
+            "group": False,
+            "handles": [_normalize_handle(handle)] if handle else [],
+        }
+        if display_name:
+            meta["display_name"] = display_name
     # `channel` tells outbound drivers which transport to use. Today only
     # imessage — set it when the source event came from imessage so auto-
     # created threads can reply out without manual meta.yaml edits.
@@ -225,6 +289,7 @@ def ingest(
     received_at: Optional[datetime] = None,
     source: Optional[str] = None,
     sender_override: Optional[str] = None,
+    chat_handles: Optional[list[str]] = None,
 ) -> IngestResult:
     """Place an incoming message in the right thread; create thread + person if new."""
     MESSAGES_DIR.mkdir(parents=True, exist_ok=True)
@@ -237,20 +302,35 @@ def ingest(
     created_person = False
 
     if slug is None:
-        # For 1:1 threads, try macOS Contacts to fill display_name when the
-        # event didn't carry one. Group threads keep display_name empty —
-        # their slug is built from the chat guid path anyway.
-        if not display_name and not chat_guid and handle:
-            display_name = contacts.resolve(handle)
-        base = slugify(display_name, max_words=2) if display_name else _slug_from_handle(handle)
-        slug = _unique_slug(base or "unknown", handle=handle)
-        _create_thread(slug, handle, display_name, chat_guid, source=source)
+        if chat_guid:
+            # Group thread: structural slug from chat_guid, never a person stub.
+            slug = _group_slug(chat_guid)
+            if (MESSAGES_DIR / slug).exists():
+                # Same chat_guid was missed by resolve_slug (meta.yaml unreadable
+                # or missing the field). Disambiguate rather than collide.
+                slug = _unique_slug(slug, handle=handle)
+        else:
+            # For 1:1 threads, try macOS Contacts to fill display_name when the
+            # event didn't carry one.
+            if not display_name and handle:
+                display_name = contacts.resolve(handle)
+            base = slugify(display_name, max_words=2) if display_name else _slug_from_handle(handle)
+            slug = _unique_slug(base or "unknown", handle=handle)
+        _create_thread(
+            slug, handle, display_name, chat_guid,
+            source=source, chat_handles=chat_handles,
+        )
         created_thread = True
         if not chat_guid:  # only create person stub for 1:1 threads
             _create_person(slug, handle, display_name)
             created_person = True
 
-    sender = sender_override or _sender_name(slug, display_name)
+    if sender_override:
+        sender = sender_override
+    elif chat_guid:
+        sender = _resolve_sender(handle)
+    else:
+        sender = _sender_name(slug, display_name)
     day_file = _append_day_file(slug, sender, text, at)
 
     return IngestResult(
