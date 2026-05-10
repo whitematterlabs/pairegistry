@@ -1,0 +1,6 @@
+name: execute-claudecode
+kind: skill
+topic: operating
+version: 0.1.0
+description: Compose a brief and shell out to `claude -p` (ClaudeCode headless) to build a bin / driver / skill / subagent / pai-bundle / prompt. The intelligence and harness live inside the `claude -p` subprocess; you write the brief, fire it, verify the result.
+entrypoint: SKILL.md

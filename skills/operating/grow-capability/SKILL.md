@@ -135,18 +135,18 @@ Signals:
 
 ## Step 3A — build a bin tool
 
-Spawn the `claudecode` subagent with the brief:
+Load the `execute-claudecode` skill and invoke `claude -p` directly
+with a bin brief:
 
-```sh
-bin/subagent spawn --slug claudecode-<topic> --package claudecode --prompt "
+```
 type: bin
 name: <name>
 need: <verbatim from request>
 why: <verbatim why>
-"
+shape: <exact CLI invocation the requester will use>
 ```
 
-Wait for `subagent:response` / `proc completed`, then go to **Step 4**.
+Then go to **Step 4**.
 
 ---
 
@@ -177,10 +177,10 @@ building:
 4. What events does the driver emit? (`<surface>:new`, `<surface>:changed`, `<surface>:removed`)
 5. Is there an existing external DB/API to read? (e.g. SQLite at `~/Library/Calendars/`)
 
-Spawn the `claudecode` subagent with a **driver brief**:
+Load the `execute-claudecode` skill and invoke `claude -p` with a
+**driver brief**:
 
-```sh
-bin/subagent spawn --slug claudecode-<topic> --package claudecode --prompt "
+```
 type: driver
 name: <name>
 need: <what the driver must do>
@@ -195,7 +195,6 @@ events:
   - kind: <surface>:changed
   - kind: <surface>:removed
 no_polling: true  # use FSEvents / SQLite WAL hooks, not sleep loops
-"
 ```
 
 After the driver is built, install and activate it:
@@ -223,10 +222,10 @@ Design the bundle:
 2. What is its role in one sentence? (this becomes the bundle's prompt)
 3. Does it need any `bin/` tools beyond what exists?
 
-Spawn claudecode for the bundle:
+Invoke `claude -p` (via the `execute-claudecode` skill) with a
+bundle brief:
 
-```sh
-bin/subagent spawn --slug claudecode-<bundle-topic> --package claudecode --prompt "
+```
 type: pai-bundle
 name: <name>-pai
 need: A PAI that handles <surface> operations for the owner.
@@ -235,10 +234,9 @@ wake_on:
 prompt_summary: <one sentence role description>
 required_drivers:
   - <driver-name>
-"
 ```
 
-After claudecode finishes, instantiate the new PAI:
+After it finishes, instantiate the new PAI:
 
 ```sh
 sbin/paiadd <bundle-name>
@@ -250,12 +248,9 @@ Then go to **Step 4**.
 
 ## Step 4 — verify and notify the requester
 
-Read the result files to confirm success:
-
-```sh
-cat proc/claudecode-<topic>/result.md
-cat proc/claudecode-<topic>/log.md
-```
+Confirm the artifact exists and works (you ran the verification step
+in your `claude -p` brief, but spot-check the on-disk result and
+re-run the test invocation yourself before notifying).
 
 On success:
 
