@@ -1,5 +1,6 @@
 ---
 name: understand-config-reconcile
+visible_to: [root]
 description: How /etc/config.yaml becomes /proc/<pai>/spec.yaml — schema, managed vs preserved fields, when reconcile runs, and what triggers re-reconciliation.
 ---
 
@@ -48,8 +49,9 @@ Fields **not** in `CONFIG_MANAGED_FIELDS` on `/proc/<pai>/spec.yaml`
 1. **Boot** — every time the kernel starts, before any PAI is
    spawned. See `/usr/src/boot/phases/reconcile.py`.
 2. **`kernel:reload_config` event** — emitted by `paictl
-   start/stop`, `paiadd`, `paidel`, or manually with
-   `ipc emit kernel:reload_config`.
+   start/stop`, `paiadd`, `paidel`.
+3. **Reboot** (`sbin/reboot`) — re-execs the kernel; reconcile runs
+   as part of boot.
 
 ## What reconcile does
 
@@ -69,7 +71,7 @@ Also reconciles **persubs**: each `dependencies:` entry produces
 Add and remove PAIs through the wizards (`paiadd`, `paidel`).
 Hand-edit `/etc/config.yaml` only to **fix** a malformed entry
 (typo, missing required field, duplicate name, pid collision).
-After any hand-edit, emit `kernel:reload_config`.
+After any hand-edit, run `sbin/reboot`.
 
 The `reload-config` skill walks the fix-up procedure.
 

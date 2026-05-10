@@ -1,5 +1,6 @@
 ---
 name: understand-event-routing
+visible_to: [root]
 description: How an event becomes a nudge — the kind vocabulary, wake_on globs, fan-out rules, and the fallback chain ending at root.
 ---
 
@@ -27,14 +28,14 @@ description: How an event becomes a nudge — the kind vocabulary, wake_on globs
 Two kinds bypass the glob system and route point-to-point via a
 `target_pid:` field:
 
-- `pai_message` — generic peer IPC. Sent by `bin/send-message --to <pid>`.
+- `pai_message` — generic peer send_message. Sent by `bin/send-message --to <pid>`.
   Used in either direction by any PAI talking to any other PAI.
 - `subagent:response` — child→parent only. Emitted by
   `bin/subagent reply`; the parent receives a nudge tagged
   `reason: subagent response`.
 
 Spawn kickoff prompts ride `pai_message` — that's just the parent's
-first IPC to a newborn child.
+first send_message to a newborn child.
 
 ## Kinds vocabulary
 
@@ -91,5 +92,5 @@ shapes:
 
 - `memory/doc/KERNEL.md` §"Event System" — long form.
 - `memory/doc/KERNEL_EVENTS.md` — every kernel-emitted kind, payloads.
-- Skill `understand-ipc` — pai_message + subagent:response in depth.
+- Skill `understand-send-message` — pai_message + subagent:response in depth.
 - Skill `understand-config-reconcile` — wake_on schema + validation.

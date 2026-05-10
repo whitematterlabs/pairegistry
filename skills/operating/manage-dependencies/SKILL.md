@@ -1,5 +1,6 @@
 ---
 name: manage-dependencies
+visible_to: [root]
 description: Use when adding, removing, or inspecting a PAI's persistent subagents (persubs) — long-lived specialist children declared under `dependencies:` in /etc/config.yaml. Read before editing dependencies or when an operator asks for a memory/computer-use/etc. specialist.
 ---
 
@@ -64,9 +65,9 @@ cat /proc/<parent>/spec.yaml | grep -A20 dependencies
    (`dependencies: [memory]`) is **not** supported in v1 — entries
    must be mappings. If `package:` is set, the bundle must exist at
    `/usr/lib/subagents/<package>/` or the kernel refuses to boot.
-5. Reload:
+5. Reboot:
    ```
-   ipc emit kernel:reload_config
+   sbin/reboot
    ```
 6. Verify: `/proc/<parent>.<dep>/spec.yaml` exists with `persub: true`
    and `parent: <pid>`. `/proc/<parent>.<dep>/status` is `running`.
@@ -77,7 +78,7 @@ There is no live-removal in v1. The persub keeps running until the
 parent shuts down. To remove:
 
 1. Delete the entry from `dependencies:` in `/etc/config.yaml`.
-2. `ipc emit kernel:reload_config` so the parent's spec is updated.
+2. `sbin/reboot` so the parent's spec is updated.
 3. The persub keeps running this session. To force it down now:
    stop the parent (it will take its persubs with it) — or, for a
    surgical removal, manually clean `/proc/<parent>.<dep>/`,

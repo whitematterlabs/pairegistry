@@ -1,5 +1,6 @@
 ---
 name: author-pai-bundle
+visible_to: [root]
 description: Howto for creating a new PAI bundle — package.yaml, prompt, paiman init scaffolding, paiadd to instantiate. Reference when adding a new fleet member.
 ---
 

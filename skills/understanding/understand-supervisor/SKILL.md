@@ -1,5 +1,6 @@
 ---
 name: understand-supervisor
+visible_to: [root]
 description: How the kernel supervises PAI processes — start, nudge, restart policy, failure capture. Read before diagnosing a /proc/<pai>/ that's stuck or thrashing.
 ---
 
@@ -19,7 +20,7 @@ For every active PAI in `/proc/<name>/`:
 2. **Wait for nudges**. The kernel routes events to the supervisor
    via the in-process bus; each nudge becomes a user turn.
 3. **Construct the user turn**: event payload(s), recent context,
-   any pending IPC. Hand to `llm.py` to generate the assistant
+   any pending send_message. Hand to `llm.py` to generate the assistant
    response. Stream tool calls.
 4. **Capture failures**. Tracebacks land in `/proc/<name>/log.md`.
    On unhandled exception, set `status=failed` and emit
@@ -37,7 +38,7 @@ turn for the target PAI. It assembles:
 
 - the event block (kind, source, payload)
 - recent log tail for context
-- any queued IPC the PAI hasn't seen yet
+- any queued send_message the PAI hasn't seen yet
 - the operating preamble
 
 It does **not** carry conversation history across nudges — each
@@ -51,7 +52,7 @@ A spawned subagent has `persistent: true` in its spec. The kernel
 supervises it the same way — except:
 - It only resolves on `bin/subagent kill` (ephemeral) or parent
   shutdown (persub).
-- Its events route point-to-point: parent IPC arrives as
+- Its events route point-to-point: parent send_message arrives as
   `pai_message`; child replies arrive at the parent as
   `subagent:response`.
 

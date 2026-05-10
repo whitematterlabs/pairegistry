@@ -1,5 +1,6 @@
 ---
 name: author-driver
+visible_to: [root]
 description: Howto for creating a new driver — three-location split, events.yaml manifest, filesystem-based kernel discovery, deploy flow. Reference when scaffolding a new event source.
 ---
 

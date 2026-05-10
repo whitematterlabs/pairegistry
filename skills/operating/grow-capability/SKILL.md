@@ -1,6 +1,7 @@
 ---
 name: grow-capability
-description: Handle a `request-capability:` IPC from a child PAI by scoping the need, choosing the right build path (bin tool / driver / PAI bundle), executing it, and messaging the requester back. The "growth" half of the capability-gap escalation ceremony.
+visible_to: [root]
+description: Handle a `request-capability:` send_message from a child PAI by scoping the need, choosing the right build path (bin tool / driver / PAI bundle), executing it, and messaging the requester back. The "growth" half of the capability-gap escalation ceremony.
 ---
 
 # Growing a capability for a requester
@@ -13,9 +14,9 @@ the requester owns the user-facing follow-through.
 
 ## Inputs
 
-The IPC envelope gives you:
+The send_message envelope gives you:
 - `from: pai:<requester pid>` — the PAI that asked. Save this; you
-  IPC them back at the end.
+  send_message them back at the end.
 - `content:` — two lines:
   - `request-capability: <need>`
   - `why: <owner's ask>`
@@ -24,7 +25,7 @@ The requester does **not** classify scope, shape, or surface — that is
 your job here. You infer the build path from `why:` plus a sanity
 check against what's already installed.
 
-If a field is missing or unintelligible, IPC the requester back asking
+If a field is missing or unintelligible, send_message the requester back asking
 them to refine the request. Don't guess at intent.
 
 ## Step 1 — sanity check
@@ -38,7 +39,7 @@ ls /usr/lib/skills/              # ditto for system skills
 ls /usr/lib/drivers/             # is there a driver that already surfaces this data?
 ```
 
-If yes, just IPC the requester pointing at the existing tool/skill:
+If yes, just send_message the requester pointing at the existing tool/skill:
 
 ```sh
 bin/send-message --to <requester pid> --content 'capability-exists: <name> — usage: <how to call>'
@@ -273,8 +274,8 @@ in `/proc/` after `kernel:reload_config`.
 - Build and notify. Do **not** invoke the new capability yourself.
 - Do **not** message the owner. The requester does that.
 - Do **not** ask the owner for clarification — work from the
-  requester's `need:` and `why:`. If those are too thin, IPC the
-  requester (not the owner) for a refined request.
+  requester's `need:` and `why:`. If those are too thin, send_message
+  the requester (not the owner) for a refined request.
 - Don't over-engineer. Keep the FHS contract: **data is a file**
   (flat YAML under `/calendar/`, `/contacts/`, etc.), **tools are
   binaries** (one-shot CLIs under `/bin/`), and **long-horizon work

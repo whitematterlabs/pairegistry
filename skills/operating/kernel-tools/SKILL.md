@@ -1,6 +1,7 @@
 ---
 name: kernel-tools
-description: Cheatsheet for paiman, paiadd/paidel, paictl, paicron, ipc, subagent — what each does, when to use which. Read before invoking unfamiliar tooling.
+visible_to: [root]
+description: Cheatsheet for paiman, paiadd/paidel, paictl, paicron, send-message, subagent — what each does, when to use which. Read before invoking unfamiliar tooling.
 ---
 
 # Kernel tooling
@@ -78,16 +79,17 @@ paicron list                  # one-line per /proc/ entry
 `paicron` auto-suffixes the slug with `-YYYY-MM-DD` (or full
 timestamp on same-day collision).
 
-## ipc — event bus
+## send-message — peer messaging
 
 ```sh
 # Send a directed message to another PAI
-ipc --to <pid|slug> --content "..."
-
-# Emit a kernel event (broadcast through wake_on)
-ipc emit kernel:reload_config
-ipc emit imessage:new --field thread=kaia --field text="..."
+send-message --to <pid|slug> --content "..."
 ```
+
+## reboot
+
+To pick up `/etc/config.yaml` hand-edits, run `sbin/reboot`. There is
+no separate reload CLI — reconcile runs at every boot.
 
 ## subagent — child PAI lifecycle
 
@@ -142,7 +144,7 @@ the only thing that touches `/opt/paiman/` and the activation slots.
 | Start a configured-but-stopped PAI | `bin/paictl start <name>` |
 | Stop running a PAI temporarily | `bin/paictl stop` |
 | Schedule a one-shot reminder | `bin/paicron start --schedule …` |
-| Wake the kernel after editing `/etc/config.yaml` | `bin/paictl reload` |
+| Wake the kernel after editing `/etc/config.yaml` | `sbin/reboot` |
 | Pick up new driver `wake_on:` globs | `sbin/reboot` |
 | Send a message to another PAI | `bin/send-message --to …` |
 | Spawn a research subagent | `bin/subagent spawn` |
@@ -152,4 +154,4 @@ the only thing that touches `/opt/paiman/` and the activation slots.
 - `memory/doc/KERNEL.md` §"Spawning"
 - Skill `understand-config-reconcile` — what these tools trigger.
 - Skill `understand-proc-services` — what paicron writes.
-- Skill `understand-ipc` — pai_message/subagent:response details.
+- Skill `understand-send-message` — pai_message/subagent:response details.

@@ -1,5 +1,6 @@
 ---
 name: execute-claudecode
+visible_to: [root]
 description: Compose a brief and shell out to `claude -p` (ClaudeCode headless) to build a bin / driver / skill / subagent / pai-bundle / prompt. You are not the coder and you are not the scout — the real intelligence, harness, and exploration loop live inside the `claude -p` subprocess. You write the brief, fire it, ship the result.
 ---
 

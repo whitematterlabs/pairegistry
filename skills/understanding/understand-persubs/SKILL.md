@@ -18,7 +18,7 @@ Use a persub when the value is **accumulated state** or
   context.
 
 For one-shot delegation (research, drafting, code review) use an
-**ephemeral** subagent. See `understand-ipc`.
+**ephemeral** subagent. See `understand-send-message`.
 
 ## Declarative creation (recommended)
 
@@ -113,4 +113,4 @@ Both flags matter. `persistent` is shared with ephemeral subagents
 - `/usr/src/boot/config.py` — `_validate_pai_entry`,
   `_reconcile_persubs`.
 - `/usr/src/bin/subagent.py` — CLI.
-- Skill `understand-ipc` — pai_message, subagent:response.
+- Skill `understand-send-message` — pai_message, subagent:response.

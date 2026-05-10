@@ -1,5 +1,6 @@
 ---
 name: reload-config
+visible_to: [root]
 description: Use when a `kernel:reload_failed` event lands or you've edited `/etc/config.yaml` and need the kernel to re-reconcile.
 ---
 
@@ -22,9 +23,9 @@ description: Use when a `kernel:reload_failed` event lands or you've edited `/et
    invariant.
 4. Apply the **smallest possible** edit that fixes the validation
    error. Do not rewrite unrelated entries.
-5. Emit a fresh reload event:
+5. Reboot the kernel — reconcile runs at boot and picks up your fix:
    ```
-   ipc emit kernel:reload_config
+   sbin/reboot
    ```
 6. Watch `/proc/root/log.md` for confirmation; if it errors again,
    the fix wasn't complete — surface to operator.

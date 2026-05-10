@@ -1,9 +1,9 @@
 ---
-name: understand-ipc
+name: understand-send-message
 description: How PAIs talk to each other — pai_message and subagent:response, the bin/send-message and bin/subagent CLIs, ephemeral vs persistent subagents.
 ---
 
-# Inter-PAI IPC
+# Inter-PAI messaging
 
 PAIs don't call each other synchronously. Every cross-PAI exchange
 goes through the **event bus** as a directed event with a
@@ -13,12 +13,12 @@ goes through the **event bus** as a directed event with a
 
 | Kind | Direction | Emitter | Use |
 |---|---|---|---|
-| `pai_message` | any → any | `bin/send-message --to <pid> --content "..."` | generic peer IPC |
+| `pai_message` | any → any | `bin/send-message --to <pid> --content "..."` | generic peer messaging |
 
 | `subagent:response` | child → parent | `bin/subagent reply --content "..."` | child reporting back |
 
-Spawn kickoff prompts ride `pai_message` — the parent's first IPC
-to a newborn child is just a regular message.
+Spawn kickoff prompts ride `pai_message` — the parent's first
+send_message to a newborn child is just a regular message.
 
 The receiving PAI gets the event in its user turn. For
 `subagent:response`, the parent additionally sees `reason: subagent
@@ -33,9 +33,6 @@ bin/send-message --to 2 --content "fyi: gmail driver restarted"
 
 # Address by slug also works for persubs
 bin/send-message --to pai.memory --content "remember: arda likes earl grey"
-
-# Emit a kernel event (no target_pid; broadcast through wake_on)
-bin/paictl reload
 
 # Spawn an ephemeral subagent (one task, then done)
 bin/subagent spawn --slug research-flights \
