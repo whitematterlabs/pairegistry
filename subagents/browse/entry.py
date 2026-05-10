@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
-import shutil
 import subprocess
 import sys
 import time
@@ -106,34 +105,81 @@ def _cdp_alive(url: str) -> bool:
         return False
 
 
+CHROME_APP = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+CHROME_REAL_PROFILE = Path.home() / "Library" / "Application Support" / "Google" / "Chrome"
+CHROME_CDP_PROFILE = PAI_ROOT / "var" / "lib" / "browse" / "chrome-cdp-profile"
+
+
+def _quit_chrome() -> None:
+    """Best-effort quit of any running Chrome so we can take over the profile."""
+    try:
+        out = subprocess.run(
+            ["pgrep", "-f", "Google Chrome"], capture_output=True, text=True
+        )
+        if not out.stdout.strip():
+            return
+    except Exception:
+        return
+    subprocess.run(
+        ["osascript", "-e", 'tell application "Google Chrome" to quit'],
+        capture_output=True,
+    )
+    for _ in range(20):
+        r = subprocess.run(["pgrep", "-f", "Google Chrome"], capture_output=True)
+        if not r.stdout.strip():
+            return
+        time.sleep(0.5)
+    subprocess.run(["pkill", "-f", "Google Chrome"], capture_output=True)
+    time.sleep(1)
+
+
+def _prepare_cdp_profile() -> Path:
+    """Create our CDP user-data-dir with symlinks into the owner's real Default
+    profile, so cookies/TLS state/IP reputation transfer. Idempotent."""
+    CHROME_CDP_PROFILE.mkdir(parents=True, exist_ok=True)
+    real_default = CHROME_REAL_PROFILE / "Default"
+    real_local_state = CHROME_REAL_PROFILE / "Local State"
+    link_default = CHROME_CDP_PROFILE / "Default"
+    link_local_state = CHROME_CDP_PROFILE / "Local State"
+    if real_default.exists() and not link_default.exists():
+        link_default.symlink_to(real_default)
+    if real_local_state.exists() and not link_local_state.exists():
+        link_local_state.symlink_to(real_local_state)
+    return CHROME_CDP_PROFILE
+
+
 def _ensure_chrome_cdp(port: int = CHROME_CDP_DEFAULT_PORT) -> str:
     """Ensure the owner's real Chrome is running with CDP. Returns the http:// URL.
 
-    No-op if Chrome is already up on the port (so subsequent browse spawns reuse it).
-    Otherwise, invokes the gstack chrome-cdp script which sets up
-    ~/.gstack/cdp-profile/chrome (symlinked to the owner's Default profile +
-    Local State) and launches /Applications/Google Chrome.app with
-    --remote-debugging-port=<port>.
+    No-op if Chrome is already up on the port (subsequent browse spawns reuse it).
+    Otherwise launches Chrome ourselves with:
+      - --user-data-dir pointing at our own dir whose Default is a symlink to
+        the owner's real Default profile (so cookies + Local State carry over).
+      - NO --restore-last-session: Chrome opens a single about:blank tab. The
+        previous chrome-cdp script enabled session restore, which raced with
+        browser-use's tab management and caused tabs to flicker open/close.
     """
     url = f"http://127.0.0.1:{port}"
     if _cdp_alive(url):
         return url
 
-    candidates = [
-        Path.home() / ".claude" / "skills" / "gstack" / "bin" / "chrome-cdp",
-    ]
-    on_path = shutil.which("chrome-cdp")
-    if on_path:
-        candidates.append(Path(on_path))
-    script = next((p for p in candidates if p.is_file()), None)
-    if not script:
-        sys.exit(
-            "entry.py: chrome-cdp script not found. Install the gstack skill "
-            "(~/.claude/skills/gstack/bin/chrome-cdp) or place chrome-cdp on $PATH."
-        )
+    if not CHROME_APP.is_file():
+        sys.exit(f"entry.py: Chrome not found at {CHROME_APP}")
+
+    _quit_chrome()
+    profile = _prepare_cdp_profile()
 
     subprocess.Popen(
-        [str(script), str(port)],
+        [
+            str(CHROME_APP),
+            f"--remote-debugging-port={port}",
+            "--remote-debugging-address=127.0.0.1",
+            f"--remote-allow-origins=http://127.0.0.1:{port}",
+            f"--user-data-dir={profile}",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "about:blank",
+        ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,
@@ -143,7 +189,7 @@ def _ensure_chrome_cdp(port: int = CHROME_CDP_DEFAULT_PORT) -> str:
         if _cdp_alive(url):
             return url
         time.sleep(0.5)
-    sys.exit(f"entry.py: chrome-cdp did not come up on {url} within 30s")
+    sys.exit(f"entry.py: Chrome did not expose CDP on {url} within 30s")
 
 
 async def _run(
