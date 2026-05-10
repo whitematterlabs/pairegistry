@@ -127,7 +127,7 @@ async def _audio_loop() -> None:
             if not capturing:
                 if now < cooldown_until:
                     continue
-                hit = wake.feed(frame)
+                hit = await asyncio.to_thread(wake.feed, frame)
                 if hit is None:
                     continue
                 print(f"[voice-in] wake hit: {hit.model} score={hit.score:.2f}", flush=True)
