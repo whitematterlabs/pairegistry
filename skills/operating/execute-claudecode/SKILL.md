@@ -1,24 +1,39 @@
 ---
 name: execute-claudecode
-description: Compose a brief and shell out to `claude -p` (ClaudeCode headless) to build a bin / driver / skill / subagent / pai-bundle / prompt. You are not the coder — the real intelligence and harness live inside the `claude -p` subprocess. You write the brief, fire it, verify the result, ship.
+description: Compose a brief and shell out to `claude -p` (ClaudeCode headless) to build a bin / driver / skill / subagent / pai-bundle / prompt. You are not the coder and you are not the scout — the real intelligence, harness, and exploration loop live inside the `claude -p` subprocess. You write the brief, fire it, ship the result.
 ---
 
 # Executing claudecode
 
 When you need to build a non-trivial artifact (bin, driver, skill,
-subagent, pai-bundle, prompt) the standard move is to invoke
-`claude -p` (ClaudeCode headless) yourself. You compose the brief,
-shell out, read the result, verify, ship. You are not the coder —
-the real intelligence and harness live inside the `claude -p`
+subagent, pai-bundle, prompt) the move is to invoke `claude -p`
+(ClaudeCode headless). You compose the brief, shell out, ship.
+You are not the coder. You are not the scout. The real intelligence
+and the cheap exploration loop both live inside the `claude -p`
 subprocess.
-
-If the task is small enough to do without `claude -p` (a one-line
-edit, an obvious config tweak), don't bother with this skill. Just
-do it.
 
 If the task is purely investigative (read, summarize, no artifact),
 spawn the `scout` subagent instead — it's cheaper and won't
 pollute the build lane.
+
+## STOP — do not scout before invoking
+
+Before you shell out to `claude -p`, do **not**:
+
+- Probe the environment (`pip list`, `python -c "import …"`,
+  `which`, `ls` of system paths to see if something is installed).
+- Sanity-check APIs, bindings, file shapes, or sample data.
+- Read library source, framework docs, or example payloads.
+- Run "just one quick command to make sure" anything.
+
+All of that is `claude -p`'s job. It has the file tools, the harness,
+and the iteration budget to do it well. If you do it from root, you
+burn kernel turns on work the subprocess will redo anyway, and you
+fool yourself into composing a narrower brief than the subprocess
+would have written for itself.
+
+The only thing you check before invoking is: **do I know what
+artifact I want and where it lands?** If yes, brief and fire.
 
 ## The brief
 
@@ -30,11 +45,14 @@ name: <package / file name>
 need: <what it should do>
 why:  <reason / requester's ask>
 shape: <for bin: exact CLI invocation; for others: omit or describe usage>
+done: <the subprocess's own definition of done — what it must
+       verify before returning>
 ```
 
 `type:` controls where and how the work is written. `shape:` is a
 **hard contract** for bin tools — the caller will invoke it with
-that exact shape. For other types, treat it as usage documentation.
+that exact shape. `done:` is what the subprocess must satisfy
+itself of before it returns; it is not a checklist you re-run.
 
 ## How to invoke
 
@@ -42,30 +60,31 @@ Single shell call. No timeout — long sessions are fine.
 
 ```sh
 claude -p --dangerously-skip-permissions "<full brief: type, name,
-need, why, shape, file paths, expected behavior, verification step>"
+need, why, shape, file paths, done criteria>"
 ```
 
 Be specific. Hand off everything Claude would need to work without
-asking follow-ups: target paths, constraints, how to verify, what
-files matter.
+asking follow-ups: target paths, constraints, what counts as done,
+what files matter.
 
 ## Workflow
 
-1. **Compose the brief.** All fields above. Specific paths, expected
-   behavior, verification step.
+1. **Compose the brief.** All fields above, including `done:`.
 2. **Invoke `claude -p`.** Let it run.
-3. **Read what it produced.** Spot-check the diff. Run the
-   verification yourself. If wrong, send a follow-up `claude -p`
-   with the specific correction needed.
+3. **Read what it produced.** Skim the diff and the subprocess's
+   own report. If it returned saying done is met, trust it. If it
+   reported a blocker or returned something obviously wrong, send
+   a follow-up `claude -p` with the specific correction. Do not
+   re-run its verification yourself.
 4. **Ship.** Install / activate as appropriate (`paiman install`,
-   `paictl start`, `paiadd`, etc.) — that's your job, not Claude's.
+   `paictl start`, `paiadd`, etc.) — that's your job, not Claude's,
+   and it's the only post-subprocess action you take.
 
 ## By type — where things land
 
 ### `type: bin`
 `/usr/lib/bin/<name>` (chmod +x). Lands in shared `/usr/bin/` for
 all PAIs. Shell or Python — whichever is shorter. One file.
-Verification: invoke it once with sensible test input.
 
 ### `type: driver`
 `/usr/lib/drivers/<name>/` with `package.yaml`, `events.yaml`,
@@ -110,14 +129,19 @@ frontmatter required. The personality a PAI instance loads.
   driver. Promote later if state earns it.
 - **No premature abstraction.** No speculative configuration. No
   future-proofing for hypothetical needs.
-- **Verify end-to-end.** For features and drivers, exercise the real
-  path — not just imports.
+- **Verification belongs in `done:`, not in your hands.** Write
+  end-to-end verification into the brief's `done:` field. The
+  subprocess runs it. You don't.
 
 ## Boundaries
 
+- Do **not** scout, probe, or verify before invoking. (See "STOP"
+  above.) The subprocess does its own discovery.
 - Do **not** invoke or activate the thing being built from inside
-  the `claude -p` brief. That's your follow-up step after it
-  finishes.
+  the `claude -p` brief. That's your follow-up ship step.
+- Do **not** re-run the subprocess's verification after it returns.
+  If `done:` was right, trust the report; if it wasn't, fix `done:`
+  and re-fire.
 - Do **not** read kernel internals (`/usr/src/boot/`, `/boot/`)
   unless the brief is genuinely about kernel work. Userspace
   artifacts don't need them.
