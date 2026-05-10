@@ -34,6 +34,30 @@ BRIDGE_JS = PAI_ROOT / "usr" / "libexec" / "whatsapp" / "bridge.js"
 MESSAGES_ROOT = paths.var_spool_communication() / "whatsapp"
 PEOPLE_ROOT = paths.var_lib_memory() / "people"
 OUTBOX_DIR = PAI_ROOT / "sys" / "drivers" / "whatsapp" / "outbox"
+AUTH_DIR = PAI_ROOT / "sys" / "drivers" / "whatsapp" / "auth"
+
+
+# ── LID → phone resolution ─────────────────────────────────────────
+# Baileys persists every LID↔phone mapping it sees into the auth dir:
+#   lid-mapping-<phone>.json          → "<lid>"
+#   lid-mapping-<lid>_reverse.json    → "<phone>"
+# WhatsApp now delivers some inbound JIDs with an LID-shaped local part
+# even under @s.whatsapp.net, so we can't rely on the bridge's @lid-suffix
+# check alone. A real E.164 phone is ≤15 digits; LIDs are ~14-17 digits but
+# don't correspond to any real country code. Heuristic: if the local part
+# is all digits and we have a reverse-mapping file for it, treat it as a
+# LID and substitute the phone.
+def _resolve_lid_to_phone(local: str) -> str:
+    if not local.isdigit():
+        return local
+    reverse = AUTH_DIR / f"lid-mapping-{local}_reverse.json"
+    if not reverse.exists():
+        return local
+    try:
+        phone = json.loads(reverse.read_text()).strip()
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return local
+    return phone if phone.isdigit() else local
 
 # ── bridge ref (set by _run_bridge, read by outbox handler) ────────
 _bridge_stdin: Optional[asyncio.StreamWriter] = None
@@ -63,7 +87,7 @@ def _lookup_contact(phone: str) -> tuple[str, str | None]:
             continue
         handles = data.get("handles", [])
         for h in handles:
-            if isinstance(h, str) and h == phone:
+            if isinstance(h, str) and h.lstrip("+") == phone.lstrip("+"):
                 return (entry.name, data.get("name") or entry.name)
     return (phone, None)
 
@@ -237,12 +261,23 @@ async def _drain_pending_outbox() -> None:
             print(f"[whatsapp-in] pending outbox error: {e!r}", flush=True)
 
 
+HISTORY_QUIESCE_SECONDS = 3.0
+
+
 async def _read_bridge_stdout(proc: asyncio.subprocess.Process) -> None:
     assert proc.stdout is not None
 
     backlog_messages: list[dict] = []
-    backlog_deadline = time.time() + 5
-    backlog_emitted = False
+    backlog_flush_task: asyncio.Task | None = None
+
+    async def _flush_after_quiesce():
+        try:
+            await asyncio.sleep(HISTORY_QUIESCE_SECONDS)
+        except asyncio.CancelledError:
+            return
+        if backlog_messages:
+            _emit_backlog(list(backlog_messages))
+            backlog_messages.clear()
 
     while True:
         line = await proc.stdout.readline()
@@ -261,24 +296,28 @@ async def _read_bridge_stdout(proc: asyncio.subprocess.Process) -> None:
             body = data.get("body", "")
             if not phone or not body:
                 continue
+            phone = _resolve_lid_to_phone(phone)
 
             slug, display_name = _lookup_contact(phone)
             sender = display_name or phone
             thread_dir = _ensure_thread_dir(slug)
             day_file = _write_message(thread_dir, sender, body)
 
-            if not backlog_emitted and time.time() < backlog_deadline:
+            if data.get("history"):
                 backlog_messages.append({
                     "phone": phone,
                     "slug": slug,
                     "sender": sender,
                     "text": body,
                 })
+                if backlog_flush_task and not backlog_flush_task.done():
+                    backlog_flush_task.cancel()
+                backlog_flush_task = asyncio.create_task(_flush_after_quiesce())
                 continue
 
             P.emit_event({
                 "source": "whatsapp",
-                "kind": "new_message",
+                "kind": "new",
                 "thread": slug,
                 "sender": sender,
                 "text": body,
@@ -318,10 +357,12 @@ async def _read_bridge_stdout(proc: asyncio.subprocess.Process) -> None:
                     "reason": err,
                 })
 
-    # Emit backlog if any accumulated
-    if backlog_messages and not backlog_emitted:
-        _emit_backlog(backlog_messages)
-        backlog_emitted = True
+    # EOF safety net: flush any pending backlog before returning.
+    if backlog_flush_task and not backlog_flush_task.done():
+        backlog_flush_task.cancel()
+    if backlog_messages:
+        _emit_backlog(list(backlog_messages))
+        backlog_messages.clear()
 
 
 def _emit_backlog(messages: list[dict]) -> None:
@@ -337,7 +378,7 @@ def _emit_backlog(messages: list[dict]) -> None:
 
     P.emit_event({
         "source": "whatsapp",
-        "kind": "messages_backlog",
+        "kind": "backlog",
         "since": datetime.now(timezone.utc).isoformat(),
         "threads": list(threads_map.values()),
         "total": len(messages),

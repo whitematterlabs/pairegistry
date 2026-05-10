@@ -45,10 +45,13 @@ the WAF sees a returning logged-in user, not a fresh bot.
 
 - `--cdp <url>` — attach to an already-running Chrome at this CDP endpoint
   (e.g. `http://127.0.0.1:9222`). Skips bundled-Chromium launch.
-- `--cdp-auto true` — `entry.py` itself launches the owner's Chrome via
-  the gstack `chrome-cdp` script (which symlinks the user's Default
-  profile + Local State so cookies/TLS/IP reputation carry over) and
-  attaches to it. Long-lived: subsequent spawns reuse the same Chrome.
+- `--cdp-auto true` — `entry.py` launches a Chrome instance against a
+  dedicated CDP profile (`$PAI_ROOT/var/lib/browse/chrome-cdp-profile/`)
+  and attaches to it. The profile is a real, separate Chrome profile
+  (not a symlink to the owner's Default — that corrupts cookies). First
+  launch is blank; sign in to OpenTable/Resy/etc once and sessions
+  persist for subsequent spawns. Long-lived: subsequent runs reuse the
+  same Chrome.
 
 Auto-routing: if the start `URL` host (or its registrable parent) is in
 the WAF allowlist (opentable.com, resy.com, exploretock.com, tock.com,

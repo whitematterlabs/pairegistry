@@ -117,26 +117,61 @@ async function connect() {
     }
   });
 
-  sock.ev.on('messages.upsert', (m) => {
+  sock.ev.on('messages.upsert', async (m) => {
     for (const msg of m.messages) {
-      if (msg.key.fromMe) continue;
-      const chatJid = msg.key.remoteJid;
-      if (!chatJid || chatJid.includes('@g.us')) continue;
-      const body = msg.message?.conversation
-        || msg.message?.extendedTextMessage?.text
-        || '';
-      if (!body) continue;
-
-      const phone = chatJid.split('@')[0];
-      emit({
-        type: 'message',
-        direction: 'in',
-        from: phone,
-        body,
-        timestamp: new Date().toISOString(),
-      });
+      const out = await extractIn(sock, msg);
+      if (out) emit(out);
     }
   });
+
+  sock.ev.on('messaging-history.set', async ({ messages, isLatest, syncType }) => {
+    const cutoff = Math.floor(Date.now() / 1000) - HISTORY_CUTOFF_SECONDS;
+    let kept = 0;
+    for (const msg of messages || []) {
+      const tsRaw = msg.messageTimestamp;
+      const ts = Number(tsRaw?.low ?? tsRaw?.toNumber?.() ?? tsRaw ?? 0);
+      if (ts && ts < cutoff) continue;
+      const out = await extractIn(sock, msg, { history: true });
+      if (out) { emit(out); kept++; }
+    }
+    logger.info({ total: messages?.length ?? 0, kept, isLatest, syncType }, 'history sync batch');
+  });
+}
+
+const HISTORY_WINDOW_DAYS = 30;
+const HISTORY_CUTOFF_SECONDS = HISTORY_WINDOW_DAYS * 24 * 60 * 60;
+
+async function resolveToPhoneJid(sock, key) {
+  const remote = key.remoteJid || '';
+  if (!remote || remote.includes('@g.us')) return null;
+  if (!remote.endsWith('@lid')) return remote;
+  try {
+    const pn = await sock.signalRepository.lidMapping.getPNForLID(remote);
+    if (pn) return pn;
+  } catch (err) {
+    logger.warn({ err: err.message, lid: remote }, 'LID lookup failed');
+  }
+  return null;
+}
+
+async function extractIn(sock, msg, { history = false } = {}) {
+  if (msg.key.fromMe) return null;
+  const jid = await resolveToPhoneJid(sock, msg.key);
+  if (!jid) return null;
+  const body = msg.message?.conversation
+    || msg.message?.extendedTextMessage?.text
+    || '';
+  if (!body) return null;
+  const tsRaw = msg.messageTimestamp;
+  const ts = Number(tsRaw?.low ?? tsRaw?.toNumber?.() ?? tsRaw ?? 0);
+  return {
+    type: 'message',
+    direction: 'in',
+    from: jid.split('@')[0],
+    body,
+    timestamp: ts ? new Date(ts * 1000).toISOString() : new Date().toISOString(),
+    history,
+  };
 }
 
 // stdin readline + SIGTERM registered once; they reference currentSock so

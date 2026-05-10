@@ -134,17 +134,14 @@ def _quit_chrome() -> None:
 
 
 def _prepare_cdp_profile() -> Path:
-    """Create our CDP user-data-dir with symlinks into the owner's real Default
-    profile, so cookies/TLS state/IP reputation transfer. Idempotent."""
+    """Ensure our dedicated CDP user-data-dir exists. This is a real, separate
+    Chrome profile — NOT a symlink to the owner's Default. Two Chromes writing
+    to the same profile dir corrupts cookies/history SQLite and the keyring
+    index in Local State.
+
+    First launch is a blank profile. Sign in to OpenTable/Resy/etc once in
+    that window; sessions persist here for subsequent spawns."""
     CHROME_CDP_PROFILE.mkdir(parents=True, exist_ok=True)
-    real_default = CHROME_REAL_PROFILE / "Default"
-    real_local_state = CHROME_REAL_PROFILE / "Local State"
-    link_default = CHROME_CDP_PROFILE / "Default"
-    link_local_state = CHROME_CDP_PROFILE / "Local State"
-    if real_default.exists() and not link_default.exists():
-        link_default.symlink_to(real_default)
-    if real_local_state.exists() and not link_local_state.exists():
-        link_local_state.symlink_to(real_local_state)
     return CHROME_CDP_PROFILE
 
 
@@ -200,15 +197,17 @@ async def _run(
     llm,
     cdp_url: str | None,
 ):
-    from browser_use import Agent
-    from browser_use.browser import Browser, BrowserConfig
+    from browser_use import Agent, Browser, BrowserConfig, BrowserContextConfig
 
     if cdp_url:
         browser = Browser(config=BrowserConfig(cdp_url=cdp_url))
     else:
+        ctx_cfg = BrowserContextConfig(
+            cookies_file=str(cookies_file) if cookies_file else None,
+        )
         browser = Browser(config=BrowserConfig(
             headless=headless,
-            cookies_file=str(cookies_file) if cookies_file else None,
+            new_context_config=ctx_cfg,
         ))
     full_task = f"Start at {url}. {task}"
     agent = Agent(task=full_task, llm=llm, browser=browser)
