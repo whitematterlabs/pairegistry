@@ -1,7 +1,7 @@
 name: whatsapp-pai
 kind: pai
 version: 0.1.0
-description: WhatsApp-handling PAI — triages incoming WhatsApp messages, replies, summarizes
+description: WhatsApp-handling PAI — triages incoming WhatsApp messages and replies in the owner's voice
 provider: deepseek
 model: deepseek-v4-pro
 prompt: prompt.md
