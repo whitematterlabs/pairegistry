@@ -133,7 +133,16 @@ def main() -> int:
                     rc = 0
                     break
                 elif state == "close":
-                    print("\nbridge closed before pairing completed.", file=sys.stderr)
+                    # Baileys fires a 515 (restartRequired) close right after a
+                    # successful QR pair; bridge.js handles it with an in-process
+                    # reconnect and will reach 'open' on the next attempt. Only
+                    # bail on closes the bridge does not plan to recover from.
+                    if msg.get("shouldReconnect"):
+                        continue
+                    print(
+                        f"\nbridge closed before pairing completed (reason {msg.get('reason')}).",
+                        file=sys.stderr,
+                    )
                     break
             elif t == "error":
                 print(f"\nbridge error: {msg.get('error')}", file=sys.stderr)
