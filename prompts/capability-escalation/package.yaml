@@ -1,5 +1,0 @@
-name: capability-escalation
-kind: prompt
-version: 0.1.0
-description: Sysprompt fragment teaching non-root, non-subagent PAIs to escalate missing capabilities to root via `request-capability:` send_message.
-entrypoint: prompt.md

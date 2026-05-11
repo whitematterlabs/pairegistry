@@ -1,5 +1,0 @@
-name: memory-usage
-kind: prompt
-version: 0.1.0
-description: Sysprompt fragment teaching every non-root, non-subagent PAI how to use the two-tier memory layout (private + shared) and the librarian-only write rules.
-entrypoint: prompt.md
