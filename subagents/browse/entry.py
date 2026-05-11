@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """browse subagent entrypoint.
 
-Invoked once per spawn. Builds a browser-use Agent with the parent's
-resolved provider/model, runs the task, writes /proc/$PAI_SLUG/result.md.
-The verbose agent loop lives inside this subprocess — the parent PAI's
-context only ever sees the final result file.
+Always drives the owner's real Chrome over CDP. No bundled Chromium,
+no separate profile — the only mode is "take over the user's Chrome,
+use their real cookies/sessions, drive it via browser-use."
 """
 from __future__ import annotations
 
@@ -23,16 +22,9 @@ import yaml
 
 PAI_ROOT = Path(os.environ.get("PAI_ROOT", str(Path.home() / ".pai")))
 LIBEXEC = PAI_ROOT / "usr" / "libexec" / "subagents" / "browse"
-COOKIES_DIR = PAI_ROOT / "var" / "lib" / "browse" / "cookies"
-COOKIE_TTL = 24 * 3600
 
-# Hosts whose WAFs reliably block headless Chromium. Auto-route to CDP attach.
-WAF_HOSTS = {
-    "opentable.com", "resy.com", "exploretock.com", "tock.com",
-    "yelp.com", "sevenrooms.com",
-    "www.google.com",
-}
-
+CHROME_APP = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+CHROME_REAL_PROFILE = Path.home() / "Library" / "Application Support" / "Google" / "Chrome"
 CHROME_CDP_DEFAULT_PORT = 9222
 
 sys.path.insert(0, str(LIBEXEC / "vendor"))
@@ -55,22 +47,6 @@ def _spec(slug: str) -> dict:
         sys.exit(f"entry.py: {spec_path} not found")
     with spec_path.open() as f:
         return yaml.safe_load(f) or {}
-
-
-def _ensure_cookies(profile: str) -> Path | None:
-    if not profile:
-        return None
-    COOKIES_DIR.mkdir(parents=True, exist_ok=True)
-    target = COOKIES_DIR / f"{profile}.txt"
-    fresh = target.is_file() and (time.time() - target.stat().st_mtime) < COOKIE_TTL
-    if not fresh:
-        importer = LIBEXEC / "chrome_cookies_import.py"
-        py = LIBEXEC / "venv" / "bin" / "python"
-        subprocess.run(
-            [str(py), str(importer), "--profile", profile],
-            check=True,
-        )
-    return target if target.is_file() else None
 
 
 def _build_llm(provider: str, model: str):
@@ -105,13 +81,7 @@ def _cdp_alive(url: str) -> bool:
         return False
 
 
-CHROME_APP = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
-CHROME_REAL_PROFILE = Path.home() / "Library" / "Application Support" / "Google" / "Chrome"
-CHROME_CDP_PROFILE = PAI_ROOT / "var" / "lib" / "browse" / "chrome-cdp-profile"
-
-
 def _quit_chrome() -> None:
-    """Best-effort quit of any running Chrome so we can take over the profile."""
     try:
         out = subprocess.run(
             ["pgrep", "-f", "Google Chrome"], capture_output=True, text=True
@@ -133,28 +103,15 @@ def _quit_chrome() -> None:
     time.sleep(1)
 
 
-def _prepare_cdp_profile() -> Path:
-    """Ensure our dedicated CDP user-data-dir exists. This is a real, separate
-    Chrome profile — NOT a symlink to the owner's Default. Two Chromes writing
-    to the same profile dir corrupts cookies/history SQLite and the keyring
-    index in Local State.
-
-    First launch is a blank profile. Sign in to OpenTable/Resy/etc once in
-    that window; sessions persist here for subsequent spawns."""
-    CHROME_CDP_PROFILE.mkdir(parents=True, exist_ok=True)
-    return CHROME_CDP_PROFILE
-
-
 def _ensure_chrome_cdp(port: int = CHROME_CDP_DEFAULT_PORT) -> str:
-    """Ensure the owner's real Chrome is running with CDP. Returns the http:// URL.
+    """Ensure the owner's real Chrome (on their real Default profile) is
+    running with CDP. Returns the http:// URL.
 
-    No-op if Chrome is already up on the port (subsequent browse spawns reuse it).
-    Otherwise launches Chrome ourselves with:
-      - --user-data-dir pointing at our own dir whose Default is a symlink to
-        the owner's real Default profile (so cookies + Local State carry over).
-      - NO --restore-last-session: Chrome opens a single about:blank tab. The
-        previous chrome-cdp script enabled session restore, which raced with
-        browser-use's tab management and caused tabs to flicker open/close.
+    No-op if Chrome is already up on the port (subsequent browse spawns
+    reuse it). Otherwise quits any running Chrome and relaunches it
+    against ``CHROME_REAL_PROFILE`` with --remote-debugging-port. Quitting
+    first is the SQLite-corruption guard: two Chromes writing the same
+    profile dir will trash cookies/Local State.
     """
     url = f"http://127.0.0.1:{port}"
     if _cdp_alive(url):
@@ -162,9 +119,10 @@ def _ensure_chrome_cdp(port: int = CHROME_CDP_DEFAULT_PORT) -> str:
 
     if not CHROME_APP.is_file():
         sys.exit(f"entry.py: Chrome not found at {CHROME_APP}")
+    if not CHROME_REAL_PROFILE.is_dir():
+        sys.exit(f"entry.py: Chrome profile not found at {CHROME_REAL_PROFILE}")
 
     _quit_chrome()
-    profile = _prepare_cdp_profile()
 
     subprocess.Popen(
         [
@@ -172,7 +130,7 @@ def _ensure_chrome_cdp(port: int = CHROME_CDP_DEFAULT_PORT) -> str:
             f"--remote-debugging-port={port}",
             "--remote-debugging-address=127.0.0.1",
             f"--remote-allow-origins=http://127.0.0.1:{port}",
-            f"--user-data-dir={profile}",
+            f"--user-data-dir={CHROME_REAL_PROFILE}",
             "--no-first-run",
             "--no-default-browser-check",
             "about:blank",
@@ -189,39 +147,19 @@ def _ensure_chrome_cdp(port: int = CHROME_CDP_DEFAULT_PORT) -> str:
     sys.exit(f"entry.py: Chrome did not expose CDP on {url} within 30s")
 
 
-async def _run(
-    task: str,
-    url: str,
-    headless: bool,
-    cookies_file: Path | None,
-    llm,
-    cdp_url: str | None,
-):
-    from browser_use import Agent, Browser, BrowserConfig, BrowserContextConfig
+async def _run(task: str, url: str, llm, cdp_url: str):
+    from browser_use import Agent, Browser, BrowserConfig
 
-    if cdp_url:
-        browser = Browser(config=BrowserConfig(cdp_url=cdp_url))
-    else:
-        ctx_cfg = BrowserContextConfig(
-            cookies_file=str(cookies_file) if cookies_file else None,
-        )
-        browser = Browser(config=BrowserConfig(
-            headless=headless,
-            new_context_config=ctx_cfg,
-        ))
+    browser = Browser(config=BrowserConfig(cdp_url=cdp_url))
     full_task = f"Start at {url}. {task}"
     agent = Agent(task=full_task, llm=llm, browser=browser)
     history = await agent.run()
     try:
-        if cdp_url:
-            # Don't quit the owner's Chrome; only drop the Playwright connection.
-            disconnect = getattr(browser, "disconnect", None)
-            if callable(disconnect):
-                maybe = disconnect()
-                if asyncio.iscoroutine(maybe):
-                    await maybe
-            else:
-                await browser.close()
+        disconnect = getattr(browser, "disconnect", None)
+        if callable(disconnect):
+            maybe = disconnect()
+            if asyncio.iscoroutine(maybe):
+                await maybe
         else:
             await browser.close()
     except Exception:
@@ -250,25 +188,6 @@ def _summarize(history) -> str:
     return "\n\n".join(parts)
 
 
-def _truthy(s: str) -> bool:
-    return s.strip().lower() in ("1", "true", "yes", "y", "on")
-
-
-def _registrable(host: str) -> str:
-    h = (host or "").lower().strip()
-    if h.startswith("www."):
-        h = h[4:]
-    return h
-
-
-def _waf_match(host: str) -> bool:
-    h = (host or "").lower()
-    if h in WAF_HOSTS:
-        return True
-    parent = _registrable(h)
-    return parent in WAF_HOSTS
-
-
 WAF_MARKERS = (
     "access denied",
     "pardon our interruption",
@@ -278,7 +197,6 @@ WAF_MARKERS = (
 
 
 def _detect_waf_block(history) -> bool:
-    """Heuristic: did the run hit a WAF wall? Best-effort, never raises."""
     try:
         text_blob = ""
         for attr in ("extracted_content", "model_outputs", "errors"):
@@ -307,13 +225,11 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--task", required=True)
     ap.add_argument("--url", required=True)
-    ap.add_argument("--headless", default="true")
-    ap.add_argument("--profile", default="")
-    ap.add_argument("--cdp", default="", help="Attach to running Chrome at this CDP URL")
     ap.add_argument(
-        "--cdp-auto",
-        default="false",
-        help="Auto-launch the owner's Chrome via chrome-cdp and attach over CDP",
+        "--cdp",
+        default="",
+        help="Override CDP endpoint (e.g. http://127.0.0.1:9223). "
+        "Default: take over the owner's Chrome on port 9222.",
     )
     args = ap.parse_args()
 
@@ -322,21 +238,6 @@ def main() -> int:
     ws.mkdir(parents=True, exist_ok=True)
     result_path = ws / "result.md"
 
-    cdp_url = args.cdp.strip() or None
-    cdp_auto = _truthy(args.cdp_auto)
-    auto_routed = False
-
-    # Auto-route WAF-protected hosts to CDP attach when the caller didn't
-    # already request CDP.
-    if not cdp_url and not cdp_auto:
-        try:
-            host = (urlparse(args.url).hostname or "").lower()
-        except Exception:
-            host = ""
-        if host and _waf_match(host):
-            cdp_auto = True
-            auto_routed = host
-
     try:
         spec = _spec(slug)
         provider = spec.get("provider")
@@ -344,43 +245,24 @@ def main() -> int:
         if not provider or not model:
             sys.exit("entry.py: spec.yaml missing provider/model")
 
-        if cdp_auto and not cdp_url:
-            cdp_url = _ensure_chrome_cdp()
-
-        cookies_file = None if cdp_url else _ensure_cookies(args.profile.strip())
+        cdp_url = args.cdp.strip() or _ensure_chrome_cdp()
         llm = _build_llm(provider, model)
-        history = asyncio.run(
-            _run(args.task, args.url, _truthy(args.headless), cookies_file, llm, cdp_url)
-        )
+        history = asyncio.run(_run(args.task, args.url, llm, cdp_url))
         body = _summarize(history)
 
-        mode_line = (
-            f"- mode: cdp-attach (endpoint={cdp_url})\n"
-            if cdp_url
-            else f"- mode: bundled-chromium (headless={args.headless})\n"
-        )
-        auto_line = (
-            f"- auto-routed to CDP mode (host {auto_routed} matched WAF allowlist)\n"
-            if auto_routed
-            else ""
-        )
+        mode_line = f"- mode: cdp-attach (endpoint={cdp_url})\n"
 
-        # WAF detection. If we got blocked even in CDP mode, escalate distinctly
-        # so the parent doesn't loop trying the same fix.
-        blocked = _detect_waf_block(history)
-        if blocked:
+        if _detect_waf_block(history):
             try:
                 host = (urlparse(args.url).hostname or "").lower()
             except Exception:
                 host = ""
-            marker = "WAF_BLOCKED_CDP" if cdp_url else "WAF_BLOCKED"
             result_path.write_text(
                 f"# browse result\n\n"
-                f"{marker}: {host}\n\n"
+                f"WAF_BLOCKED: {host}\n\n"
                 f"- task: {args.task}\n"
                 f"- start url: {args.url}\n"
-                f"{mode_line}{auto_line}"
-                f"- profile: {args.profile or '(none)'}\n\n"
+                f"{mode_line}\n"
                 f"## outcome\n\n{body}\n"
             )
             return 2
@@ -389,8 +271,7 @@ def main() -> int:
             f"# browse result\n\n"
             f"- task: {args.task}\n"
             f"- start url: {args.url}\n"
-            f"{mode_line}{auto_line}"
-            f"- profile: {args.profile or '(none)'}\n\n"
+            f"{mode_line}\n"
             f"## outcome\n\n{body}\n"
         )
         return 0
