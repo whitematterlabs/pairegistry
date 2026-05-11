@@ -1,117 +1,105 @@
 ---
 name: author-plan
-description: How to draft a written plan to disk before executing multi-step work — goal, steps with verification, success criteria, and an explicit approval gate via status.md.
+description: Draft a checkpointed multi-step plan at ~/workspace/plans/<slug>/ that sibling skill execute-plan will consume. Four required sections, per-step verify lines, explicit approval gate via status.md.
 ---
 
 # Author a plan
 
-## When this applies
+Sibling `execute-plan` runs what this skill produces. The file shape below is exactly what it expects — drift and it refuses.
 
-You're about to do work that is:
+## When to author one
 
-- Multi-step (3+ shell actions, file edits, or tool spawns).
-- Reversible-but-annoying-to-undo (touches config, fleet state, owner data).
-- Worth a human glance before you start.
+- 3+ shell actions, edits, or subagent spawns.
+- Touches config, fleet state, or owner data — annoying to undo.
+- Long enough that a nudge or kernel restart could hit mid-flight (plans survive both; status.md is the checkpoint).
 
-For one-shot commands (`ls`, `cat`, a single edit), skip this. Plans are
-for work where "stop and read first" beats "run and hope."
+Skip for one-shot commands, pure reading, or work a dedicated skill already prescribes (`grow-capability`, etc.).
 
-## Where it lives
+## Layout
 
-Per-PAI. Your own workspace, never another PAI's:
+Per-PAI, in your own workspace:
 
 ```
 ~/workspace/plans/<slug>/
-    PLAN.md       # the plan
+    PLAN.md       # the plan (shape below)
     status.md     # one word: draft | approved | executing | done | failed
-    log.md        # append-only execution trace (skill execute-plan writes this)
-    artifacts/    # anything the plan produces (optional)
+    log.md        # execute-plan appends here; you create empty
+    artifacts/    # optional outputs
 ```
 
-`~/workspace/` resolves to `/var/lib/instances/<you>/workspace/`. Pick a
-slug like `migrate-email-driver` or `add-calendar-pai` — short, kebab.
+`~/workspace/` resolves to `/var/lib/instances/<you>/workspace/`. Slug is short kebab — `migrate-email-driver`, `add-calendar-pai`.
 
-## The four required sections in PLAN.md
+## PLAN.md shape — exactly four sections
 
-Terse beats prose. Each step must be a thing you can *check*, not a
-vibe.
+execute-plan parses for these headers. Rename them and it halts.
 
 ```markdown
 # <one-line title>
 
 ## Goal
-<2-3 sentences: what changes about the world when this is done>
-
-## Constraints
-- <thing you must not break>
-- <invariant the operator cares about>
+<2-3 sentences: what about the world is different when this finishes>
 
 ## Steps
 1. <action>
-   - verify: <command or file check that confirms success>
+   - verify: <shell check or file test that returns success>
 2. <action>
    - verify: <...>
 3. ...
 
 ## Success criteria
-- <observable end state, e.g. "paictl ls shows email-pai active">
+- <end-state check, beyond per-step verifies>
 - <...>
 
 ## Rollback
-<one paragraph: if step N fails, how to get back to the start state>
+<one paragraph: if a step fails mid-flight, how to return to the start state>
 ```
 
-Steps without `verify:` are not steps — they're wishes. Write the check
-even if it's just `test -f /etc/config.yaml`.
+Rules:
 
-## The drafting flow
+- **Every step needs a `verify:` line.** A step without a check isn't a step, it's a wish. `test -f /etc/config.yaml`, `paictl ls | grep -q email-pai`, `[ "$(cat status.md)" = approved ]` — anything that exits non-zero on failure.
+- **Steps are sequential by default.** execute-plan walks them one at a time. If a step legitimately parallelizes, say so in the action line.
+- **"Spawn coder for X" is a valid step.** execute-plan routes it through `grow-capability` → `execute-claudecode` and waits for `--done`. Write the verify against the artifact the coder produces, not the spawn itself.
+- **Success criteria ≠ per-step verifies.** Per-step is "did this step do its thing." Success criteria is "is the goal actually achieved" — checked after all steps complete.
+- **Rollback is mandatory, even if it's "nothing to undo, re-run from step 1."** execute-plan reads this section on failure.
+
+## Drafting flow
 
 ```sh
 SLUG=migrate-email-driver
 mkdir -p ~/workspace/plans/$SLUG/artifacts
-$EDITOR ~/workspace/plans/$SLUG/PLAN.md     # write the four sections
+$EDITOR ~/workspace/plans/$SLUG/PLAN.md
 echo draft > ~/workspace/plans/$SLUG/status.md
 : > ~/workspace/plans/$SLUG/log.md
 ```
 
-Then surface a one-liner to the operator pointing at the path:
+Surface for approval:
 
 ```sh
-DAY=$(date +%F)
-cat >> /var/spool/communication/messages/me/1/$DAY.md <<EOF
-
-plan ready for approval: ~/workspace/plans/$SLUG/PLAN.md
-edit status.md to "approved" to run, or reply with changes.
-EOF
+send-message --to 1 --content "plan ready: ~/workspace/plans/$SLUG/PLAN.md — edit status.md to 'approved' to run, or reply with changes"
 ```
 
-## The approval gate
+## Approval gate
 
-You do not execute a plan you wrote without approval. Approval is a
-file edit by the operator (or, in narrow autonomous cases you've been
-told to handle, by you with a logged justification):
+Never execute a plan you authored without approval. Approval is a file edit by the owner:
 
 ```sh
 echo approved > ~/workspace/plans/$SLUG/status.md
 ```
 
-Skill `execute-plan` refuses to run anything whose `status.md` is not
-exactly `approved`. That refusal is the safety; don't route around it.
+execute-plan refuses anything whose `status.md` is not exactly `approved` (not `Approved`, not `approved\n# notes`). That refusal is the safety — don't route around it. In narrow autonomous cases where you've been told to self-approve, log the justification in `log.md` before flipping status.
 
-## Iterating on a draft
+## Iterating
 
-Plans are markdown. Edit `PLAN.md` freely while `status.md` is `draft`.
-Once it's `approved`, treat it as frozen — if the operator wants
-changes mid-flight, flip status back to `draft`, edit, re-approve.
+While `status.md` is `draft`, edit freely. Once `approved`, treat as frozen — if changes are needed mid-flight, flip back to `draft`, edit, re-approve.
 
-## When NOT to author a plan
+## When NOT to author
 
-- The work is one shell command. Just run it.
-- The work is exploration / reading. Plans are for *changes*.
-- A skill already prescribes the procedure (e.g. `kernel-restart`,
-  `grow-capability`) — follow the skill, don't shadow it with a plan.
+- Work is one shell command.
+- Work is exploration or reading (no state changes).
+- A skill already prescribes the procedure — follow it, don't shadow it.
+- Long-running service work — that's a driver (`author-driver`), not a plan.
 
 ## See also
 
-- `execute-plan` — runs an approved plan and writes log.md.
-- `/var/spool/communication/` — how the approval ping reaches the operator.
+- `execute-plan` — consumes the file shape above.
+- `grow-capability` — step needs a tool that doesn't exist → coder spawn inside the plan, not a plan failure.

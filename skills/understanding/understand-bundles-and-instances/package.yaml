@@ -1,5 +1,0 @@
-name: understand-bundles-and-instances
-kind: skill
-topic: understanding
-version: 0.1.0
-description: "The bundle / instance / process trinity — what each means, where each lives, what survives uninstall. Read before reasoning about PAI identity."

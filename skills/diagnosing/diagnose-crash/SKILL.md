@@ -1,34 +1,30 @@
 ---
 name: diagnose-crash
-description: Use when a `proc failed` event lands or `/proc/<slug>/status` is `failed`, to classify cause as transient vs structural before deciding to restart or surface.
+description: Use when a `proc_resolved` event arrives with status=failed (or `/proc/<slug>/status` reads `failed`) to classify the cause and decide restart vs surface.
 ---
 
 # Diagnose a crashed proc
 
-Goal: classify in under a minute. Output is a one-line cause + a
-decision (`restart` | `surface`).
+Output: one line, `<slug> failed: <innermost-exception> — <restart|surface|coder>`.
 
 ## Procedure
 
-1. `tail -n 80 /proc/<slug>/log.md` — find the last traceback.
-2. Identify the **innermost exception** type and message.
+1. `tail -n 80 /proc/<slug>/log.md` — locate the last traceback. Note the innermost exception type + message.
+2. `cat /proc/<slug>/spec.yaml` — confirm `kind` and which driver/PAI owns it.
 3. Classify:
 
-   | Signal | Class | Decision |
-   |---|---|---|
-   | `sqlite3.OperationalError: database is locked` | transient | restart |
-   | `BlockingIOError`, `FileLockError` | transient | restart |
-   | `requests.ConnectionError` / DNS fail | transient | restart |
-   | `ImportError`, `ModuleNotFoundError` | structural | surface |
-   | `AttributeError` / `KeyError` on payload field | structural | surface |
-   | `PermissionError` on a path you can't fix | structural | surface |
-   | Same exception 3+ times after restart | looping | surface |
+   | Signal | Decision |
+   |---|---|
+   | `sqlite3.OperationalError: database is locked` | restart |
+   | `BlockingIOError`, `FileLockError`, transient `OSError` on a socket | restart |
+   | `requests.ConnectionError`, DNS failure, 5xx from upstream | restart |
+   | `ImportError`, `ModuleNotFoundError` | surface |
+   | `AttributeError` / `KeyError` on an event payload field | surface |
+   | `PermissionError` on a path root can't grant | surface |
+   | Same innermost exception 3+ times in the last hour | coder |
+   | Corrupt cursor under `/sys/drivers/<slug>/` (JSON decode error, schema mismatch) | surface — propose deleting the cursor |
 
-4. Cross-check `/sys/drivers/<slug>/` if relevant — a corrupt cursor
-   file can present as a structural error but be fixed by deleting
-   the cursor (operator decision; surface unless obvious).
-
-5. Log to `/proc/root/log.md`:
+4. Append to `/proc/root/log.md`:
    ```
    [HH:MM] <slug> failed: <innermost-exception> — <decision>
    ```
@@ -36,11 +32,10 @@ decision (`restart` | `surface`).
 ## Hand-off
 
 - `restart` → invoke skill `restart-driver`.
-- `surface` → append one line to
-  `/var/spool/communication/messages/me/1/<today>.md` naming the
-  exception and the file path of the relevant log.
+- `surface` → one line to the owner's inbox (`/var/spool/communication/messages/me/1/<today>.md`) naming the exception and `/proc/<slug>/log.md`. Never paste the traceback.
+- `coder` → spawn a subagent with the failing file path + last traceback; goal: root cause + patch.
 
-## Anti-pattern
+## Notes
 
-Do not paste full tracebacks into the operator's inbox. One line.
-The traceback is in `/proc/<slug>/log.md` if they need it.
+- Event shape, status values, and `/proc/<slug>/` layout: `memory/doc/KERNEL_EVENTS.md`, `memory/doc/FILESYSTEM_v3.md`.
+- Loop-detection and restart budgets: `memory/doc/SELF_HEALING.md`.

@@ -1,288 +1,99 @@
 ---
 name: grow-capability
 visible_to: [root]
-description: Handle a `request-capability:` send_message from a child PAI by scoping the need, choosing the right build path (bin tool / driver / PAI bundle), executing it, and messaging the requester back. The "growth" half of the capability-gap escalation ceremony.
+description: Classify a build request (own initiative or a child PAI's `request-capability:` send_message), pick the right bundle kind, hand off to claudecode, and notify the requester. Single source of truth for the bin / driver / skill / subagent / pai-bundle / prompt taxonomy.
 ---
 
-# Growing a capability for a requester
+# Growing a capability
 
-A child PAI just messaged you with `request-capability: ...` because
-its owner asked for something it has no tool for. Your job: scope the
-need, build the right thing, then notify the requester. You do **not**
-run the new capability yourself, and you do **not** message the owner —
-the requester owns the user-facing follow-through.
+Two entry points:
 
-## Inputs
+1. **A child PAI messaged you `request-capability: <need>` / `why: <ask>`.** Save the sender pid; you `send-message` them back at the end. Don't message the owner; don't invoke the new capability yourself. If the request is unintelligible, `send-message` the requester for refinement — never the owner.
+2. **You decided to build something.** Skip the notify step at the bottom.
 
-The send_message envelope gives you:
-- `from: pai:<requester pid>` — the PAI that asked. Save this; you
-  send_message them back at the end.
-- `content:` — two lines:
-  - `request-capability: <need>`
-  - `why: <owner's ask>`
+This skill is **Step 2** of root's build flow. Root's prompt already specifies the claudecode handoff, the ≤80-word brief, and the post-build help page — don't re-derive any of that here. Use it verbatim.
 
-The requester does **not** classify scope, shape, or surface — that is
-your job here. You infer the build path from `why:` plus a sanity
-check against what's already installed.
-
-If a field is missing or unintelligible, send_message the requester back asking
-them to refine the request. Don't guess at intent.
-
-## Step 1 — sanity check
-
-Before building anything, look for an existing answer:
+## Step 1 — does it already exist?
 
 ```sh
-ls bin/                          # is there already a tool that does this?
-ls memory/skills/                # is there a skill that covers it?
-ls /usr/lib/skills/              # ditto for system skills
-ls /usr/lib/drivers/             # is there a driver that already surfaces this data?
+ls bin/                          # owner-callable tools
+ls memory/skills/                # this PAI's skills
+ls /usr/lib/skills/              # all installed skills
+ls /usr/lib/drivers/             # primitive surfaces
+paiman search <keyword>          # available to install but not yet
 ```
 
-If yes, just send_message the requester pointing at the existing tool/skill:
+Hit → `send-message --to <requester pid> --content 'capability-exists: <name> — usage: <how to call>'` and stop.
+
+## Step 2 — scope triage (single source of truth)
+
+Installable bundle kinds (from `paiman.py`): **bin, sbin, driver, skill, prompt, lib, subagent, pai**.
+
+**Default to `bin` when unsure.** Bins are cheap: one file, one CLI contract, no lifecycle. Drivers are expensive: FHS layout under `/usr/lib/drivers/<name>/`, `events.yaml` vocabulary, supervisor lifecycle, on-disk spool in sync with an external world. Don't pay that cost unless the surface earns it.
+
+### Collapsibility test
+
+> Can the request be served by an existing primitive under `/usr/lib/drivers/` plus a `bin` (or a `skill`), without losing native event hooks or piling per-call ceremony at the frequency this surface will actually be hit?
+> Yes → **bin** (or skill). Always.
+
+### Pick a kind
+
+| Kind | When |
+|---|---|
+| `bin` | "Run X / fetch Y / book Z / format / post / drive a checkout / call an API." Returns a value via stdout + exit code. May be long-running, use credentials, drive a headless browser owned by an existing driver. **The default.** |
+| `skill` | Procedural knowledge a PAI loads into its turn — a checklist, a triage flow, an authoring guide. No CLI. Read by `cat memory/skills/<name>/SKILL.md`. |
+| `prompt` | A new role/system prompt — only when adding or replacing a PAI's identity. |
+| `lib` | Importable Python shared by ≥2 bins/drivers. Don't reach for this until the duplication actually exists. |
+| `driver` | A new **primitive surface**: app ABI (Mail, Messages), system framework (AddressBook), I/O channel (audio), or a shared long-lived session (headless browser). Two conditions, **both** required: (a) genuinely primitive, not a task; (b) collapsing into an existing driver would lose native event hooks or cost too much ceremony. See `memory/doc/KERNEL.md` for the driver contract. |
+| `subagent` | A reusable research/specialist role spawned ephemerally by other PAIs via `bin/subagent spawn --package <name>` (e.g. `scout`). See `memory/doc/SUBAGENT_BUNDLES.md`. Rare — usually only when a new specialist persona is needed. Note: coding handoffs go through skill `execute-claudecode`, not a subagent bundle. |
+| `pai` | A dedicated fleet member with its own identity, prompt, and event subscriptions. Pair with a driver when long-horizon turn-taking on that surface is wanted ("a calendar PAI", "an autonomous scheduler"). |
+| `sbin` | Owner/root-only fleet-mutation tool. Almost never the answer to a capability request. |
+
+### Two failure modes
+
+- **Splitter** — promoting a *task* ("reservations driver", "ordering driver") into a driver when it collapses to an existing primitive + a bin. Almost always wrong.
+- **Lumper** — collapsing a high-frequency reactive surface (mail, messages) into a generic bin when doing so loses native event hooks. Wrong when both frequency and reactivity are high.
+
+If the brief reads "book / send / post / buy / search / run / fetch" — that's a **bin**. Stop.
+
+## Step 3 — fire claudecode
+
+Use skill `execute-claudecode` to fire the brief. The brief shape (≤80 words, type/name/need/why/shape) is specified in root's prompt and in `execute-claudecode`; don't re-derive. Two kind-specific notes that don't belong in the prompt:
+
+- **driver**: before firing, settle five questions and put them in the brief: top-level dir, partition key, one entity-file shape, event kinds (`<surface>:new|changed|removed`), external source (sqlite path / API / AX). After claudecode lands it, `paiman install` → `paictl start <name>-in` → `reboot`. Background: `memory/doc/KERNEL.md`.
+- **pai bundle**: do the driver first if one is missing. Bundle brief must name `wake_on:` globs and a one-sentence role. After it lands, `paiadd <bundle>`.
+
+For `bin` / `skill` / `prompt` / `lib` / `subagent`: just the standard brief. No pre-design.
+
+## The shape contract
+
+`shape:` in the brief is *what proves it works*, not *how it's built*.
+
+- bin: one CLI invocation line that, when run, demonstrates the tool. `cal --today` not "uses EventKit".
+- skill: one-line acceptance criterion ("a PAI reading this can author a driver end-to-end").
+- driver: the event-kind line the coder must emit on the first real change.
+
+If the line names a library, a path under `/usr/lib/`, async vs sync, or an error-handling rule — delete it. That's HOW.
+
+## Step 4 — verify, then notify
+
+Spot-check the artifact yourself (run the `shape:` line, `ls` the new files) before sending the reply. Claudecode's own verify isn't enough — re-run it.
 
 ```sh
-bin/send-message --to <requester pid> --content 'capability-exists: <name> — usage: <how to call>'
-```
-
-Done. Log a one-liner to `/proc/root/log.md` and return.
-
-## Step 2 — scope triage
-
-**Drivers are primitives, not tasks.** Look at what's already
-installed under `/usr/lib/drivers/`: every driver is a *surface* —
-an app ABI (Mail.app, Messages), a system framework (AddressBook),
-an I/O channel (audio), or a long-lived session primitive. None of
-them are jobs-to-be-done like "scheduling", "ordering", or
-"reservations". Drivers exist because a primitive surface earns
-filesystem mediation; tasks ride on top of primitives as bins.
-
-Apply the **collapsibility test** before considering any new driver:
-
-> Can the request be served by an existing primitive driver
-> (`ls /usr/lib/drivers/`) plus a bin or skill, without losing
-> native event-watching or imposing per-call ceremony at the
-> frequency this surface will actually be hit?
-> If yes → Scope A. Always.
-
-Two failure modes:
-- **Splitter** — promoting a task ("reservations driver", "ordering
-  driver", "X-app driver" for a one-off) into a new driver when it
-  collapses cleanly into an existing primitive + a bin. Almost
-  always wrong.
-- **Lumper** — collapsing a high-frequency reactive surface
-  (mail, messages) into a generic primitive when doing so would
-  lose native event hooks or pile ceremony on every read/write.
-  Wrong when both frequency and reactivity are high.
-
-If you catch yourself building a driver for "book a reservation",
-"send a message via app X", "post a status", "buy this thing", "run
-a search" — **stop**. Those are bins on top of an existing primitive
-(usually browser, sometimes osascript or an app ABI driver that
-already exists). A new driver only happens when you've identified a
-*primitive surface* the fleet doesn't yet have.
-
-### Scope A — bin tool
-
-A CLI invocation that returns a value. The PAI-facing contract is
-`bin/foo --args` → stdout/exit code. No spool, no fleet-wide on-disk
-shape, no follow-up events.
-
-Signals:
-- "book a reservation", "post a tweet", "fetch a URL", "format a
-  date", "play a tone", "drive a checkout flow", "run an osascript"
-- May be long-running, may use credentials, may drive a headless
-  browser session owned by an existing primitive driver, may spend
-  money. Still a bin.
-
-→ Go to **Step 3A**.
-
-### Scope B — driver
-
-A new *primitive surface*. The PAI-facing contract is *files on
-disk* in a spool the driver owns; the driver keeps those files in
-sync with the external world (both directions where applicable) and
-emits `kind:` events on lifecycle changes.
-
-Earns its own driver only when **both** are true:
-- It is a real primitive (app ABI, system framework, I/O channel,
-  shared long-lived session like a headless browser).
-- Collapsing it into an existing primitive driver would cost native
-  event hooks or impose unacceptable ceremony at its real-world
-  frequency.
-
-Examples that earned drivers: Mail.app (drafts/sent/INBOX symmetry,
-high frequency, reactive), Messages (SQLite + native hooks), a
-shared headless browser session.
-
-Examples that do **not** earn drivers: reservations, ordering,
-weather, search, "X-app integration" for a one-off task — those are
-bins on top of an existing primitive.
-
-→ Go to **Step 3B**.
-
-### Scope C — driver + PAI bundle
-
-Scope B *and* the request warrants a dedicated fleet member with its
-own identity, prompt, and long-horizon turn-taking on those events.
-
-Signals:
-- "I need a calendar PAI", "add an autonomous scheduler", "something
-  that manages X on its own"
-
-→ Go to **Step 3C** (driver first, then PAI bundle).
-
----
-
-## Step 3A — build a bin tool
-
-Load the `execute-claudecode` skill and invoke `claude -p` directly
-with a bin brief:
-
-```
-type: bin
-name: <name>
-need: <verbatim from request>
-why: <verbatim why>
-shape: <exact CLI invocation the requester will use>
-```
-
-Then go to **Step 4**.
-
----
-
-## Step 3B — build a driver
-
-Pull the authoring skill first:
-
-```sh
-cat memory/skills/author-driver/SKILL.md
-```
-
-**Before designing anything**, research how to reach the external surface:
-
-- Web search `<surface> macOS API python` — look for prior art.
-- If no data API exists, check the Accessibility API (`AXUIElement`),
-  `ScriptingBridge`, `NSDistributedNotificationCenter`, or the app's
-  own XPC/socket IPC. See the `author-driver` skill for a full list.
-- If still uncertain, run a quick spike (10-line script) to confirm
-  the approach works before writing the full driver.
-
-Then design the filesystem layout before writing any code (see
-`pai-dogma` §"Canonical filesystem layout"). Answer these before
-building:
-
-1. What is the top-level directory? (e.g. `/calendar/`, `/contacts/`)
-2. What is the partition key? (date, entity slug, etc.)
-3. What does one entity file look like? (flat YAML fields)
-4. What events does the driver emit? (`<surface>:new`, `<surface>:changed`, `<surface>:removed`)
-5. Is there an existing external DB/API to read? (e.g. SQLite at `~/Library/Calendars/`)
-
-Load the `execute-claudecode` skill and invoke `claude -p` with a
-**driver brief**:
-
-```
-type: driver
-name: <name>
-need: <what the driver must do>
-why: <owner's ask>
-filesystem_layout: |
-  <surface>/
-    <partition>/
-      <entity>.yaml
-external_source: <path or API, e.g. ~/Library/Calendars/*.sqlitedb>
-events:
-  - kind: <surface>:new
-  - kind: <surface>:changed
-  - kind: <surface>:removed
-no_polling: true  # use FSEvents / SQLite WAL hooks, not sleep loops
-```
-
-After the driver is built, install and activate it:
-
-```sh
-sbin/paiman install /usr/lib/drivers/<name>/
-bin/paictl start <name>-in
-bin/paictl restart
-```
-
-Then go to **Step 4**.
-
----
-
-## Step 3C — build a driver + PAI bundle
-
-Do **Step 3B** first (driver). Then pull the bundle authoring skill:
-
-```sh
-cat memory/skills/author-pai-bundle/SKILL.md
-```
-
-Design the bundle:
-1. What events does this PAI wake on? (the new driver's `kind:` globs)
-2. What is its role in one sentence? (this becomes the bundle's prompt)
-3. Does it need any `bin/` tools beyond what exists?
-
-Invoke `claude -p` (via the `execute-claudecode` skill) with a
-bundle brief:
-
-```
-type: pai-bundle
-name: <name>-pai
-need: A PAI that handles <surface> operations for the owner.
-wake_on:
-  - <surface>:*
-prompt_summary: <one sentence role description>
-required_drivers:
-  - <driver-name>
-```
-
-After it finishes, instantiate the new PAI:
-
-```sh
-sbin/paiadd <bundle-name>
-```
-
-Then go to **Step 4**.
-
----
-
-## Step 4 — verify and notify the requester
-
-Confirm the artifact exists and works (you ran the verification step
-in your `claude -p` brief, but spot-check the on-disk result and
-re-run the test invocation yourself before notifying).
-
-On success:
-
-```sh
-bin/send-message --to <requester pid> --content 'capability-ready: <name> — usage: <cli or description>'
-```
-
-On failure:
-
-```sh
+bin/send-message --to <requester pid> --content 'capability-ready: <name> — usage: <cli or one-line>'
+# or
 bin/send-message --to <requester pid> --content 'capability-failed: <name> — reason: <one line>'
 ```
 
-The requester's next turn will see any new `bin/` tools automatically
-(the kernel re-lists `bin/` every turn). New drivers and PAIs appear
-in `/proc/` after `kernel:reload_config`.
+New `bin/` tools appear in the requester's next turn automatically. New drivers and PAIs appear in `/proc/` after `kernel:reload_config` (handled by `reboot`).
 
 ## Boundaries
 
-- Build and notify. Do **not** invoke the new capability yourself.
-- Do **not** message the owner. The requester does that.
-- Do **not** ask the owner for clarification — work from the
-  requester's `need:` and `why:`. If those are too thin, send_message
-  the requester (not the owner) for a refined request.
-- Don't over-engineer. Keep the FHS contract: **data is a file**
-  (flat YAML under `/calendar/`, `/contacts/`, etc.), **tools are
-  binaries** (one-shot CLIs under `/bin/`), and **long-horizon work
-  is a new PAI instance** (scope C, not a polling loop in a bin tool).
-  No polling, filesystem-first, simplest thing that works.
+- Build and notify. Don't invoke the new capability yourself.
+- Don't message the owner. The requester handles user-facing follow-through.
+- For refinement, ask the **requester**, never the owner.
+- Data is a file, tools are binaries, long-horizon work is a new PAI. No polling loops in bins.
 
 ## Logging
 
-One line to `/proc/root/log.md` per phase: request received, scope
-decided, build spawned, capability delivered (or failed).
+One line to `/proc/root/log.md` per phase: received, scoped (kind chosen), spawned, delivered (or failed).

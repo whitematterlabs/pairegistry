@@ -1,81 +1,81 @@
 ---
 name: manage-subagent-bundles
-description: Use when authoring, listing, or inspecting reusable persub specialist templates at /usr/lib/subagents/. Read before scaffolding a new specialist (memory, computer-use, etc.) or when an operator asks "what specialists are installed?". For wiring a bundle into a parent's config, use manage-dependencies instead.
+description: Use when authoring or curating reusable `kind: subagent` bundles at /usr/lib/subagents/ (e.g. `scout`, `browse`). Read before scaffolding a new specialist role. For wiring an existing bundle into a parent, use manage-dependencies. For coding work, do NOT author a bundle — use the `execute-claudecode` skill.
 ---
 
 # Manage subagent bundles
 
-A **subagent bundle** is a reusable persub template — role prompt + provider/model defaults — that any parent PAI can pull in via `dependencies: [{name: ..., package: <bundle>}]`. Bundles live at `/usr/lib/subagents/<name>/`. They are scaffolded, listed, and inspected with `paiman`.
+A **subagent bundle** is a reusable role template — role prompt + optional provider/model defaults — at `/usr/lib/subagents/<name>/`, installed from `~/Projects/pairegistry/subagents/<name>/`. Any parent PAI can pull one in via `dependencies: [{name: ..., package: <bundle>}]`, or spawn ad-hoc with `bin/subagent spawn --package <bundle> --slug ... --prompt "..."`.
 
-If you only need to **wire an existing bundle** into a parent, that's `manage-dependencies`, not this. This skill covers **authoring and curating** the bundles themselves.
+Authority: `memory/doc/SUBAGENT_BUNDLES.md` (layout, resolution chain, lifecycle). This skill is just the authoring workflow — don't reread the doc back in here.
 
-## Inspect what's installed
+## Not the right tool
+
+- **Coding tasks.** Do not author a `coder` bundle. The coder bundle is deprecated; coding work goes through the `execute-claudecode` skill, which shells out to `claude -p` directly. No subagent involved.
+- **One-shot lookups under a single parent.** Skip the bundle, just `bin/subagent spawn --slug X --prompt "..."` (ephemeral) or inline `dependencies:` (no `package:`).
+- **You haven't picked provider/model.** Either commit to both or omit both — see resolution chain in `SUBAGENT_BUNDLES.md`. Don't ship a half-bundle.
+
+Author a bundle when the role is reusable across parents AND the prompt is non-trivial — `scout` (read-only investigation) and `browse` (browser-use driver) are the live examples.
+
+## Bundle shape
+
+Look at the real ones first:
 
 ```
-paiman list                       # all bundles, grouped by type
-paiman show <name>                # print resolved package.yaml
-ls /usr/lib/subagents/            # raw view
+~/Projects/pairegistry/subagents/scout/
+├── package.yaml      # name, kind: subagent, description, prompt, provider
+└── prompt.md
+
+~/Projects/pairegistry/subagents/browse/
+├── package.yaml      # provider/model omitted → cascade to parent
+├── prompt.md
+├── entry.py          # optional: custom spawn entrypoint
+└── libexec/          # optional: install.sh etc.
 ```
 
-`paiman list` groups output by `pais:` and `subagents:`. Each line shows `<name>  [provider/model]  <description>`.
+Minimum `package.yaml`:
 
-## Author a new bundle
+```yaml
+name: <name>
+kind: subagent
+version: 0.1.0
+description: <one-line catalog blurb; shows in `paiman list`>
+prompt: usr/lib/subagents/<name>/prompt.md
+# provider: anthropic         # optional — set both or neither
+# model: claude-sonnet-4-5
+# libexec:                    # optional — install hook etc.
+#   install: ["bash", "install.sh"]
+```
 
-1. Pick a name. Rules: no `/`, `.`, or leading `-`. Singular and role-shaped (`memory`, `computer-use`, `triage`).
-2. Scaffold:
+`prompt.md` is the role prompt prepended to the persistent-subagent system block on every turn. Keep it about who-the-role-is and operating principles. Do not put owner-specific names in it ("the owner", never a first name).
+
+## Authoring workflow
+
+1. Edit in pairegistry, not in the installed tree:
    ```
-   paiman init <name> --type subagent
+   cd ~/Projects/pairegistry/subagents/
+   cp -r scout <name>/        # crib from the closest existing bundle
    ```
-   This creates `/usr/lib/subagents/<name>/{package.yaml,prompt.md}` with `kind: subagent`.
-3. Edit `package.yaml`:
-   - Set `description:` to a one-line catalog blurb (this is what shows up in `paiman list`, **not** the role prompt).
-   - Set `provider:` and `model:` together. Either both, or neither — mixing parent fallback for one and bundle for the other gives weird pairings.
-4. Edit `prompt.md` — the actual role prompt. The persub will receive this on every turn, prepended to the persistent-subagent system block. Operating principles, what to remember vs ignore, when to stay quiet.
-5. Verify:
+   Or `paiman init <name> --type subagent` if you want the scaffolder to write the stub.
+2. Fill in `package.yaml` and `prompt.md`. Rules: name has no `/`, `.`, or leading `-`; singular and role-shaped.
+3. Install / refresh:
    ```
-   paiman show <name>
+   paiman install <name>
+   paiman show <name>         # verify resolved package.yaml
    ```
-   Should print your `package.yaml`.
+4. Smoke-test from a parent turn:
+   ```
+   bin/subagent spawn --package <name> --slug <name>-test --prompt "..."
+   ```
 
-## Use a bundle
+## Iterating on a live bundle
 
-Two ways, depending on lifetime:
+Persub specs are captured at spawn time — editing `package.yaml` / `prompt.md` does not retroactively patch running persubs. To pick up changes, restart the parent (reconcile respawns from the new bundle). For details, see `memory/doc/PERSUBS.md`.
 
-- **Durable** (survives reboot): edit `/etc/config.yaml`, add a dep with `package: <name>`. See the `manage-dependencies` skill.
-- **Ad-hoc** (this parent's lifetime only): from a parent's turn,
-  ```
-  bin/subagent spawn --persistent --slug <name> --package <name>
-  ```
-  `--model provider/tag` overrides the bundle's model.
+## Inspect
 
-## When NOT to author a bundle
-
-- The specialist is one-shot. Use ephemeral `bin/subagent spawn --slug X --prompt "..."` (no `--persistent`).
-- The specialist will only ever live under one parent and the prompt is short. Inline `dependencies:` is simpler.
-- You haven't decided provider/model. Don't ship a half-bundle — surface the choice to the operator.
-
-## Editing a live bundle
-
-A persub's spec is captured **at spawn time**. Editing `package.yaml` or `prompt.md` does not retroactively update running persubs.
-
-To pick up bundle changes:
-1. Stop the parent (it takes its persubs with it).
-2. Restart — reconcile re-spawns from the new bundle.
-
-For surgical updates without taking the parent down: edit the persub's `/proc/<parent>.<name>/spec.yaml` directly, then nudge it. (Out of band — prefer the restart path unless you know what you're doing.)
-
-## Removing a bundle
-
-There is no `paiman uninstall` yet. To remove:
-
-1. Confirm no `/etc/config.yaml` `dependencies:` entry references it (`grep "package: <name>" /etc/config.yaml`). Remove any that do.
-2. `rm -rf /usr/lib/subagents/<name>/`.
-
-Existing running persubs that came from the bundle keep running with their captured spec — the bundle is only re-read on spawn.
-
-## Authority
-
-- `paiman` source: `/usr/src/bin/paiman.py` — `BUNDLE_TYPES`, `cmd_init`, `cmd_list`, `cmd_show`.
-- Bundle resolution: `resolve_subagent_package` in `/usr/src/boot/config.py`.
-- Spawn-side resolution chain: `cmd_spawn` in `/usr/src/bin/subagent.py`.
-- Full reference: `/usr/share/doc/SUBAGENT_BUNDLES.md`.
+```
+paiman list                  # all bundles, grouped by type
+paiman show <name>           # resolved package.yaml
+ls /usr/lib/subagents/       # raw view
+```

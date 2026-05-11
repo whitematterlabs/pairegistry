@@ -6,12 +6,17 @@ description: Howto for creating a new driver — three-location split, events.ya
 
 # Authoring a driver
 
-**Stop — did you classify?** This skill is for building a *primitive
-surface* driver. If you arrived here without running `grow-capability`
-§"Step 2 — scope triage", do that first. Common mistake: building a
-driver for a *task* ("calendar booking driver", "reservations driver")
-when it should be a bin on top of an existing primitive. If your need
-is a CLI returning a value, close this file and build a bin.
+**Stop — did you classify?** Driver = *primitive external surface*
+(messages, email, calendar, contacts) whose on-disk shape it owns.
+If your need is a CLI that returns a value, close this file and
+build a bin. If it's a task ("calendar booking", "reservations"),
+build a bin on top of an existing primitive driver.
+
+Background reading before authoring:
+- `memory/doc/FILESYSTEM_v3.md` — `/usr/lib/drivers/<name>/`, `/sys/drivers/<name>/`, `/proc/<slug>/`
+- `memory/doc/KERNEL_EVENTS.md` — event vocabulary, wake_on globs
+- `memory/doc/KERNEL.md` — discovery + reconcile
+- `memory/doc/PAIMAN.md` — install flow
 
 A driver owns the on-disk shape of an external surface (messages,
 email, calendar, contacts). The kernel routes its events but does
@@ -27,7 +32,14 @@ not interpret them.
 
 There is **no `/etc/drivers/`**. The kernel discovers drivers by
 scanning `/usr/lib/drivers/*/events.yaml` at boot — no code
-registration needed. Install the package, restart the kernel.
+registration needed. Install the package, reboot the kernel so new
+`wake_on:` globs in `/etc/config.yaml` are picked up.
+
+**Drivers ≠ PAIs.** A PAI is an instance with `/home/<pai>/`,
+`/var/lib/instances/<pai>/`, and `/proc/<pai>/`. A driver has no
+home, no instance state — only code (`/usr/lib/drivers/<name>/`),
+runtime state (`/sys/drivers/<name>/`), and process lifecycle
+(`/proc/<slug>/`). Drivers emit events; PAIs consume them.
 
 ## Where the source lives: pairegistry vs local
 
@@ -35,16 +47,16 @@ Two valid origins for a driver. Pick deliberately.
 
 | | pairegistry (`~/Projects/pairegistry/drivers/<name>/`) | local (`~/.pai/usr/lib/drivers/<name>/` direct) |
 |---|---|---|
-| Use when | Driver is general-purpose, will run on other PAI installs, deserves a version | Driver is *this owner's* situation: a quirky local API, a personal bridge, an experiment |
+| Use when | Driver is general-purpose, will run on other PAI installs, deserves a version | Driver is the owner's specific situation: a quirky local API, a personal bridge, an experiment |
 | Install path | `paiman install <name>` (symlinks into `/usr/lib/drivers/`) | Author the directory in place |
 | Self-healing edits | Edit pairegistry source, reinstall | Edit `/usr/lib/drivers/<name>/` directly |
 | Reviewability | Has its own git history, package.yaml versioning | Lives only on this machine |
 
 Default to **pairegistry** for anything you'd describe to a stranger
 ("an iMessage driver", "a Gmail driver"). Default to **local** for
-anything that needs the owner's name in the description ("Arda's
-WhatsApp scrape that depends on his ChatStorage layout"). When in
-doubt: local first, promote to pairegistry once it stabilizes.
+anything tied to the owner's specific setup (a WhatsApp scrape that
+depends on their ChatStorage layout). When in doubt: local first,
+promote to pairegistry once it stabilizes.
 
 What you must **never** do is mix them — don't author a real
 directory at `~/.pai/usr/lib/drivers/<name>/` while a pairegistry
@@ -67,8 +79,9 @@ conventional, not required by name. The split is reflected in the
 slug: process slugs are `<name>-in` / `<name>-out`; the package
 name (under `/usr/lib/drivers/`) omits the suffix.
 
-When authoring via coder, use `type: driver` in the brief — coder
-will write to `/usr/lib/drivers/<name>/` directly.
+When authoring via `execute-claudecode`, set `type: driver` in the
+brief — claudecode will write to `~/Projects/pairegistry/drivers/<name>/`
+(or `/usr/lib/drivers/<name>/` for a local-only driver).
 
 ## events.yaml manifest
 
@@ -90,7 +103,7 @@ processes:
 events:
   - kind: imessage:new          # the routing key — what wake_on matches
     description: A new message arrived from a contact.
-    emitted_by: src/drivers/imessage/inbound.py
+    emitted_by: drivers/imessage/inbound.py
     raw_kind: new_message       # the YAML `kind:` field on the event file
     payload:
       thread: string             # contact slug
@@ -364,9 +377,10 @@ async def run() -> None:
 
 ### Reference implementations
 
-- `/usr/lib/drivers/imessage/inbound.py` — async loop, FSEvents watcher.
-- `/usr/lib/drivers/imessage/outbound.py` — async tailer + `osascript` via subprocess.
-- `/usr/lib/drivers/email/inbound.py` — async polling with `to_thread` for IMAP.
+- `~/Projects/pairegistry/drivers/imessage/inbound.py` — async loop, FSEvents watcher.
+- `~/Projects/pairegistry/drivers/imessage/outbound.py` — async tailer + `osascript` via subprocess.
+- `~/Projects/pairegistry/drivers/email/macmail/inbound.py` — async polling with `to_thread`.
+- `~/Projects/pairegistry/drivers/email/package.yaml` — multi-subdriver namespace example.
 
 ## Emitting an event
 
@@ -398,20 +412,23 @@ The kernel discovers drivers by scanning `/usr/lib/drivers/*/events.yaml`
 at boot. The full deploy flow once the code is written:
 
 ```sh
-# 1. Install (if source isn't already at /usr/lib/drivers/<name>/)
-sbin/paiman install /path/to/driver-source
+# 1. Install — symlinks pairegistry source into /usr/lib/drivers/<name>/
+paiman install <name>
 
-# 2. Activate the process(es)
-bin/paictl start <name>-in     # if inbound
-bin/paictl start <name>-out    # if outbound
+# 2. Reboot so the kernel scans the new events.yaml
+reboot
 
-# 3. Restart the kernel so it discovers the new events.yaml
-sbin/reboot
+# 3. Activate the process(es)
+paictl start <name>-in     # if inbound
+paictl start <name>-out    # if outbound
+
+# 4. Add wake_on globs to any PAI that should receive these events,
+#    e.g. in /etc/config.yaml under the PAI entry:
+#      wake_on: ["<name>:*"]
+#    then `reboot` again so the new wake_on is picked up.
 ```
 
-After restart, paictl's `active: true` spec is already on disk —
-reconcile brings the driver up automatically. See skill
-`kernel-restart` for restart procedure and caveats.
+See skill `kernel-restart` for restart procedure and caveats.
 
 ## Runtime state
 
@@ -510,9 +527,12 @@ If you're unsure how to reach the external surface:
 
 ## Read these next
 
-- `/usr/lib/drivers/imessage/` — reference implementation.
+- `~/Projects/pairegistry/drivers/imessage/` — reference implementation.
 - `/usr/src/boot/main.py` — `_discover_driver_specs`, `_handle_event_file`,
   `_route_to_pids`.
-- Skill `kernel-restart` — how to restart the kernel after install.
-- Skill `understand-event-routing` — how `kind` becomes a nudge.
-- Skill `understand-filesystem` — the three-location driver split.
+- `memory/doc/KERNEL_EVENTS.md` — how `kind` becomes a nudge.
+- `memory/doc/FILESYSTEM_v3.md` — the three-location driver split.
+- `memory/doc/PAIMAN.md` — install internals.
+- `memory/doc/SELF_HEALING.md` — patching a driver in-place.
+- Skill `kernel-restart` — restart procedure and caveats.
+- Skill `restart-driver` — bounce a single driver without full reboot.

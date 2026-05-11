@@ -1,5 +1,0 @@
-name: understand-persubs
-kind: skill
-topic: understanding
-version: 0.1.0
-description: "Persistent subagents (persubs) — long-lived specialist children declared via dependencies in /etc/config.yaml. Differ from ephemeral subagents in lifetime and addressing."

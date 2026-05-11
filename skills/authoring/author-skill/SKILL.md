@@ -1,88 +1,68 @@
 ---
 name: author-skill
-description: Howto for writing a new skill — frontmatter, content shape, when to make one vs add to an existing skill. The convention this very file follows.
+description: Use when writing a new SKILL.md (own initiative or via skill `grow-capability` with kind=skill). Covers description-line discipline, body shape, and when NOT to make a skill.
 ---
 
 # Authoring a skill
 
-A skill is a focused, self-contained capability or piece of
-knowledge a PAI can pull in on demand. Live at
-`memory/skills/<name>/`.
-
-Skills come in two flavors:
-- **Action skills** (e.g. `reload-config`, `restart-driver`) — a
-  procedure to run when a specific situation lands.
-- **Knowledge skills** (e.g. `understand-kernel`, `author-driver`)
-  — a primer the PAI reads to orient itself before acting.
-
-Both use the same shape.
+A skill is a lazy-loaded procedural bundle. Root's prompt lists every installed skill as one line; root `cat`s the body when a description plausibly matches. **The description is the entire entry point.**
 
 ## File layout
 
 ```
-memory/skills/<name>/
-└── SKILL.md         # required; frontmatter + body
+<name>/
+├── SKILL.md           # required: frontmatter + body
+└── <extra files>      # optional templates/scripts, referenced by relative path
 ```
 
-A skill *may* ship additional files (templates, scripts, examples).
-Reference them from SKILL.md by relative path. The PAI reads
-SKILL.md first.
+Directory name must equal `name:`.
 
-## Frontmatter (required)
+## Frontmatter
 
-```markdown
+```yaml
 ---
-name: <kebab-case-name>      # must equal the directory name
-description: <one line>      # used to decide relevance — be specific
+name: <kebab-case>             # = directory name
+description: <one line>        # the trigger; concrete, specific
+visible_to: [root]             # optional; restrict who sees the listing
 ---
 ```
 
-The description is what the PAI scans when deciding whether to pull
-the skill in. Lead with the trigger ("Use when …", "Read first to
-understand …"); avoid vague nouns like "helpful" or "stuff."
+### Description-line discipline
+
+Root scans descriptions to decide what to load. A vague line gets loaded never or always — both wrong.
+
+- Lead with **"Use when …"** naming the concrete trigger (an event kind, a file state, a request shape).
+- Name the *output* if the skill produces one ("classify and decide restart vs surface").
+- No filler ("helpful", "various", "stuff"). No restating the name.
+- Compare: `diagnose-crash` (good — names the `proc_resolved` event + status), `grow-capability` (good — names the message shape and taxonomy it owns).
 
 ## Body
 
-Keep skills **focused**. A skill should answer one question or
-walk one procedure. Long generic explainers belong in
-`memory/doc/` — skills point to them.
+Terse procedural prose. The reader is under context pressure.
 
-Recommended sections:
-- **When to use** — the trigger that should pull this skill in.
-- **Procedure** (action) or **Concepts** (knowledge) — the meat.
-- **When NOT to use / Boundaries** — what to escalate or skip.
-- **Verification** (action) — how to confirm success.
-- **Read these next** — links to docs and adjacent skills.
+- Concrete commands over explanation. Show the `tail`, `cat`, `send-message` line.
+- Tables for branching decisions (signal → action).
+- Cross-reference shipped docs (`memory/doc/*.md`) and sibling skills by name; don't re-explain them.
+- End with **"Read these next"** pointing at the docs and adjacent skills that complete the picture.
 
-## Writing style
+Reference shapes: `~/Projects/pairegistry/skills/diagnosing/diagnose-crash/SKILL.md` (tight action skill, table-driven), `~/Projects/pairegistry/skills/operating/grow-capability/SKILL.md` (longer because it owns a taxonomy — earns its length).
 
-- Terse. The PAI is reading at runtime under context pressure.
-- Concrete paths and command snippets over prose.
-- Cross-link by skill name (e.g. ``skill `understand-event-routing` ``)
-  and to docs by absolute path under `memory/doc/`.
-- Don't duplicate content from `memory/doc/` — point to it.
+## When NOT to write a skill
 
-## When to make a new skill vs extend an existing one
+- **Redocumenting a shipped doc.** If `memory/doc/KERNEL.md` already says it, link. Don't restate.
+- **Redocumenting kernel-injected context.** Root's prompt already specifies the claudecode brief shape, send_message contract, FHS layout. Don't re-derive.
+- **A single-use procedure.** One-shot work goes in the turn, not a skill.
+- **Extending an existing skill with one note.** Edit in place; don't fork.
 
-**New skill** when:
-- A new triggering situation needs its own playbook.
-- A new system area needs a knowledge primer no existing skill covers.
-- An existing skill would balloon past ~80 lines if you added it.
+If the skill would be <15 lines of unique content, it's probably a doc note or a sibling-skill edit.
 
-**Extend** when:
-- The same procedure with a new edge case.
-- A clarifying note that fits within the existing structure.
+## Verification
 
-## Don't
+After writing, read the description aloud and ask: *would root pick this for the trigger and not for unrelated work?* If both directions don't pass, rewrite the line.
 
-- Don't repeat what `understand-filesystem` or `understand-kernel`
-  already say. Link to them.
-- Don't bake operator-only decisions into a skill (provider/model
-  choices, adding/removing a PAI). Surface to operator.
-- Don't write skills that duplicate driver `events.yaml`. The
-  manifest is the source of truth for kinds.
+For code hand-offs, use skill `execute-claudecode`.
 
 ## Read these next
 
-- `memory/skills/reload-config/SKILL.md` — reference action skill.
-- `memory/skills/understand-kernel/SKILL.md` — reference knowledge skill.
+- `memory/doc/FILESYSTEM_v3.md` — where skills live on disk and how `paiman install` places them.
+- Sibling: `~/Projects/pairegistry/skills/diagnosing/diagnose-crash/SKILL.md`, `~/Projects/pairegistry/skills/operating/grow-capability/SKILL.md`.

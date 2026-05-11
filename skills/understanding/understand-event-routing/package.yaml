@@ -1,5 +1,0 @@
-name: understand-event-routing
-kind: skill
-topic: understanding
-version: 0.1.0
-description: "How an event becomes a nudge — the kind vocabulary, wake_on globs, fan-out rules, and the fallback chain ending at root."

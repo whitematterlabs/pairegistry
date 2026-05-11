@@ -1,5 +1,0 @@
-name: understand-kernel
-kind: skill
-topic: understanding
-version: 0.1.0
-description: "Read first — what the PAI kernel is, why it's tickless, and what it does. Foundation for every other root skill."

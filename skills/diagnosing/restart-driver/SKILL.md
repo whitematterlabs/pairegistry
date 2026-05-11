@@ -1,40 +1,53 @@
 ---
 name: restart-driver
-description: Use when a kernel-owned driver (imessage-in, imessage-out, gmail-in, proc-watcher, tailer) crashed with a transient cause and needs to be bounced.
+description: Root-only. Bounce a crashed kernel-owned driver (NOT a PAI). Use when a driver slug has `failed` status with a transient cause.
 ---
 
-# Restart a crashed driver
+# Restart a driver
 
-## When to use
+Drivers are kernel-owned, code-registered processes (discovered from `events.yaml` `processes:` blocks under `/usr/lib/drivers/`). They have their own lifecycle, distinct from instance PAIs: lifecycle = the `active:` bool in `/proc/<slug>/spec.yaml`. `paictl` flips it and emits `kernel:reload_config`; the kernel's `_reconcile_drivers` reacts. See `memory/doc/KERNEL.md`, `memory/doc/KERNEL_EVENTS.md`, `memory/doc/FILESYSTEM_v3.md`.
 
-- A `proc failed` event arrived for a driver slug.
-- `/proc/<slug>/status` reads `failed`.
-- The traceback in `/proc/<slug>/log.md` indicates a **transient**
-  cause: DB busy, fs race, network blip, file lock contention.
+## When to restart (transient)
 
-## When NOT to use
+- `/proc/<slug>/status` == `failed` AND
+- `tail -n 50 /proc/<slug>/log.md` shows: network blip, DB busy/locked, fs race, transient file lock, timeout against a flaky external surface.
 
-If the traceback indicates a **structural** failure — surface, don't
-restart:
+## When NOT to restart (structural — escalate, don't loop)
 
-- `ImportError`, `ModuleNotFoundError` — code is broken.
-- `KeyError` / `AttributeError` on schema fields — config or upstream
-  contract drifted.
-- Repeated identical crashes after a restart — looping, not transient.
+- `ImportError` / `ModuleNotFoundError` — code is broken; spawn a coder via `grow-capability`.
+- `KeyError` / `AttributeError` on schema fields — manifest or upstream contract drifted.
+- Same traceback within ~60s of a prior restart — looping, not transient.
+- Driver missing from `_discover_driver_specs()` walk (no proc spawns at all) — `events.yaml` problem, not a restart case.
 
 ## Procedure
 
-1. `tail -n 50 /proc/<slug>/log.md` — confirm transient.
-2. `paictl restart <slug>` (or `paictl start <slug>` if stopped).
-3. Wait one tick; recheck `/proc/<slug>/status`.
-4. Append one line to `/proc/root/log.md`:
-   `restarted <slug> after <one-line cause>`.
-5. If it crashes again within a minute — escalate. Do not loop.
-
-## Escalation line
-
 ```
-/var/spool/communication/messages/me/1/<today>.md
+tail -n 50 /proc/<slug>/log.md          # confirm transient
+paictl stop <slug>                       # active: false, reload, reconcile cancels task
+paictl start <slug>                      # active: true, reload, reconcile respawns task
+sleep 2 && cat /proc/<slug>/status       # expect: running
+tail -n 5 /proc/<slug>/log.md            # expect: "kernel: restarted" + driver's own startup line
 ```
 
-Append: `[<HH:MM>] root: <slug> looping on <cause>; needs your eyes`.
+`paictl reload` alone will NOT restart a healthy-but-stuck driver — `_reconcile_drivers` only acts on `active:` mismatches. Stop then start.
+
+## Verify it came back
+
+- `/proc/<slug>/status` reads `running` (not `failed`/`cancelled`).
+- Driver-emitted events resume in `/var/log/kernel/kernel.log` (grep `driver started: <slug>`).
+- For event-producing drivers: an event with `source: <driver>` appears in `/home/events/` within a normal duty cycle.
+
+## Log the action
+
+Append to `/proc/root/log.md`:
+
+```
+restarted <slug> after <one-line cause>
+```
+
+## Escalate when
+
+- Second `failed` within 60s of restart → spawn a coder via `grow-capability` with the traceback; do not loop.
+- Structural signal (see above) on first read → skip restart, go straight to `grow-capability`.
+- Owner-visible breakage (messages, email, calendar driver down) → also append to `/var/spool/communication/messages/me/1/<today>.md`:
+  `[<HH:MM>] root: <slug> looping on <cause>; needs your eyes`.

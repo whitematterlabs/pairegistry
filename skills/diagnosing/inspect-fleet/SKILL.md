@@ -1,48 +1,45 @@
 ---
 name: inspect-fleet
-description: Use to survey current fleet state — what PAIs/drivers exist, which are running, which are failed. The reflex when an event is ambiguous or you need ground truth before acting.
+description: Use to survey fleet state — which PAIs and drivers are configured, running, or failed. The reflex when an event is ambiguous or you need ground truth before acting. Root-only.
 ---
 
 # Inspect the fleet
 
-## One-shot survey
+## First look
 
 ```
-ls /proc/                      # every running PAI + driver
-for d in /proc/*/; do
-  printf "%-20s %s\n" "$(basename $d)" "$(cat $d/status 2>/dev/null)"
-done
+paictl ls                       # every PAI + driver with active + status
 ```
 
-## Per-entity drill-down
+Columns: NAME / ACTIVE (config intent) / STATUS (runtime). Mismatch — `active=yes` but `status=failed` or missing — is the interesting case.
 
-- **A PAI** (`root`, `pai`, …):
-  - `/proc/<name>/spec.yaml` — what reconcile gave it.
-  - `/proc/<name>/log.md` — its operational tail.
-  - Stitched home: `/root/` (pid 1) or `/home/<name>/`.
-  - Sacred state: `/var/lib/instances/<name>/`.
+## Drill into one entry
 
-- **A driver** (`imessage-in`, `gmail-in`, …):
-  - `/usr/lib/drivers/<short-name>/events.yaml` — what kinds it emits.
-  - `/usr/lib/drivers/<short-name>/` — code.
-  - `/sys/drivers/<short-name>/` — runtime cursors.
-  - `/proc/<full-slug>/` — process state.
+```
+paictl status <name>            # spec + active + runtime status
+paictl logs <name>              # tail /proc/<name>/log.md (-f to follow)
+paictl tokens <name>            # context usage rollup
+```
 
-  Note the slug split: process slugs end in `-in`/`-out`; the driver
-  package name omits that suffix. There is no `/etc/drivers/`.
+Raw files behind those (when paictl is not enough):
 
-## Source of truth checks
+- `/proc/<slug>/spec.yaml` — what reconcile gave it.
+- `/proc/<slug>/status` — one of: `spawned`, `running`, `completed`, `expired`, `cancelled`, `failed`, `stopped`.
+- `/proc/<slug>/log.md` — operational tail.
 
-- `/etc/config.yaml` — fleet declaration. If `/proc/` and config
-  disagree, reconcile is stale → emit `kernel:reload_config`.
-- `/usr/lib/drivers/*/events.yaml` — routing vocabulary. Cross-reference
-  with `wake_on:` patterns in config.
+## PAI vs driver
+
+- **PAI** (`root`, `pai`, …): declared in `/etc/config.yaml`. Sacred state at `/var/lib/instances/<name>/`; stitched home at `/root/` or `/home/<name>/`.
+- **Driver** (`imessage-in`, `gmail-in`, …): no `/etc/` entry — `/proc/<slug>/spec.yaml` is the source of truth. Code at `/usr/lib/drivers/<pkg>/`; cursors at `/sys/drivers/<pkg>/`. Process slugs end in `-in`/`-out`; the package name omits that suffix.
+
+## Source-of-truth checks
+
+- `/etc/config.yaml` declares the PAI fleet. If `/proc/` and config disagree, reconcile is stale → emit `kernel:reload_config`.
+- `/usr/lib/drivers/*/events.yaml` is the routing vocabulary. Cross-reference with `wake_on:` patterns in config.
 
 ## Common questions
 
-- *Who would handle event X?* — grep `wake_on:` in `/etc/config.yaml`
-  for a glob over X's `kind`. Zero matches → fallback PAIs (every
-  entry with `fallback: true`); still zero → root.
-- *Which driver emitted this kind?* — `grep -r "kind: <kind>" /usr/lib/drivers/`.
-- *Is this PAI's config stale?* — diff its `/proc/<name>/spec.yaml`
-  managed fields against `/etc/config.yaml`. Mismatch → reload.
+- *Who handles event X?* — grep `wake_on:` in `/etc/config.yaml` for a glob over X's `kind`. Zero matches → entries with `fallback: true`; still zero → root.
+- *Which driver emits this kind?* — `grep -rn "kind:" /usr/lib/drivers/*/events.yaml | grep <kind>`.
+- *Why is this PAI stuck?* — `paictl status <name>` + `paictl logs <name>`. Terminal status with `active=yes` means it crashed and was not respawned; nudge or `paictl stop && paictl start`.
+- *Going deeper?* — `memory/doc/KERNEL.md` (lifecycle, reconcile), `memory/doc/FILESYSTEM_v3.md` (layout), `memory/doc/PERSUBS.md` (persistent subagents).

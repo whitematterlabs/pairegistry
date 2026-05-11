@@ -1,156 +1,207 @@
 ---
 name: author-pai-bundle
 visible_to: [root]
-description: Howto for creating a new PAI bundle — package.yaml, prompt, paiman init scaffolding, paiadd to instantiate. Reference when adding a new fleet member.
+description: Howto for authoring a new PAI bundle (kind:pai) — package.yaml, prompt.md, paiadd to instantiate. Reference when adding a new fleet member.
 ---
 
 # Authoring a PAI bundle
 
-**Stop — did you classify?** A PAI bundle is a new fleet member with
-its own identity, waking on some driver's events. If you don't yet
-have a driver for that surface, you're at Scope B (driver), not
-Scope C (driver + bundle). Run `grow-capability` §"Step 2 — scope
-triage" first; come back here only after the driver exists.
+A PAI bundle is the **template** a fleet member is instantiated from.
+Scope check: if there's no driver yet for the surface the PAI wakes
+on, build the driver first — a bundle without its driver wakes on
+nothing.
 
-A PAI bundle is the **template** a PAI is instantiated from. Two
-locations:
+## The three layers
 
-- `/opt/<pkg>/<ver>/` — release bundles (from `paiman install`).
-- `/usr/lib/pais/<name>/` — **dev source**, edited in place;
-  `paiadd` stitches directly from here, bypassing `/opt/`.
+| Layer | Path | Lifetime |
+|---|---|---|
+| **Bundle** (template) | `/usr/lib/pais/<name>/` | immutable post-install |
+| **Instance** (configured copy) | `/var/lib/instances/<inst>/` | per-PAI sacred state |
+| **Process** (running) | `/proc/<inst>/` | per-boot runtime |
 
-Bundle content is **immutable post-install**. Edits go to instance
-state at `/var/lib/instances/<pai>/`.
+`paiadd <bundle>` reads the template, writes a `/etc/config.yaml`
+entry, creates the instance dir, and emits `kernel:reload_config`.
+The kernel reconciles → `/proc/<inst>/` appears → the PAI wakes.
 
-## Where the source lives: pairegistry vs local
+Edits to the bundle do not retroactively touch existing instances'
+memory or drafts; they do shape the next nudge's prompt.
 
-Same call as for drivers. **Pairegistry** (`~/Projects/pairegistry/pais/<name>/`)
-when the bundle is general-purpose and would make sense on someone
-else's PAI install — install via `paiman install <name>`. **Local**
-(author `/usr/lib/pais/<name>/` directly) when the bundle is
-owner-specific: a PAI tied to your particular drivers, your
-contacts, your workflow. PAI is self-healing and autonomous; local
-bundles are expected and fine. Just don't keep both copies of the
-same name — pick one origin and stay there.
+## Where source lives
+
+**Pairegistry** (`~/Projects/pairegistry/pais/<name>/`) when the bundle
+is general-purpose — install via `paiman install <name>`. **Local**
+(`/usr/lib/pais/<name>/` directly) when owner-specific. Don't keep
+both copies of the same name.
 
 ## Layout
 
 ```
-/usr/lib/pais/<name>/
-├── package.yaml      manifest
-└── prompt.md         role prompt
+pais/<name>/
+├── package.yaml
+└── prompt.md
 ```
 
-That's the whole bundle in v1. Heavier pieces (drivers, skills) are
-**system-shared**, not vendored — declared in `package.yaml`,
-resolved by `paiman`, installed once at
-`/usr/lib/drivers/<name>/` and `memory/skills/<name>/`.
+That's it. Drivers and skills are **declared, not vendored** —
+`paiman` resolves them.
 
 ## package.yaml
 
+Canonical shape (see `pais/email-pai/` and `pais/whatsapp-pai/`):
+
 ```yaml
-name: scheduler-pai
+name: email-pai
+kind: pai
 version: 0.1.0
-description: Schedules and triages calendar events.
-default_instance: scheduler
-
-required_drivers:
-  - name: gcal
-    version: ">=1.0"
-
-required_skills:
-  - reload-config
-
-requested_capabilities:
-  - read: /var/lib/memory/people
-  - write: /var/lib/instances/scheduler
-
-# optional baseline overrides; these become the prompt/provider/model
-# the new instance gets at paiadd time
-defaults:
-  provider: deepseek
-  model: deepseek-v4-pro
-  wake_on:
-    - gcal:*
-
-# optional: declare which symlinks the kernel stitches into the
-# instance's home. If omitted, the instance gets only the universal
-# seeds (bin, inbox, workspace, memory/*, tmp) — no `communication/`,
-# no per-channel views.
+description: Email-handling PAI — triages and replies to incoming email
+provider: deepseek
+model: deepseek-v4-pro
+prompt: prompt.md
+wake_on:
+  - email:new
+  - email:backlog
+  - email:draft_failed
+deps:
+  - email          # driver
+  - mailsearch     # bin
 home:
   links:
-    - link: calendar               # name under $HOME
-      target: var/spool/communication/gcal   # path under PAI_ROOT
+    - link: communication/email
+      target: var/spool/communication/email
+    - link: drafts
+      target: var/spool/communication/email/drafts
 ```
+
+**Required:** `name`, `kind: pai`, `version`, `prompt`, `wake_on`.
+**`deps`** lists driver/bin/skill packages by name; `paiman install`
+walks them. **`provider`/`model`** become the instance default at
+`paiadd` time (overridable per-instance in `/etc/config.yaml`).
+
+### `wake_on`
+
+Names of driver events. Pick the narrowest set — a PAI woken on
+`email:*` will also wake on `email:sync_finished` and burn turns.
+Existing bundles' `wake_on:` is the reference.
 
 ### `home.links`
 
-A bundle is the right place to declare which slice of the filesystem its
-PAI sees. By default the kernel stitches only the universals; channel
-views (`mail/`, `drafts/`, `messages/`, …) come from the bundle.
+By default the kernel stitches only the universals (`bin`, `inbox`,
+`workspace`, `memory/*`, `tmp`) into the instance's home. The bundle
+declares the channel slice this PAI sees.
 
 Rules:
-- `link` is a path under `$HOME`. Cannot collide with reserved seeds
-  (`bin`, `inbox`, `workspace`, `memory`, `tmp`) — collision is a hard
-  stitch error.
-- `target` is interpreted relative to `PAI_ROOT` and must stay inside it
-  (escape attempts via `..` are rejected at stitch time).
-- One link per channel surface — narrow is better. An email-pai gets
-  `mail/` and `drafts/`, not `communication/`. The point is *isolation*:
-  email-pai shouldn't see iMessage, and vice versa.
-- Bundleless PAIs (the seed `root` and pid-2 `pai`) get the broad
-  `communication/` view from the kernel; only bundle-instantiated PAIs
-  use `home.links`.
+- `link` is a path under `$HOME`; collisions with universals reject
+  at stitch time.
+- `target` is relative to `PAI_ROOT`; must stay inside it.
+- **Narrow is correct.** Email-pai gets `communication/email` and
+  `drafts`, not `communication/`. Isolation is the point — email-pai
+  shouldn't see iMessage and vice versa.
 
-## prompt.md
+## prompt.md — the role prompt
 
-The role prompt for this PAI. Same shape as
-`/usr/share/prompts/pai_default.md`. Keep it minimal — accumulated
-guidance belongs in the instance's `memory/private/`, not the
-prompt.
+The kernel assembles each nudge as `<custom>` (your prompt) plus
+boilerplate blocks (`<owner>`, `<memory-usage>`,
+`<capability-escalation>`, `<self-notes>`, `<fleet>`,
+`<operating-instructions>`, `<bins>`, `<skills>`). You own
+`<custom>` only — don't restate what the boilerplate already says.
+
+### Discipline
+
+- **Never use the owner's name.** Say "the owner". Bundles ship
+  generically; the name is injected via `<owner>` boilerplate.
+- **Terse.** Concrete file shapes > prose. The reader is a model
+  parsing under turn pressure, not a human onboarding.
+- **No kernel-injected context restated.** Don't redocument
+  `bin/send-message`, root-escalation, `memory/` layout, or how
+  events route. That's all in boilerplate or kernel docs the PAI
+  reads on demand.
+- **No accumulated lessons.** Those belong in
+  `memory/private/self.md` (surfaces as `<self-notes>` per nudge).
+
+### Shape (in order)
+
+1. **One sentence on identity.** "You are **email-pai** — the
+   owner's email handler." Name the events it wakes on.
+2. **Filesystem map.** 3–6 concrete paths it reads/writes most. The
+   highest-leverage section — replaces an open-ended `rg` with a
+   directed first look. Cap tight; universals are already covered.
+3. **Per-event behavior.** One subsection per `wake_on:` entry. Each
+   says: read X, decide between `{act, defer, surface to owner}`,
+   call skill/bin Y. Concrete examples beat principles.
+4. **Drafting / acting shape.** If the PAI writes artifacts (drafts,
+   replies, files), show the literal yaml/format with comments.
+5. **Style.** One paragraph. Register, terseness, what *not* to
+   narrate.
+6. **Memory.** One line: update when something significant comes up,
+   check before non-trivial actions.
+7. **Hard rules.** The handful of things that would burn a turn or
+   harm the owner if the model guessed wrong. "Never click send."
+   "Never commit on the owner's behalf." "One draft per inbound."
+
+### Canonical examples
+
+`pais/email-pai/prompt.md` and `pais/whatsapp-pai/prompt.md` are the
+reference. Read both before writing a new prompt — they were just
+tightened and embody the shape above.
+
+### `boilerplate:` — selecting kernel-stitched blocks
+
+Per-instance, in `/etc/config.yaml`:
+
+```yaml
+- name: email-pai
+  prompt_dir: usr/lib/pais/email-pai
+  boilerplate: [owner, memory-usage, capability-escalation]
+```
+
+Each name resolves to `etc/boilerplate/<name>.md`. Order preserved.
+Missing → reconcile fails. Omit to take the kernel default.
+
+### Multi-file `prompt_dir`
+
+`prompt_dir` may point at a directory; every `*.md` is concatenated
+in sorted order. Use for natural sections (`00-identity.md`,
+`10-triage.md`, `20-rules.md`). A single `prompt.md` is also fine.
+
+### Per-instance override
+
+An instance can point its `prompt_dir` at
+`var/lib/instances/<inst>/prompt/` for genuinely divergent role
+text (e.g. work-email vs personal-email triage). Use sparingly —
+most divergence belongs in instance memory, not a forked prompt.
 
 ## Scaffolding flow
 
 ```sh
-paiman init <name>            # creates /usr/lib/pais/<name>/ skeleton
+paiman init <name>            # /usr/lib/pais/<name>/ skeleton
 $EDITOR /usr/lib/pais/<name>/package.yaml prompt.md
 
-paiadd <bundle>               # useradd-style wizard:
-                              #   - asks for instance name (default from manifest)
-                              #   - assigns a pid
-                              #   - writes /etc/config.yaml entry
-                              #   - creates /var/lib/instances/<name>/
-                              #   - emits kernel:reload_config
+paiadd <bundle>               # writes config entry, creates instance dir,
+                              # emits kernel:reload_config
 
-# Lifecycle (after instantiation):
-paictl stop <name>            # mark inactive (active: false on spec)
-paictl start <name>           # re-activate
-paidel <name>                 # remove fleet entry; preserves instance state
-paidel <name> --purge         # also wipe /var/lib/instances/<name>/
+paictl stop <inst>            # mark inactive
+paictl start <inst>           # reactivate
+paidel <inst>                 # remove entry; preserves instance state
+paidel <inst> --purge         # also wipe /var/lib/instances/<inst>/
 ```
 
-All three of `paiadd`/`paidel`/`paictl start|stop` end by emitting
-`kernel:reload_config`. **Hand-edit `/etc/config.yaml` only to fix
-an entry** — adds and removes go through these tools.
-
-## Persubs
-
-If your new PAI needs a long-lived specialist child (memory
-curator, GUI delegate), declare it under `dependencies:` in the
-config entry — not as a separate bundle. See skill
-`understand-persubs`.
+All four end by emitting `kernel:reload_config`. Hand-edit
+`/etc/config.yaml` only to fix an entry.
 
 ## Don't
 
-- Don't vendor drivers or skills inside the bundle. Declare them.
-- Don't bake instance-specific state into the bundle. The bundle is
-  the template; the instance is the configured copy.
-- Don't write a prompt that duplicates `memory/doc/` material.
-  The PAI can read docs at runtime via skills.
+- Don't vendor drivers, skills, or bins in the bundle. Declare under
+  `deps:`.
+- Don't bake instance state (drafts, memory) into the bundle.
+- Don't write a prompt that restates kernel boilerplate or kernel
+  docs.
+- Don't use the owner's name in prompt.md.
+- Don't wake on a wildcard if a specific event works.
+- For build/codegen sub-tasks, the PAI calls `execute-claudecode`,
+  not a "coder" persub.
 
 ## Read these next
 
-- `memory/doc/FILESYSTEM_v3.md` §"Bundle anatomy"
-- Skill `understand-bundles-and-instances` — the trinity.
-- Skill `kernel-tools` — paiman/paiadd/paidel/paictl/paicron.
-- Skill `understand-config-reconcile` — what the wizard writes.
+- `memory/doc/FILESYSTEM_v3.md` — bundle/instance/process layers.
+- `memory/doc/KERNEL.md` — `/etc/config.yaml` + reconcile.
+- `memory/doc/PAIMAN.md` — install/dep resolution.
+- `pais/email-pai/`, `pais/whatsapp-pai/` — canonical references.

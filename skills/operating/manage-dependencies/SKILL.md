@@ -1,122 +1,89 @@
 ---
 name: manage-dependencies
 visible_to: [root]
-description: Use when adding, removing, or inspecting a PAI's persistent subagents (persubs) — long-lived specialist children declared under `dependencies:` in /etc/config.yaml. Read before editing dependencies or when an operator asks for a memory/computer-use/etc. specialist.
+description: Use when installing, removing, or searching paiman bundles where bundle-to-bundle `deps:` come into play — what gets pulled in automatically, what blocks an uninstall, when something falls through to pip. For the full paiman command surface, see `kernel-tools`; this skill is only about deps.
 ---
 
-# Manage persistent subagents
+# Manage bundle dependencies
 
-## What persubs are
+Bundles declare their dependencies in `deps:` (a flat list of bare
+names) in `package.yaml`. `paiman` resolves them registry-first; misses
+fall through to pip. There are **no version pins** — the registry is a
+single git tree at HEAD.
 
-A persub is a long-lived child of a PAI, declared under that PAI's
-`dependencies:` in `/etc/config.yaml`. It boots once at the parent's
-boot and lives for the parent's whole lifetime. Slug shape:
-`<parent>.<dep-name>` (e.g. `pai.memory`).
+For the `paiman` command cheatsheet (`install`/`remove`/`search`/`list`/
+`show`), see the `kernel-tools` skill. This skill only covers the
+dependency-resolution behavior layered on top.
 
-Persubs are **not** ephemeral subagents. They cannot be resolved with
-`bin/subagent kill` — only the parent's shutdown removes them. If you
-want a one-shot worker, use plain `bin/subagent spawn` (no
-`--persistent`) instead.
+## How `deps:` is declared
 
-## Inspect what already exists
-
+```yaml
+# pairegistry/pais/email-pai/package.yaml
+name: email-pai
+kind: pai
+deps:
+  - email          # registry bundle → drivers/email/
+  - mailsearch     # registry bundle → bin/mailsearch/
 ```
-ls /proc/ | grep '\.'                 # all persubs (slug has a dot)
-cat /proc/<parent>.<dep>/spec.yaml    # spec — must show persub: true
-cat /proc/<parent>.<dep>/status       # should be "running"
-cat /proc/<parent>/spec.yaml | grep -A20 dependencies
+
+- Flat list of bare names. No version, no extras, no constraint syntax.
+- Entries must be strings; non-string entries fail the install.
+- Cycles are detected and rejected.
+- Honored on `kind: pai`, `subagent`, `skill`, and any primitive
+  (`bin`, `sbin`, `driver`, `lib`, `prompt`).
+
+## What `paiman install` resolves automatically
+
+For each entry in `deps:`:
+
+1. If a bundle with that name is already installed, skip.
+2. Else look it up in the registry (walks every typed root:
+   `drivers/`, `bin/`, `sbin/`, `lib/`, `skills/`, `prompts/`, `pais/`,
+   `subagents/`, plus `skills/<topic>/<name>/`). If found, recursively
+   install it.
+3. Else queue it as a pip package. After all bundle installs finish,
+   pip deps are batch-installed into the kernel venv at
+   `/usr/lib/venv/` via `uv pip install --python <venv-python>`.
+
+So `sbin/paiman install email-pai` pulls `email` (driver) and
+`mailsearch` (bin), then `email` pulls `tailer`, then any unresolved
+names get pip-installed in one shot.
+
+Disambiguate same-named bundles across typed roots with
+`<kind>/<name>` (e.g. `bin/subagent` vs `prompts/subagent`).
+
+## What blocks an uninstall
+
+```sh
+sbin/paiman remove <name>
 ```
 
-## Add a persub
+Refused if any installed `pai` / `subagent` / `skill` bundle lists
+`<name>` in its `deps:`. The error names the dependents.
 
-1. `paiman list` — see which subagent bundles are installed. A bundle
-   ships a default prompt/provider/model so a dep entry only needs
-   `name`, `description`, and `package: <bundle-name>`. If no bundle
-   fits, scaffold one with `paiman init <name> --type subagent` and
-   edit `/usr/lib/subagents/<name>/prompt.md`.
-2. `cat /etc/config.yaml` — locate the parent entry.
-3. Append a `dependencies:` list (or extend the existing one) under
-   the parent. Required: `name`, `description`. Use `package:` to
-   pull defaults from a bundle (recommended), or inline
-   `prompt`/`provider`/`model` to override.
+```sh
+sbin/paiman remove <name> --force   # override; leaves dependents broken
+```
 
-   Bundled (preferred):
-   ```yaml
-   - name: pai
-     pid: 2
-     description: owner-facing PAI
-     ...
-     dependencies:
-     - name: memory
-       description: long-lived knowledge curator for the parent
-       package: memory
-   ```
+Primitives (`bin`, `driver`, `lib`, `prompt`, `sbin`) depending on
+`<name>` do **not** block — only pai/subagent/skill dependents do. Pip
+deps are never uninstalled.
 
-   Inline (no bundle):
-   ```yaml
-     dependencies:
-     - name: scratch
-       description: ad-hoc child for one project
-       prompt: src/prompts/scratch.md
-   ```
+## Inspect
 
-4. Validate: `name` must be unique under that parent and contain no
-   `/`, `.`, or leading `-`. Bare-string shorthand
-   (`dependencies: [memory]`) is **not** supported in v1 — entries
-   must be mappings. If `package:` is set, the bundle must exist at
-   `/usr/lib/subagents/<package>/` or the kernel refuses to boot.
-5. Reboot:
-   ```
-   sbin/reboot
-   ```
-6. Verify: `/proc/<parent>.<dep>/spec.yaml` exists with `persub: true`
-   and `parent: <pid>`. `/proc/<parent>.<dep>/status` is `running`.
+```sh
+sbin/paiman show <name> | grep -A5 '^deps:'        # what a bundle pulls in
+grep -rl "^- <name>$" /opt/paiman/*/package.yaml   # who depends on <name>
+```
 
-## Remove a persub
-
-There is no live-removal in v1. The persub keeps running until the
-parent shuts down. To remove:
-
-1. Delete the entry from `dependencies:` in `/etc/config.yaml`.
-2. `sbin/reboot` so the parent's spec is updated.
-3. The persub keeps running this session. To force it down now:
-   stop the parent (it will take its persubs with it) — or, for a
-   surgical removal, manually clean `/proc/<parent>.<dep>/`,
-   `/var/lib/instances/<parent>.<dep>/`, and
-   `/home/<parent>.<dep>/`.
-
-`bin/subagent kill` against a persub is **rejected** by design. Don't
-try to use it as a teardown tool.
-
-## When NOT to add a persub
-
-- The work is one-shot (research, drafting, code review). Use
-  `bin/subagent spawn --slug X --prompt "..."` ephemeral.
-- The specialist would have no accumulated state across calls and no
-  reason to be warm. A persub costs a process slot and an LLM context
-  for every parent boot — only worth it for state or always-on
-  responsiveness.
-- The operator hasn't decided which provider/model. Don't pick for
-  them — surface to operator.
-
-## Healing
-
-On kernel restart, every running proc is resolved to `stopped`. The
-next boot's reconcile heals each declared persub back to `running`
-automatically. If you see a persub stuck at `stopped` after reload,
-that's a bug — surface to operator with the slug and traceback.
-
-## Authoring a new bundle
-
-If `paiman list` doesn't have a bundle for the role you need, switch to
-the `manage-subagent-bundles` skill — that one covers `paiman init
---type subagent`, editing `package.yaml`/`prompt.md`, and bundle
-lifecycle. Come back here once the bundle exists to wire it in.
+`paiman list` shows kind+version only — no dep tree view; grep
+`/opt/paiman/` if you need one.
 
 ## Authority
 
-- Schema: `_validate_pai_entry` and `DEP_FIELDS` in
-  `/usr/src/boot/config.py`.
-- Spawn logic: `_reconcile_persubs` in the same file.
-- Full reference: `/usr/share/doc/PERSUBS.md`.
-- Bundle reference: `/usr/share/doc/SUBAGENT_BUNDLES.md`.
+- Resolver: `_install_from_source`, `_Registry.lookup` in
+  `/usr/src/bin/paiman.py`.
+- Uninstall guard: `_bundles_depending_on` in the same file.
+- Full paiman reference: `memory/doc/PAIMAN.md`.
+- Filesystem layout the activation slots write to:
+  `memory/doc/FILESYSTEM_v3.md`.

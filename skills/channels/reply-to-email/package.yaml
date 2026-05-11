@@ -1,5 +1,0 @@
-name: reply-to-email
-kind: skill
-topic: channels
-version: 0.1.0
-description: "Use when an `email:new` event arrives and you've decided this email warrants a reply, or when fixing a `draft_failed` yaml. Covers the draft yaml shape, where it goes, and the draft lifecycle."

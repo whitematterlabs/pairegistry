@@ -99,7 +99,7 @@ subagent spawn --slug <name> --prompt "..."
 subagent reply --content "..."        # from inside the child
 subagent kill --slug <name>           # end an ephemeral child
 
-# Persistent (persub) — see skill understand-persubs
+# Persistent (persub) — see memory/doc/PERSUBS.md
 subagent spawn --persistent --slug <name> [--prompt "..."]
 ```
 
@@ -151,7 +151,5 @@ the only thing that touches `/opt/paiman/` and the activation slots.
 
 ## Read these next
 
-- `memory/doc/KERNEL.md` §"Spawning"
-- Skill `understand-config-reconcile` — what these tools trigger.
-- Skill `understand-proc-services` — what paicron writes.
-- Skill `understand-send-message` — pai_message/subagent:response details.
+- `memory/doc/KERNEL.md` — kernel internals, including spawning and reconcile.
+- `memory/doc/FILESYSTEM_v3.md` — proc/ layout that paicron and paictl write to.
