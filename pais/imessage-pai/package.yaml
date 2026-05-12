@@ -9,8 +9,7 @@ wake_on:
   - imessage:new
   - imessage:owner
   - imessage:backlog
+  - imessage:multiple_messages
   - imessage:send_failed
-home:
-  links:
-    - link: messages
-      target: var/spool/communication/messages
+deps:
+  - imessage

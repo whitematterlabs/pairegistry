@@ -202,8 +202,10 @@ def _row_payload(row) -> Optional[dict]:
 
 
 def _drain_live(last_rowid: int) -> int:
-    """Per-row event emission for the live stream. Skips is_from_me (outbound
-    echo — imessage/outbound already wrote the line)."""
+    """Live drain. Emits both inbound and outbound (is_from_me) rows so PAI
+    stays aware of active conversations the owner is in. Coalesces multi-row
+    bursts from a single SQL pass into one backlog event so PAI gets one
+    nudge, not N."""
     rows = _query_rows(last_rowid)
     if rows is None:
         return last_rowid
@@ -211,6 +213,7 @@ def _drain_live(last_rowid: int) -> int:
         print(f"[imessage-in] live drain: {len(rows)} rows since rowid={last_rowid}", flush=True)
 
     new_last = last_rowid
+    messages: list[dict] = []
     for row in rows:
         rowid = int(row["rowid"])
         new_last = max(new_last, rowid)
@@ -219,9 +222,19 @@ def _drain_live(last_rowid: int) -> int:
             ab_len = len(row["attributed_body"] or b"")
             print(f"[imessage-in] skipped rowid={rowid} (undecodable body or no handle, ab_len={ab_len})", flush=True)
             continue
-        payload = {"source": "imessage", "kind": "new_message", **payload}
+        messages.append(payload)
+
+    if len(messages) == 1:
+        payload = {"source": "imessage", "kind": "new_message", **messages[0]}
         P.emit_event(payload)
-        print(f"[imessage-in] emitted rowid={rowid} → {payload['handle']} (from_me={payload.get('is_from_me')})", flush=True)
+        print(f"[imessage-in] emitted → {payload['handle']} (from_me={payload['is_from_me']})", flush=True)
+    elif len(messages) > 1:
+        P.emit_event({
+            "source": "imessage",
+            "kind": "messages_multiple",
+            "messages": messages,
+        })
+        print(f"[imessage-in] emitted multiple ({len(messages)} messages, coalesced)", flush=True)
 
     if new_last != last_rowid:
         _save_cursor(new_last)

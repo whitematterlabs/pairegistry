@@ -11,7 +11,3 @@ wake_on:
   - whatsapp:send_failed
 deps:
   - whatsapp
-home:
-  links:
-    - link: whatsapp-messages
-      target: var/spool/communication/whatsapp

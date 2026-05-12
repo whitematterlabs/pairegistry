@@ -4,3 +4,7 @@ version: 0.1.0
 description: "iMessage driver: tails chat.db, sends via AppleScript"
 deps:
   - tailer
+home:
+  links:
+    - link: messages
+      target: var/spool/communication/messages

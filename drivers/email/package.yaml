@@ -4,3 +4,9 @@ version: 0.1.0
 description: Email driver namespace; ships macmail subdriver
 deps:
   - tailer
+home:
+  links:
+    - link: communication/email
+      target: var/spool/communication/email
+    - link: drafts
+      target: var/spool/communication/email/drafts

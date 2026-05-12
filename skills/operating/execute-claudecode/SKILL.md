@@ -49,6 +49,26 @@ read_first: memory/skills/schedule-reminder/SKILL.md, memory/skills/<other>/SKIL
 
 This is a kernel-side scan (one `ls`, no `cat`), not pre-scouting the artifact. It doesn't violate the "no pre-scout" rule below — you're picking pointers, not doing the subprocess's work. Skip the field if nothing in `memory/skills/` plausibly applies.
 
+## Driver briefs — pin the no-backfill rule
+
+If `type: driver` and the surface has history (calendar, email,
+messages, contacts, photos, files — anything with a past), the brief
+**must** include a line stating that first-run starts from `now`,
+never backfills history. Claudecode defaults to "be thorough" and
+will happily iterate every event since 1970 if you don't pin this.
+
+Add to the brief, verbatim or tightened:
+
+```
+no-backfill: first run establishes a cursor at "now" under
+  /sys/drivers/<name>/ and emits zero events for items older than
+  that. backfill is a separate bin, not driver boot behavior.
+```
+
+See `author-driver` §"Don't backfill history. Start from 'now.'" for
+the cursor shape per surface — point the brief at it via
+`read_first:` so the subprocess picks the right watermark.
+
 ## Invocation
 
 ```sh

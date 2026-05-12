@@ -10,13 +10,9 @@ wake_on:
   - email:backlog
   - email:draft_failed
 deps:
-  - email          # the email driver (ships macmail)
+  - email          # the email driver (ships macmail; brings communication/email + drafts)
   - mailsearch     # the bin
 home:
   links:
-    - link: communication/email
-      target: var/spool/communication/email
     - link: communication/messages
       target: var/spool/communication/messages
-    - link: drafts
-      target: var/spool/communication/email/drafts

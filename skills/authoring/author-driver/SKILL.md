@@ -149,6 +149,44 @@ never starts, and the entire fleet goes silent. Symptom in
                                   (no "driver started: <your-driver>" line follows)
 ```
 
+### Don't backfill history. Start from "now."
+
+A driver attaching to an existing surface (calendar, email, messages,
+contacts, photos, files) **must not ingest the full history** on first
+run. The owner has years of data; emitting one event per historical
+item floods every PAI with `wake_on:` matching the kind, burns model
+turns, fills `/var/spool/`, and produces zero value — those events
+already happened, the owner has already dealt with them.
+
+On first run the driver's job is to **establish a cursor at "now"**
+and emit nothing for what came before. The cursor lives under
+`/sys/drivers/<name>/` (e.g. `cursor.yaml` with `last_seen: <ISO ts>`
+or `last_rowid: N`). If the file is missing, initialize it to the
+current high-water mark and stop. From the next tick onward, emit
+only items strictly newer than the cursor.
+
+Concretely:
+
+| Surface | First-run cursor |
+|---|---|
+| Calendar (EventKit) | `last_modified` watermark = `now`; only emit events whose `modificationDate > cursor` going forward. Do **not** iterate `predicateForEventsWithStartDate` over the past. |
+| Email (IMAP/Mail) | `last_uid` per folder = current max UID. |
+| iMessage (`chat.db`) | `last_rowid` = `SELECT MAX(ROWID) FROM message`. |
+| Files (FSEvents) | Subscribe from now; never replay the directory. |
+| HTTP webhook | No cursor — events arrive in real time by definition. |
+
+If the owner explicitly asks for backfill ("import my last month of
+calendar events"), that is a **one-shot bin invocation**, not driver
+boot behavior. The driver still starts at `now`; the bin emits the
+historical batch on demand with a bounded window.
+
+Symptom of getting this wrong: the kernel log shows hundreds-to-
+thousands of `<driver>:<kind>` events in the first seconds after
+`paictl start`, every consumer PAI's `/proc/<pai>/log.md` is buried,
+and the owner's inbox fills with stale-looking nudges. If you see this
+during verify, **stop the driver, fix the cursor, wipe
+`/sys/drivers/<name>/`**, and restart.
+
 ### Don't poll. Subscribe.
 
 PAI is an event-driven system. A driver that wakes up every N seconds
@@ -511,6 +549,10 @@ If you're unsure how to reach the external surface:
 - **Don't import `subprocess.Popen` for long-running children.**
   Use `asyncio.create_subprocess_exec` so reading the child's stdout
   doesn't block the kernel.
+- **Don't backfill history on first run.** Cursor at "now"; emit only
+  what arrives after. Backfilling years of calendar/email/messages
+  events floods every consumer PAI and produces zero value. See
+  "Don't backfill history. Start from 'now.'" above.
 - **Don't poll when a notification API exists.** PAI is event-driven;
   a `while True: await asyncio.sleep(2); check()` loop against a file,
   DB, or app is almost always wrong. Use `watchdog` / FSEvents,

@@ -8,3 +8,7 @@ libexec:
   install: ["pnpm", "install", "--prod"]
 post_install:
   - whatsapp_pair
+home:
+  links:
+    - link: whatsapp-messages
+      target: var/spool/communication/whatsapp

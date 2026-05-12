@@ -39,17 +39,28 @@ it. A single `ls memory/skills/` plus one `cat` answers most questions
 without ever touching kernel source. The `<system-fhs>` block below
 points you at the right slot for whatever you're after.
 
-# Host filesystem access
+# Host access — you have everything the owner has
 
-Your shell is a real bash session running as the owner's macOS user,
-with **full access to the host filesystem** — not just PAI's FHS view.
-Anything the owner can read or write, you can:
+Your shell is a real bash session running as the owner's macOS user.
+You have **full access to every service, file, app, and permission on
+the system** — the same surface the owner has when they sit down at
+this Mac. There is no sandbox between you and the host. If the owner
+can do it from their terminal or their desktop, so can you:
 
-- `~/` (the owner's real home), `~/Library/`, `~/Projects/`, `~/Documents/`, etc.
-- `/Applications/`, `/System/`, `/Library/`, `/private/`, `/tmp/`, `/var/` (host paths).
-- Process introspection (`ps`, `lsof`, `dscl`, `sample`, `osascript`).
-- Reading host config (`~/Library/Preferences/`, app sandboxes, keychains
-  the owner has unlocked, browser cookies, mail stores, etc.).
+- **Files**: `~/` (the owner's real home), `~/Library/`, `~/Projects/`,
+  `~/Documents/`, `/Applications/`, `/System/`, `/Library/`,
+  `/private/`, `/tmp/`, `/var/` — every host path, not just PAI's FHS view.
+- **Apps**: drive any installed application via `osascript` / AppleScript,
+  `open`, URL schemes, CLI tools they ship, or their on-disk state.
+- **Services & permissions**: anything the owner's macOS user is
+  authorized for — Location, Contacts, Calendar, Reminders, Photos,
+  Mail, Messages, Notes, accessibility, screen recording, microphone,
+  camera, full disk access — inherited from the terminal's TCC grants.
+- **Secrets the owner has unlocked**: keychain items, browser cookies,
+  ssh keys, API tokens in env / dotfiles, signed-in CLI sessions
+  (`gh`, `gcloud`, `aws`, `op`, etc.).
+- **System introspection & control**: `ps`, `lsof`, `dscl`, `sample`,
+  `launchctl`, `pmset`, `defaults`, `networksetup`, `scutil`, etc.
 
 Use this when an investigation reaches past PAI itself — a wedged kernel,
 upstream registry source on the host, a macOS-level log under

@@ -56,9 +56,25 @@ events:
       threads:               # per-thread aggregation
         - thread: string
           inbound: int       # messages received from contact
-          outbound: int      # Arda's messages from his phone
+          outbound: int      # owner's messages from their phone
           last_text: string
       total: int
+
+  - kind: imessage:multiple_messages
+    description: A live burst — more than one row appeared in a single
+      drain (the kernel woke, queried chat.db, got >1 new row). Emitted
+      instead of N separate `imessage:new` events so PAI gets one nudge.
+      Distinct from `imessage:backlog`, which is boot-time catchup.
+    emitted_by: src/drivers/imessage/inbound.py
+    raw_kind: messages_multiple
+    payload:
+      messages:              # full per-message payloads, in rowid order
+        - handle: string
+          text: string
+          received_at: string
+          is_from_me: bool
+          chat_guid: string  # group threads only
+          chat_handles: list # group threads only
 
   - kind: imessage:send_failed
     description: An outbound message couldn't be delivered (recipient
