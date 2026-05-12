@@ -64,3 +64,4 @@ claude -p --dangerously-skip-permissions "<brief>"
   kernel work.
 - If the brief is ambiguous, pick the simplest reasonable read over
   a clarification round-trip.
+

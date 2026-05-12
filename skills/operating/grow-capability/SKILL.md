@@ -92,7 +92,23 @@ New `bin/` tools appear in the requester's next turn automatically. New drivers 
 - Build and notify. Don't invoke the new capability yourself.
 - Don't message the owner. The requester handles user-facing follow-through.
 - For refinement, ask the **requester**, never the owner.
-- Data is a file, tools are binaries, long-horizon work is a new PAI. No polling loops in bins.
+- Data is a file, tools are binaries, long-horizon work is a new PAI.
+
+## Build event-driven, always
+
+PAI reacts to events. Every reactive capability resolves to one of:
+
+- **Existing driver covers the surface** — wire `wake_on:` to its
+  `<surface>:new|changed|removed`.
+- **No driver covers it** — build a driver that observes natively
+  (file watch, sqlite trigger, webhook, OS callback) and emits
+  events.
+- **Clock-bound trigger** ("remind me at 3pm") — `paicron`
+  schedules a one-shot event.
+
+A `shape:` line that says "every N seconds," "periodically," or
+"checks for new X" means the design is wrong — usually a missing
+driver. Rescope before firing claudecode.
 
 ## Logging
 
