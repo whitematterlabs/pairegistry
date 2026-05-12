@@ -31,10 +31,19 @@ Installable bundle kinds (from `paiman.py`): **bin, sbin, driver, skill, prompt,
 
 **Default to `bin` when unsure.** Bins are cheap: one file, one CLI contract, no lifecycle. Drivers are expensive: FHS layout under `/usr/lib/drivers/<name>/`, `events.yaml` vocabulary, supervisor lifecycle, on-disk spool in sync with an external world. Don't pay that cost unless the surface earns it.
 
-### Collapsibility test
+### Gate 1 — reactive or imperative?
 
-> Can the request be served by an existing primitive under `/usr/lib/drivers/` plus a `bin` (or a `skill`), without losing native event hooks or piling per-call ceremony at the frequency this surface will actually be hit?
-> Yes → **bin** (or skill). Always.
+Answer this first. A reactive capability ("notify me when X changes", "remind me before Y", "wake on Z") needs a driver emitting events. An imperative capability ("run X", "fetch Y", "post Z") doesn't.
+
+- **Reactive + driver already exists** (check `ls /usr/lib/drivers/` and its `events.yaml`) → wire `wake_on:` to its events. No new bundle needed, or a thin skill.
+- **Reactive + no driver for the surface** → **build a driver**. Stop. Don't build a bin that polls. A bin that polls is the wrong scope, not a faster path.
+- **Imperative** → continue to Gate 2.
+
+An existing **bin** for the surface does not count — bins don't emit events. Only a driver does.
+
+### Gate 2 — bin or something heavier?
+
+For imperative work, default to `bin`. Pick from the table below only if `bin` clearly doesn't fit.
 
 ### Pick a kind
 
@@ -93,22 +102,6 @@ New `bin/` tools appear in the requester's next turn automatically. New drivers 
 - Don't message the owner. The requester handles user-facing follow-through.
 - For refinement, ask the **requester**, never the owner.
 - Data is a file, tools are binaries, long-horizon work is a new PAI.
-
-## Build event-driven, always
-
-PAI reacts to events. Every reactive capability resolves to one of:
-
-- **Existing driver covers the surface** — wire `wake_on:` to its
-  `<surface>:new|changed|removed`.
-- **No driver covers it** — build a driver that observes natively
-  (file watch, sqlite trigger, webhook, OS callback) and emits
-  events.
-- **Clock-bound trigger** ("remind me at 3pm") — `paicron`
-  schedules a one-shot event.
-
-A `shape:` line that says "every N seconds," "periodically," or
-"checks for new X" means the design is wrong — usually a missing
-driver. Rescope before firing claudecode.
 
 ## Logging
 

@@ -32,6 +32,23 @@ write.
 The only check before invoking: **do you know what artifact you want
 and where it lands?** If yes, fire.
 
+## Point the subprocess at relevant skills
+
+Claudecode spawns with no system prompt and no knowledge of PAI conventions. Cold, it will reinvent patterns we already have (e.g. roll its own polling loop instead of using `schedule-reminder`'s one-shot `paicron` + `reason: schedule fired` wake).
+
+Before firing, `ls memory/skills/` and pick the 1–3 skills whose names match the work. Add a `read_first:` line to the brief listing their paths. The subprocess `cat`s those first, then builds.
+
+```
+type: bin
+name: foo
+need: …
+why: …
+shape: foo --bar
+read_first: memory/skills/schedule-reminder/SKILL.md, memory/skills/<other>/SKILL.md
+```
+
+This is a kernel-side scan (one `ls`, no `cat`), not pre-scouting the artifact. It doesn't violate the "no pre-scout" rule below — you're picking pointers, not doing the subprocess's work. Skip the field if nothing in `memory/skills/` plausibly applies.
+
 ## Invocation
 
 ```sh

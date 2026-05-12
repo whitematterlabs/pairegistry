@@ -1,5 +1,0 @@
-name: calendar
-kind: bin
-version: 0.1.0
-description: List and add events on macOS calendars via EventKit (Swift bridge)
-entrypoint: calendar.py
