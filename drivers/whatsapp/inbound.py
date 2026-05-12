@@ -112,9 +112,13 @@ def _write_message(thread_dir: Path, sender: str, text: str, ts_iso: str | None 
             pass
     day_file = thread_dir / f"{when.strftime('%Y-%m-%d')}.md"
     hm = when.strftime("%H:%M")
-    line = f"[{hm}] {sender}: {text}\n"
+    # Prefix every line: day-files invariant is "every line starts with
+    # [HH:MM] sender:". Bare continuation lines would otherwise be picked
+    # up by the outbound tailer as send requests and echoed to the sender.
+    prefix = f"[{hm}] {sender}: "
+    body = "".join(prefix + ln + "\n" for ln in text.splitlines() or [""])
     with day_file.open("a") as f:
-        f.write(line)
+        f.write(body)
     return day_file
 
 
@@ -302,6 +306,9 @@ async def _read_bridge_stdout(proc: asyncio.subprocess.Process) -> None:
             body = data.get("body", "")
             if not phone or not body:
                 continue
+            # Strip Baileys device suffix ("<phone>:<device>") — handles in
+            # people/<slug>/about.yaml store the bare phone number.
+            phone = phone.split(":", 1)[0]
             phone = _resolve_lid_to_phone(phone)
 
             slug, display_name = _lookup_contact(phone)
