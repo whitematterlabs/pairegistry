@@ -36,4 +36,15 @@ cat > "$LIBEXEC/env" <<EOF
 export PYTHONPATH="$VENDOR\${PYTHONPATH:+:\$PYTHONPATH}"
 EOF
 
+ENTRY="$PAI_ROOT/usr/lib/subagents/browse/entry.py"
+SHIM="$PAI_ROOT/usr/bin/browse"
+mkdir -p "$PAI_ROOT/usr/bin"
+cat > "$SHIM" <<EOF
+#!/usr/bin/env bash
+exec env PYTHONPATH="$VENDOR\${PYTHONPATH:+:\$PYTHONPATH}" \\
+  "$VENV/bin/python" "$ENTRY" "\$@"
+EOF
+chmod +x "$SHIM"
+echo "[browse/install] shim → $SHIM"
+
 echo "[browse/install] done."
