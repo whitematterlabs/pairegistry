@@ -1,0 +1,5 @@
+name: browse
+kind: bin
+version: 0.1.0
+description: Thin CDP verbs against the owner's persistent Chrome (one tab per subagent).
+entrypoint: browse.py
