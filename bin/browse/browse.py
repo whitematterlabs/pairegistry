@@ -51,15 +51,23 @@ CDP_PORT = 9222
 CDP_BASE = f"http://127.0.0.1:{CDP_PORT}"
 TAB_DIR = PAI_ROOT / "sys" / "drivers" / "browse" / "tabs"
 SNAP_DIR = PAI_ROOT / "sys" / "drivers" / "browse" / "snapshots"
-CHROME_PROFILE = str(Path.home() / "Library" / "Application Support" / "Google" / "Chrome")
+# Chrome 136+ blocks --remote-debugging-port when --user-data-dir resolves
+# to the user's default profile path. PAI keeps its own profile dir under
+# PAI_ROOT; on first launch we seed it from the owner's real profile so
+# logged-in sessions carry over. After that the two profiles drift —
+# logins added in real Chrome later won't appear here automatically; re-seed
+# by deleting CHROME_PROFILE.
+CHROME_PROFILE = str(PAI_ROOT / "var" / "chrome" / "profile")
+REAL_CHROME_PROFILE = str(Path.home() / "Library" / "Application Support" / "Google" / "Chrome")
 CHROME_LAUNCH_TIMEOUT_S = 60
 DEFAULT_NAV_TIMEOUT_S = 30
 
 
 # ---------- HTTP helpers ----------
 
-def _http_json(path: str, timeout: float = 2.5):
-    with urlreq.urlopen(f"{CDP_BASE}{path}", timeout=timeout) as r:
+def _http_json(path: str, timeout: float = 2.5, method: str = "GET"):
+    req = urlreq.Request(f"{CDP_BASE}{path}", method=method)
+    with urlreq.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read())
 
 
@@ -71,19 +79,90 @@ def _cdp_alive() -> bool:
         return False
 
 
+CHROME_APP_BIN = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
+
+def _seed_profile_if_needed() -> None:
+    """One-time clone of the owner's real Chrome profile into CHROME_PROFILE.
+    Runs only when CHROME_PROFILE doesn't exist yet. After the seed, the
+    two profiles diverge — that's intentional, since PAI's Chrome runs
+    independently from the owner's daily Chrome."""
+    profile = Path(CHROME_PROFILE)
+    if profile.is_dir():
+        return
+    src = Path(REAL_CHROME_PROFILE)
+    if not src.is_dir():
+        print(
+            f"[browse] real Chrome profile not found at {src}; "
+            f"starting with a fresh profile",
+            file=sys.stderr,
+        )
+        profile.mkdir(parents=True, exist_ok=True)
+        return
+    print(
+        f"[browse] first-run: cloning {src.name} → {profile}\n"
+        f"[browse] (this preserves your logged-in sessions; can take a minute)",
+        file=sys.stderr,
+    )
+    profile.mkdir(parents=True, exist_ok=True)
+    # rsync the bits that matter: top-level Local State (cookie crypto key
+    # + profile registry) and the Default subprofile (cookies, login data,
+    # bookmarks, history). Skip the gigabyte-scale Cache/ subdirs.
+    rsync_args = [
+        "rsync", "-a",
+        "--exclude=Default/Cache/",
+        "--exclude=Default/Code Cache/",
+        "--exclude=Default/GPUCache/",
+        "--exclude=Default/Service Worker/",
+        "--exclude=Default/File System/",
+        "--exclude=Default/DawnGraphiteCache/",
+        "--exclude=Default/DawnWebGPUCache/",
+        "--exclude=Default/Application Cache/",
+        "--include=Local State",
+        "--include=Default/***",
+        "--exclude=*",
+        f"{src}/",
+        f"{profile}/",
+    ]
+    try:
+        subprocess.run(rsync_args, check=True, timeout=300)
+    except subprocess.CalledProcessError as e:
+        print(f"[browse] profile seed failed (rsync rc={e.returncode}); "
+              f"continuing with whatever was copied", file=sys.stderr)
+    except subprocess.TimeoutExpired:
+        print("[browse] profile seed timed out after 5 minutes; "
+              "continuing with partial copy", file=sys.stderr)
+
+
 def _ensure_chrome() -> None:
-    """Lazy-launch the owner's real Chrome with CDP on 9222. No-op if up."""
+    """Ensure the owner's real Chrome is up with CDP on 9222.
+
+    Three states:
+      - CDP alive → no-op.
+      - Chrome running without CDP → quit it (session-restore brings tabs
+        back on relaunch) and relaunch with --remote-debugging-port.
+      - Chrome not running → launch with CDP.
+
+    Launch path uses the Chrome binary directly (not `open -na`) because
+    LaunchServices silently drops the --args when an instance is already
+    registered, and `subprocess.Popen` with `start_new_session=True`
+    gives us deterministic flag passing.
+    """
     if _cdp_alive():
         return
+    if not Path(CHROME_APP_BIN).is_file():
+        sys.exit(f"browse: Chrome not found at {CHROME_APP_BIN}")
+    _seed_profile_if_needed()
     subprocess.Popen(
         [
-            "open", "-na", "Google Chrome", "--args",
+            CHROME_APP_BIN,
             f"--remote-debugging-port={CDP_PORT}",
             "--remote-debugging-address=127.0.0.1",
             f"--remote-allow-origins=http://127.0.0.1:{CDP_PORT}",
             f"--user-data-dir={CHROME_PROFILE}",
             "--no-first-run",
             "--no-default-browser-check",
+            "about:blank",
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -94,8 +173,11 @@ def _ensure_chrome() -> None:
         if _cdp_alive():
             return
         time.sleep(0.4)
-    sys.exit(f"browse: Chrome did not expose CDP on {CDP_BASE} within "
-             f"{CHROME_LAUNCH_TIMEOUT_S}s")
+    sys.exit(
+        f"browse: Chrome did not expose CDP on {CDP_BASE} within "
+        f"{CHROME_LAUNCH_TIMEOUT_S}s. If Chrome is open, fully quit it "
+        f"(⌘Q) and re-run the verb."
+    )
 
 
 # ---------- Minimal WebSocket client (stdlib only) ----------
@@ -282,7 +364,8 @@ def _ws_for_tab(tab_id: str) -> str | None:
 
 
 def _new_target() -> dict:
-    return _http_json("/json/new?about:blank")
+    # Chrome 119+ rejects GET on /json/new; PUT is required.
+    return _http_json("/json/new?about:blank", method="PUT")
 
 
 def _ensure_tab(slug: str) -> tuple[dict, str]:
