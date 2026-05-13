@@ -49,15 +49,29 @@ read_first: memory/skills/schedule-reminder/SKILL.md, memory/skills/<other>/SKIL
 
 This is a kernel-side scan (one `ls`, no `cat`), not pre-scouting the artifact. It doesn't violate the "no pre-scout" rule below — you're picking pointers, not doing the subprocess's work. Skip the field if nothing in `memory/skills/` plausibly applies.
 
-## Driver briefs — pin the no-backfill rule
+## Driver briefs — author-driver is mandatory
 
-If `type: driver` and the surface has history (calendar, email,
-messages, contacts, photos, files — anything with a past), the brief
-**must** include a line stating that first-run starts from `now`,
-never backfills history. Claudecode defaults to "be thorough" and
-will happily iterate every event since 1970 if you don't pin this.
+For **every** `type: driver` brief, `read_first:` **must** include
+`memory/skills/author-driver/SKILL.md`. No exceptions — not "if the
+surface has history", not "if it polls", always. Claudecode spawns
+with no system prompt; without that skill loaded it will reinvent
+the driver shape (cursors, async contract, event batching,
+backfill avoidance, sidecar layout) from scratch and get at least
+one of them wrong.
 
-Add to the brief, verbatim or tightened:
+Concretely, the `read_first:` line on a driver brief looks like:
+
+```
+read_first: memory/skills/author-driver/SKILL.md[, …other skills]
+```
+
+If you catch yourself writing a `type: driver` brief without that
+path in `read_first:`, stop and add it before firing.
+
+Additionally, if the surface has history (calendar, email,
+messages, contacts, photos, files — anything with a past), pin the
+no-backfill rule in the brief body too, since it's the single
+biggest failure mode:
 
 ```
 no-backfill: first run establishes a cursor at "now" under
@@ -65,9 +79,9 @@ no-backfill: first run establishes a cursor at "now" under
   that. backfill is a separate bin, not driver boot behavior.
 ```
 
-See `author-driver` §"Don't backfill history. Start from 'now.'" for
-the cursor shape per surface — point the brief at it via
-`read_first:` so the subprocess picks the right watermark.
+The cursor shape per surface is in `author-driver` §"Don't backfill
+history. Start from 'now.'" — the subprocess will reach it via the
+mandatory `read_first:` above.
 
 ## Invocation
 

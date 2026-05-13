@@ -1,21 +1,20 @@
 # Event spec for the calendar driver.
 #
 # Watches Apple Calendar via EventKit (EKEventStoreChangedNotification on a
-# background NSRunLoop thread) and emits one event per affected calendar
-# item whenever the cached snapshot of upcoming events disagrees with the
-# live store. The entity shape is the same across all three kinds so
-# downstream PAIs can schedule reminders from the start time directly.
+# background NSRunLoop thread) and emits one `calendar:changes` event per
+# refresh, carrying `new` / `changed` / `removed` lists. One event per
+# refresh = one PAI nudge — per-item events would flood the bus on first
+# boot when the whole horizon lands in `new`.
 #
-# Partition key: `uid` (EKEvent.calendarItemIdentifier, stable across edits;
-# falls back to eventIdentifier if the calendar item id is unavailable).
+# Partition key (per item): `uid` (EKEvent.calendarItemIdentifier, stable
+# across edits; falls back to eventIdentifier if unavailable).
 #
 # `kind` is the routing key — PAIs match it with `wake_on:` globs like
-# `calendar:*` or `calendar:new`. `raw_kind` is the YAML `kind:` field on
-# the event file in /run/pai/events/; the generic driver router in the
-# kernel composes `<source>:<raw_kind>` to produce the routing kind.
+# `calendar:*` or `calendar:changes`. The kernel composes
+# `<source>:<raw_kind>` to produce the routing kind.
 
 driver: calendar
-description: Apple Calendar change notifications (new / changed / removed).
+description: Apple Calendar change notifications (batched new / changed / removed).
 
 processes:
   - slug: calendar-in
@@ -23,47 +22,23 @@ processes:
     entrypoint: run
 
 events:
-  - kind: calendar:new
-    description: A new calendar event appeared inside the upcoming-events horizon.
+  - kind: calendar:changes
+    description: One refresh's diff against the cached horizon snapshot.
+      Any of `new` / `changed` / `removed` may be empty, but at least one
+      is non-empty (no event fires for a no-op refresh). On first boot the
+      whole upcoming window lands in `new`.
     emitted_by: drivers/calendar/inbound.py
-    raw_kind: new
+    raw_kind: changes
     payload:
+      new: list[item]         # newly in horizon
+      changed: list[item]     # tracked-field change on an existing uid
+      removed: list[item]     # dropped from horizon (deleted / moved out / unsubscribed)
+    item_shape:
       uid: string             # EKEvent.calendarItemIdentifier
       title: string
       start: string           # ISO 8601 with local tz offset
       end: string|null        # ISO 8601, or null if no end date
       location: string|null
       calendar_name: string   # EKCalendar.title (e.g. "Work", "Personal")
-      notes: string|null
-      is_all_day: bool
-
-  - kind: calendar:changed
-    description: An existing event in the horizon had one of its tracked
-      fields (title/start/end/location/calendar_name/notes/is_all_day) change.
-    emitted_by: drivers/calendar/inbound.py
-    raw_kind: changed
-    payload:
-      uid: string
-      title: string
-      start: string
-      end: string|null
-      location: string|null
-      calendar_name: string
-      notes: string|null
-      is_all_day: bool
-
-  - kind: calendar:removed
-    description: An event that was previously inside the horizon is gone
-      (deleted, moved out of the horizon, or its calendar was unsubscribed).
-      Payload reflects the LAST-known snapshot, not live data.
-    emitted_by: drivers/calendar/inbound.py
-    raw_kind: removed
-    payload:
-      uid: string
-      title: string
-      start: string
-      end: string|null
-      location: string|null
-      calendar_name: string
       notes: string|null
       is_all_day: bool

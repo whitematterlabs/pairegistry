@@ -3,8 +3,10 @@
 Subscribes to `EKEventStoreChangedNotification` on a background
 `NSRunLoop` thread (PyObjC). On each notification, rescans the upcoming
 HORIZON_DAYS window via EventKit, diffs against the cached snapshot in
-`/sys/drivers/calendar/state.json`, and emits one `calendar:new` /
-`calendar:changed` / `calendar:removed` event per affected item.
+`/sys/drivers/calendar/state.json`, and emits one `calendar:changes`
+event carrying `new`/`changed`/`removed` lists for the whole refresh.
+Per-item events would fan out to one PAI nudge each, which on first
+boot floods the bus; one event per refresh = one nudge.
 
 Why EventKit and not `~/Library/Calendars/*.sqlitedb`: Apple changes the
 Calendar SQLite schema between releases without notice, and EventKit
@@ -41,8 +43,8 @@ STATE_PATH = STATE_DIR / "state.json"
 
 # How far ahead the driver tracks events. Anything beyond rolls into the
 # window naturally as time advances; the next refresh after midnight will
-# pick up newly-in-horizon events as `calendar:new`.
-HORIZON_DAYS = 30
+# pick up newly-in-horizon events in the `new` list of `calendar:changes`.
+HORIZON_DAYS = 3
 
 # Slow safety-net refresh when no EKEventStoreChangedNotification has
 # fired. Notifications are usually instant, so this is purely a backstop.
@@ -137,15 +139,17 @@ def _diff(prev: dict[str, dict], curr: dict[str, dict]):
 
 
 def _emit_diff(new: list[dict], changed: list[dict], removed: list[dict]) -> None:
-    for ent in new:
-        P.emit_event({"source": "calendar", "kind": "new", **ent})
-        print(f"[calendar-in] new: {ent['uid']} {ent['title']!r} @ {ent['start']}", flush=True)
-    for ent in changed:
-        P.emit_event({"source": "calendar", "kind": "changed", **ent})
-        print(f"[calendar-in] changed: {ent['uid']} {ent['title']!r}", flush=True)
-    for ent in removed:
-        P.emit_event({"source": "calendar", "kind": "removed", **ent})
-        print(f"[calendar-in] removed: {ent['uid']} {ent['title']!r}", flush=True)
+    P.emit_event({
+        "source": "calendar",
+        "kind": "changes",
+        "new": new,
+        "changed": changed,
+        "removed": removed,
+    })
+    print(
+        f"[calendar-in] changes: new={len(new)} changed={len(changed)} removed={len(removed)}",
+        flush=True,
+    )
 
 
 def _request_access(store) -> bool:
@@ -275,10 +279,9 @@ async def run() -> None:
             state.update(snap)
             await asyncio.to_thread(_save_state, state)
 
-    # Initial diff against whatever we cached last run. If state.json is
-    # empty (first boot), every upcoming event emits as `calendar:new` —
-    # that's intentional: it gives PAIs the full upcoming window to set
-    # reminders against, without a separate bootstrap event kind.
+    # Initial diff against whatever we cached last run. On first boot
+    # state.json is empty, so the full upcoming window lands in the `new`
+    # list of a single `calendar:changes` event — one nudge, full context.
     try:
         await _refresh()
     except Exception as e:

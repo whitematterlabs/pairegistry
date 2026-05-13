@@ -187,6 +187,55 @@ and the owner's inbox fills with stale-looking nudges. If you see this
 during verify, **stop the driver, fix the cursor, wipe
 `/sys/drivers/<name>/`**, and restart.
 
+### Event-volume budget — batch, don't fan out.
+
+A driver emits **one event per real-world change**, not one event
+per affected item. If a single sync tick discovers N new/changed
+items, that is **one** event whose payload carries the list — not N
+events. The kernel routes every emitted event to every PAI whose
+`wake_on:` matches; N events = N model turns = N nudges in
+`/proc/<pai>/log.md`. Fan-out at emit time multiplies straight
+into the owner's attention.
+
+Rule of thumb: **if your driver could plausibly emit >10 events
+in <1 second, you're doing it wrong — batch.** Reconciling a
+calendar refresh, draining a backlog of new messages, replaying a
+file scan: all of these are *one* `<surface>:changes` event with
+`new: [...]`, `changed: [...]`, `removed: [...]` lists in the
+payload. The consuming PAI iterates the lists; the kernel sees a
+single nudge.
+
+Correct shape:
+
+```python
+P.emit_event({
+    "kind": "calendar:changes",
+    "new":     [...],   # list of items, possibly large
+    "changed": [...],
+    "removed": [...],
+})
+```
+
+Wrong shape (fan-out flood):
+
+```python
+for item in new_items:
+    P.emit_event({"kind": "calendar:item_added", "item": item})  # N nudges
+```
+
+Symptom of getting this wrong: at `paictl start <slug>` the kernel
+log shows dozens-to-hundreds of `<driver>:*` events in the first
+seconds, the owner gets a wall of nudges for things they already
+knew about, and consumer PAIs' `/proc/<pai>/log.md` is buried. If
+you see this during verify, stop the driver and collapse the loop
+into a single batched emit before restarting.
+
+This composes with the cursor rule above: cursor avoids emitting
+*historical* items at all; batching ensures that even legitimate
+"many things changed at once" surfaces (a calendar refresh after
+sleep, an email folder reindex) still cost the kernel exactly one
+event.
+
 ### Don't poll. Subscribe.
 
 PAI is an event-driven system. A driver that wakes up every N seconds
@@ -553,6 +602,11 @@ If you're unsure how to reach the external surface:
   what arrives after. Backfilling years of calendar/email/messages
   events floods every consumer PAI and produces zero value. See
   "Don't backfill history. Start from 'now.'" above.
+- **Don't emit one event per item.** One real-world tick = one
+  event with a list payload, not N events. If you could plausibly
+  emit >10 events in <1s, you're fanning out where you should be
+  batching. See "Event-volume budget — batch, don't fan out."
+  above.
 - **Don't poll when a notification API exists.** PAI is event-driven;
   a `while True: await asyncio.sleep(2); check()` loop against a file,
   DB, or app is almost always wrong. Use `watchdog` / FSEvents,

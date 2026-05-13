@@ -1,6 +1,6 @@
 name: calendar
 kind: driver
 version: 0.1.0
-description: 'Apple Calendar driver: watches EventKit and emits calendar:new|changed|removed'
+description: 'Apple Calendar driver: watches EventKit and emits batched calendar:changes events'
 deps:
 - pyobjc-framework-eventkit
