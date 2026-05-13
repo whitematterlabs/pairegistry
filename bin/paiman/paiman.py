@@ -537,7 +537,11 @@ def _iter_registry(root: Path) -> list[tuple[str, dict, Path]]:
     flat (`<root>/<name>/package.yaml`) and kind-foldered
     (`<root>/<kind>/<name>/package.yaml`). Returns (name, manifest, path)."""
     out: list[tuple[str, dict, Path]] = []
-    seen: set[str] = set()
+    # Dedupe on (kind, name) so a single name can legitimately appear under
+    # multiple kinds (e.g. a `bin/browse` verb and a `subagents/browse`
+    # bundle that teaches PAIs to use it). Falling back to name-only when
+    # kind is missing keeps the old behavior for malformed package.yaml.
+    seen: set[tuple[str, str]] = set()
     for entry in sorted(root.iterdir()):
         if not entry.is_dir() or entry.name.startswith("."):
             continue
@@ -548,8 +552,9 @@ def _iter_registry(root: Path) -> list[tuple[str, dict, Path]]:
                     data = yaml.safe_load(f) or {}
             except yaml.YAMLError as e:
                 data = {"_error": str(e)}
-            if entry.name not in seen:
-                seen.add(entry.name)
+            key = (str(data.get("kind") or ""), entry.name)
+            if key not in seen:
+                seen.add(key)
                 out.append((entry.name, data, entry))
             continue
         for sub in sorted(entry.iterdir()):
@@ -563,8 +568,9 @@ def _iter_registry(root: Path) -> list[tuple[str, dict, Path]]:
                     data = yaml.safe_load(f) or {}
             except yaml.YAMLError as e:
                 data = {"_error": str(e)}
-            if sub.name not in seen:
-                seen.add(sub.name)
+            key = (str(data.get("kind") or ""), sub.name)
+            if key not in seen:
+                seen.add(key)
                 out.append((sub.name, data, sub))
     return out
 
