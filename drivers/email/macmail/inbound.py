@@ -422,6 +422,19 @@ def _retry_parked(parked: dict[int, dict], cfg: A.AccountsConfig) -> list[tuple[
     return successes
 
 
+def _checkpoint(parked: dict[int, dict], last_rowid: int, last_announced: int) -> None:
+    """Persist the parked map + cursor together, as one logical step.
+
+    Called immediately after every `emit_event` so a crash/restart can
+    never re-announce an email whose event already went out: the on-disk
+    `last_announced_rowid` is never more than one emit behind reality.
+    Parked is saved first so the cursor never advances past a rowid that
+    isn't recorded somewhere.
+    """
+    _save_parked(parked)
+    _save_cursor(last_rowid, last_announced)
+
+
 def _drain_live(last_rowid: int, cfg: A.AccountsConfig, last_announced: int) -> tuple[int, int]:
     global _last_live_log
     parked = _load_parked()
@@ -444,6 +457,9 @@ def _drain_live(last_rowid: int, cfg: A.AccountsConfig, last_announced: int) -> 
         )
         if rid > last_announced:
             last_announced = rid
+        # Parked rowids are below last_rowid, so the cursor's first field
+        # is unchanged here — only last_announced moves.
+        _checkpoint(parked, last_rowid, last_announced)
 
     rows = _query_rows(last_rowid, cfg)
     if rows is None:
@@ -480,6 +496,10 @@ def _drain_live(last_rowid: int, cfg: A.AccountsConfig, last_announced: int) -> 
         print(f"[macmail-in] emitted rowid={rowid} → {result['account']} ({result['direction']})", flush=True)
         if rowid > last_announced:
             last_announced = rowid
+        # rows is ordered ASC, so max_processed == rowid here and no
+        # not-yet-processed row sits below it. Persisting the cursor now
+        # means a crash before the loop ends won't re-announce this row.
+        _checkpoint(parked, max(max_processed, last_rowid), last_announced)
 
     _save_parked(parked)
     new_last = max(max_processed, last_rowid)
@@ -540,6 +560,9 @@ def _drain_catchup(last_rowid: int, cfg: A.AccountsConfig, last_announced: int) 
         if not result.get("_skip") and rowid > new_announced:
             new_announced = rowid
 
+    new_last = max(max_processed, last_rowid)
+    final_announced = max(new_announced, last_announced)
+
     if summaries:
         total = sum(b["count"] for b in summaries.values())
         P.emit_event({
@@ -549,13 +572,15 @@ def _drain_catchup(last_rowid: int, cfg: A.AccountsConfig, last_announced: int) 
             "accounts": list(summaries.values()),
             "total": total,
         })
+        # Persist immediately after the emit — a crash here must not let the
+        # next boot re-announce this same backlog.
+        _checkpoint(parked, new_last, final_announced)
         print(f"[macmail-in] emitted backlog (total={total}, accounts={len(summaries)})", flush=True)
+    else:
+        _save_parked(parked)
+        if new_last != last_rowid or final_announced != last_announced:
+            _save_cursor(new_last, final_announced)
 
-    _save_parked(parked)
-    new_last = max(max_processed, last_rowid)
-    final_announced = max(new_announced, last_announced)
-    if new_last != last_rowid or final_announced != last_announced:
-        _save_cursor(new_last, final_announced)
     if parked:
         print(f"[macmail-in] catchup: {len(parked)} rowid(s) parked for retry", flush=True)
     return new_last, final_announced

@@ -524,6 +524,35 @@ needs go under `/sys/drivers/<name>/`. The driver owns this dir.
 Read-mostly for everyone else — it's the sysfs-style introspection
 window.
 
+## Becoming visible to a PAI — `home.links`
+
+A driver's `package.yaml` may declare `home.links` (same shape as a pai
+bundle's). When a PAI mounts this driver, the kernel stitches those
+links into the PAI's home — that is how a consumer PAI sees the
+on-disk surface the driver owns:
+
+```yaml
+name: email
+kind: driver
+home:
+  links:
+    - link: communication/email
+      target: var/spool/communication/email
+```
+
+A PAI mounts this driver when it lists the driver in its bundle `deps:`
+(or when it is the `fallback: true` PAI, which mounts every installed
+driver). Bundleless PAIs like `root` mount no drivers. So:
+
+- **Pick narrow link names.** They land in someone else's `$HOME`. A
+  link name that collides with a bundle/seed link is a hard stitch-time
+  error — you cannot shadow a bundle's path.
+- A library-only driver with no external surface to expose (e.g.
+  `contacts`, `messages`) can omit `home.links` entirely.
+
+Full policy (the three mounting rules): `memory/doc/FILESYSTEM_v3.md` →
+"Driver mounting".
+
 ## Prefer native APIs over raw DB access
 
 Before reading a SQLite file directly, check whether the OS or a

@@ -96,6 +96,17 @@ Rules:
   `drafts`, not `communication/`. Isolation is the point — email-pai
   shouldn't see iMessage and vice versa.
 
+### Driver mounting via `deps:`
+
+Listing a driver in `deps:` does two things, not one: `paiman` installs
+it, **and** the kernel stitches that driver's own `home.links` into this
+PAI's home. There is no way to depend on a driver without mounting it,
+and no per-instance override — every instance of this bundle mounts the
+same driver set. The mounted set is `deps ∩ installed-drivers` (a
+`fallback: true` PAI instead mounts *every* installed driver). If a
+driver's link name collides with one of yours here, stitch fails hard.
+Full policy: `memory/doc/FILESYSTEM_v3.md` → "Driver mounting".
+
 ## prompt.md — the role prompt
 
 The kernel assembles each nudge as `<custom>` (your prompt) plus

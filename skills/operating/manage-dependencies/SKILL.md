@@ -49,6 +49,13 @@ So `sbin/paiman install email-pai` pulls `email` (driver) and
 `mailsearch` (bin), then `email` pulls `tailer`, then any unresolved
 names get pip-installed in one shot.
 
+**Driver deps are also mount points.** A `driver` entry in a pai
+bundle's `deps:` isn't only installed — the kernel stitches that
+driver's `home.links` into the PAI's home at boot. `deps:` is the
+install list *and* the driver-mount list; there's no way to depend on
+a driver without mounting it. Policy: `memory/doc/FILESYSTEM_v3.md` →
+"Driver mounting".
+
 Disambiguate same-named bundles across typed roots with
 `<kind>/<name>` (e.g. `bin/subagent` vs `prompts/subagent`).
 
