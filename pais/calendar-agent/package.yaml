@@ -1,0 +1,12 @@
+name: calendar-agent
+kind: pai
+version: 0.1.0
+description: Calendar agent — writes schedule events learned from peer PAIs to Apple Calendar
+provider: deepseek
+model: deepseek-v4-pro
+prompt: prompt.md
+wake_on:
+  - calendar:request
+deps:
+  - calendar   # the calendar driver (read-only state snapshot)
+  - cal-add    # the bin

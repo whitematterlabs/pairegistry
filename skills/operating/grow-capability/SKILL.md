@@ -70,7 +70,7 @@ If the brief reads "book / send / post / buy / search / run / fetch" — that's 
 Use skill `execute-claudecode` to fire the brief. The brief shape (≤80 words, type/name/need/why/shape) is specified in root's prompt and in `execute-claudecode`; don't re-derive. Two kind-specific notes that don't belong in the prompt:
 
 - **driver**: before firing, settle five questions and put them in the brief: top-level dir, partition key, one entity-file shape, event kinds (`<surface>:new|changed|removed`), external source (sqlite path / API / AX). After claudecode lands it, `paiman install` → `paictl start <name>-in` → `reboot`. Background: `memory/doc/KERNEL.md`.
-- **pai bundle**: do the driver first if one is missing. Bundle brief must name `wake_on:` globs and a one-sentence role. After it lands, `paiadd <bundle>`.
+- **pai bundle**: do the driver first if one is missing. Bundle brief must name `wake_on:` globs and a one-sentence role. After it lands, follow the ship flow in skill `author-pai-bundle` (don't re-derive install/instantiate steps here).
 
 For `bin` / `skill` / `prompt` / `lib` / `subagent`: just the standard brief. No pre-design.
 

@@ -277,14 +277,19 @@ def build() -> Tailer:
         text = line.rstrip()
         if not text:
             return
-        # Bare line = outbound draft. Send, then write the canonical record
-        # and suppress the tailer's next read of that exact line.
+        # Bare line = outbound draft. Arm the echo registration *before*
+        # the send: kqueue on chat.db-wal fires faster than osascript
+        # returns to Python, so imessage-in can emit the from_me=True
+        # row before we'd otherwise have registered. Disarm on failure
+        # so a real owner-from-phone send isn't swallowed later.
+        slug = path.parent.name
+        outbound_echo.register(slug, text)
         ok = await _process_send(path, text)
         if not ok:
+            outbound_echo.consume(slug, text)
             return
         canonical = _append_canonical(path, text)
         tailer.suppress_next(path, canonical)
-        outbound_echo.register(path.parent.name, text)
 
     tailer = Tailer(
         name="imessage-out",

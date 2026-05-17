@@ -180,23 +180,50 @@ An instance can point its `prompt_dir` at
 text (e.g. work-email vs personal-email triage). Use sparingly —
 most divergence belongs in instance memory, not a forked prompt.
 
-## Scaffolding flow
+## Ship flow
+
+**Don't hand-write `package.yaml` + `prompt.md` from a blank file.** `paiman
+init` scaffolds both with the right shape — start there and edit. Hand-writing
+is how `version:`, `prompt:`, or `wake_on:` get forgotten and the bundle
+silently no-ops.
+
+**Pairegistry bundle** (general-purpose, the default):
 
 ```sh
-paiman init <name>            # /usr/lib/pais/<name>/ skeleton
+cd ~/Projects/pairegistry/pais       # paiman init scaffolds into CWD's
+paiman init <name>                   # pais/, hence the cd
+$EDITOR pais/<name>/package.yaml pais/<name>/prompt.md
+
+paiman install ~/Projects/pairegistry/pais/<name>   # install from local path
+paiadd <name>                        # writes /etc/config.yaml entry,
+                                     # creates instance dir,
+                                     # emits kernel:reload_config
+```
+
+**Local-only bundle** (owner-specific, never going to pairegistry):
+
+```sh
+paiman init <name>                   # scaffolds /usr/lib/pais/<name>/
 $EDITOR /usr/lib/pais/<name>/package.yaml prompt.md
+paiadd <name>                        # no install step — already in place
+```
 
-paiadd <bundle>               # writes config entry, creates instance dir,
-                              # emits kernel:reload_config
+**Lifecycle after `paiadd`:**
 
-paictl stop <inst>            # mark inactive
-paictl start <inst>           # reactivate
-paidel <inst>                 # remove entry; preserves instance state
-paidel <inst> --purge         # also wipe /var/lib/instances/<inst>/
+```sh
+paictl stop <inst>                   # mark inactive
+paictl start <inst>                  # reactivate
+paidel <inst>                        # remove entry; preserves instance state
+paidel <inst> --purge                # also wipe /var/lib/instances/<inst>/
 ```
 
 All four end by emitting `kernel:reload_config`. Hand-edit
 `/etc/config.yaml` only to fix an entry.
+
+**Forgetting `paiadd` is the #1 silent failure.** `paiman install` only puts
+the *template* in place — the kernel doesn't wake a bundle that has no fleet
+entry. If `paictl status <name>` shows nothing after install, you skipped
+`paiadd`.
 
 ## Don't
 
