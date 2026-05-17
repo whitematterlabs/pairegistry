@@ -1,5 +1,20 @@
 import Foundation
+import ApplicationServices
 import AXSwift
+
+// Same SIGABRT trap as in AppObserver — AXSwift's generic attribute<T>
+// force-casts the AnyObject AX returns. NotificationCenter banner subtrees
+// have AXStaticText nodes whose AXValue is occasionally a number/date, so
+// we read everything via the raw C API and try cast.
+private func safeString(_ element: UIElement, _ key: String) -> String? {
+    var value: AnyObject?
+    let err = AXUIElementCopyAttributeValue(
+        element.element, key as CFString, &value)
+    guard err == .success, let v = value else { return nil }
+    if let s = v as? String { return s }
+    if let n = v as? NSNumber { return n.stringValue }
+    return nil
+}
 
 /// Special-cases com.apple.notificationcenterui as a system-wide banner sink.
 /// Per AX_PLAN §Notification reception channel 3: Notification Center is an
@@ -45,7 +60,7 @@ final class NotificationCenterWatcher {
         let body = texts.dropFirst().joined(separator: " ")
         // Notification Center hides the originating app in subrole/identifier
         // depending on macOS version; AXTitle of the window is often the app.
-        let sourceApp: String = (try? element.attribute(.title) as String?) ?? ""
+        let sourceApp = safeString(element, "AXTitle") ?? ""
 
         NDJSONEmitter.shared.emit(
             kind: "ax:notification",
@@ -63,23 +78,24 @@ final class NotificationCenterWatcher {
     ) -> [String] {
         if depth > maxDepth { return [] }
         var out: [String] = []
-        do {
-            let role: String? = try element.attribute(.role)
-            if role == "AXStaticText" {
-                if let v: String = try element.attribute(.value), !v.isEmpty {
-                    out.append(v)
-                }
-                if let t: String = try element.attribute(.title), !t.isEmpty {
-                    out.append(t)
-                }
+        let role = safeString(element, "AXRole")
+        if role == "AXStaticText" {
+            if let v = safeString(element, "AXValue"), !v.isEmpty {
+                out.append(v)
             }
-            if let children: [UIElement] = try element.attribute(.children) {
-                for c in children {
-                    out.append(contentsOf: collectStaticTexts(
-                        c, depth: depth + 1, maxDepth: maxDepth))
-                }
+            if let t = safeString(element, "AXTitle"), !t.isEmpty {
+                out.append(t)
             }
-        } catch {}
+        }
+        // Children are always [AXUIElement] when present; AXSwift's array
+        // cast for this attribute is safe. Wrap in try? to swallow any
+        // attributeUnsupported / cannotComplete from leaf nodes.
+        if let children: [UIElement] = try? element.attribute(.children) {
+            for c in children {
+                out.append(contentsOf: collectStaticTexts(
+                    c, depth: depth + 1, maxDepth: maxDepth))
+            }
+        }
         return out
     }
 }

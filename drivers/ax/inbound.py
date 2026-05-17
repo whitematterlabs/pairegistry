@@ -44,6 +44,16 @@ EVENT_LOG_MAX_BYTES = 32 * 1024 * 1024
 
 SLUG = "ax-in"
 
+# Phase 1: only operationally critical events go on the kernel bus.
+# Everything else lives in the NDJSON event log. See the firehose comment
+# in _read_stdout.
+_BUS_EMIT_KINDS = frozenset({
+    "permission_lost",
+    "secure_input_active",
+    "secure_input_cleared",
+    "event_rate_capped",
+})
+
 
 def _resolve_axd() -> Optional[Path]:
     for cand in (AXD_LIBEXEC, AXD_BUNDLE):
@@ -119,9 +129,27 @@ async def _read_stdout(proc: asyncio.subprocess.Process) -> None:
             print(f"[ax-in] dropping event with bad kind: {kind!r}", flush=True)
             continue
 
+        # Wire format from the sidecar matches the events.yaml public name
+        # ("ax:foo"), but the kernel re-prefixes with source — so we'd end
+        # up with `ax:ax:foo` nudges. Strip the prefix before emit.
+        bare_kind = kind[len("ax:"):]
+
+        # Phase 1 firehose suppression. AX is an ambient sensor feed (every
+        # keystroke fires ax:value_changed, every focus change fires
+        # ax:focus_changed). With no ax-pilot persub yet to consume with
+        # wake_on filters, every event falls back to the catch-all PAI and
+        # wakes the LLM per keystroke. Per AX_PLAN Phase 1 exit criterion,
+        # validation is via ~/.pai/var/log/ax/events.ndjson (`tail -f`), not
+        # the kernel bus. We still emit operationally critical events
+        # (permission_lost, secure_input_*, event_rate_capped) so the
+        # kernel/owner notices grant revocation or runaway rates. Re-enable
+        # the rest when Phase 3 lands a persub subscriber.
+        if bare_kind not in _BUS_EMIT_KINDS:
+            continue
+
         payload = {
             "source": "ax",
-            "kind": kind,
+            "kind": bare_kind,
             "ts": data.get("ts"),
             "pid": data.get("pid"),
             "bundle_id": data.get("bundle_id"),

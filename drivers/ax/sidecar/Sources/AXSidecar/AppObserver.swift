@@ -255,23 +255,25 @@ final class AppObserver {
 
     // MARK: - Attribute helpers
 
+    // AXSwift's generic attribute<T> does a force cast (as! T). When AX
+    // returns NSNumber/NSBoolean for an attribute we asked as String? —
+    // common cases: AXValue on checkboxes/sliders, AXURL returning NSURL —
+    // the process traps with SIGABRT. We bypass the generic by going
+    // straight to AXUIElementCopyAttributeValue and conditionally casting.
     private func rawStringAttr(_ element: UIElement, _ key: String) -> String? {
-        do {
-            if let s: String = try element.attribute(key) { return s }
-        } catch {}
+        var value: AnyObject?
+        let err = AXUIElementCopyAttributeValue(
+            element.element, key as CFString, &value)
+        guard err == .success, let v = value else { return nil }
+        if let s = v as? String { return s }
+        if let u = v as? URL { return u.absoluteString }
+        if let n = v as? NSNumber { return n.stringValue }
+        if let b = v as? Bool { return b ? "true" : "false" }
         return nil
     }
 
     private func stringAttr(_ element: UIElement, _ attr: Attribute) -> String? {
-        do {
-            if let s: String = try element.attribute(attr) { return s }
-            if let v: AnyObject = try element.attribute(attr) {
-                if let s = v as? String { return s }
-                if let u = v as? URL { return u.absoluteString }
-                return String(describing: v)
-            }
-        } catch {}
-        return nil
+        return rawStringAttr(element, attr.rawValue)
     }
 
     private func elementText(_ element: UIElement) -> String {
