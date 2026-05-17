@@ -1,0 +1,7 @@
+# SPM scratch. Plan §Sidecar build & distribution wants a prebuilt binary
+# shipped here, but `.build/release` is itself a symlink into the per-arch
+# dir, which git refuses to follow. Ship from source for now; if/when we
+# want a binary in the repo, copy it to a real path (e.g. ./axd) and
+# adjust build.sh + inbound.py to look there.
+.build/
+Package.resolved

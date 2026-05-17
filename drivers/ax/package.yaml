@@ -1,0 +1,11 @@
+name: ax
+kind: driver
+version: 0.1.0
+description: "Accessibility (macOS AX) driver: ambient desktop event feed via Swift sidecar"
+min_macos: "13.0"
+# Sidecar build + install hook. Idempotent: build.sh skips swift build if
+# a recent binary already exists at sidecar/.build/release/axd, and always
+# stages the binary at $PAI_ROOT/usr/libexec/ax/axd for the driver to spawn.
+hooks:
+  install:
+    - "bash usr/lib/drivers/ax/sidecar/build.sh"
