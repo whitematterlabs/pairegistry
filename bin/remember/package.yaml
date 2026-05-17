@@ -1,0 +1,5 @@
+name: remember
+kind: bin
+version: 0.1.0
+description: Ask librarian-pai to write a memory (shared or private) on behalf of the calling PAI
+entrypoint: remember.py
