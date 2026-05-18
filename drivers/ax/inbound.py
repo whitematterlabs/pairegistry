@@ -47,11 +47,17 @@ SLUG = "ax-in"
 # Phase 1: only operationally critical events go on the kernel bus.
 # Everything else lives in the NDJSON event log. See the firehose comment
 # in _read_stdout.
+#
+# event_rate_capped is deliberately NOT on the bus: it's downstream of the
+# firehose volume, so when PAI's own LLM output redraws the Terminal it's
+# rendered in, Terminal's AXValueChanged stream trips the coalescer cap,
+# which would wake the catch-all PAI, which writes more output, which trips
+# the cap again — a self-sustaining feedback loop. The cap event still lands
+# in the NDJSON log, which is the right surface for operator awareness.
 _BUS_EMIT_KINDS = frozenset({
     "permission_lost",
     "secure_input_active",
     "secure_input_cleared",
-    "event_rate_capped",
 })
 
 
