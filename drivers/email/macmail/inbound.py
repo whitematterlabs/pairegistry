@@ -21,7 +21,8 @@ import select
 import sqlite3
 import tempfile
 import threading
-from datetime import datetime, timezone
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 from urllib.parse import unquote, urlparse
@@ -374,6 +375,60 @@ def _query_rows(last_rowid: int, cfg: A.AccountsConfig) -> Optional[list]:
 
 _last_live_log: tuple[int, int] | None = None
 
+# Boot anchor + stale-bucketing state. Anything whose `date_received` is older
+# than (kernel boot - STALE_GRACE) is coalesced into one `email_backlog` event
+# the same shape `_drain_catchup` emits, instead of N live `new_email`s. This
+# absorbs the "Mail.app indexed an old batch after kernel start" case without
+# requiring the owner to pre-warm Mail.app before booting the kernel.
+STALE_GRACE = timedelta(minutes=5)
+DEBOUNCE_SECONDS = 20.0
+
+_kernel_started_at: Optional[datetime] = None
+_stale_buffer: dict[str, dict] = {}
+_stale_earliest: Optional[datetime] = None
+_stale_last_add: float = 0.0
+
+
+def _is_stale(ts: datetime) -> bool:
+    if _kernel_started_at is None:
+        return False
+    return ts < (_kernel_started_at - STALE_GRACE)
+
+
+def _bucket_stale(result: dict, ts: datetime) -> None:
+    global _stale_earliest, _stale_last_add
+    acc = result["account"]
+    bucket = _stale_buffer.setdefault(
+        acc, {"account": acc, "count": 0, "last_subject": ""}
+    )
+    bucket["count"] += 1
+    bucket["last_subject"] = result["subject"]
+    if _stale_earliest is None or ts < _stale_earliest:
+        _stale_earliest = ts
+    _stale_last_add = time.monotonic()
+
+
+def _flush_stale() -> None:
+    global _stale_buffer, _stale_earliest
+    if not _stale_buffer:
+        return
+    accounts = list(_stale_buffer.values())
+    total = sum(b["count"] for b in accounts)
+    since = _stale_earliest.isoformat(timespec="seconds") if _stale_earliest else None
+    P.emit_event({
+        "source": "macmail",
+        "kind": "email_backlog",
+        "since": since,
+        "accounts": accounts,
+        "total": total,
+    })
+    print(
+        f"[macmail-in] emitted stale backlog (total={total}, accounts={len(accounts)})",
+        flush=True,
+    )
+    _stale_buffer = {}
+    _stale_earliest = None
+
 
 def _park_failure(parked: dict[int, dict], rowid: int) -> None:
     """Bump retry counter for a rowid whose body isn't on disk yet.
@@ -443,18 +498,26 @@ def _drain_live(last_rowid: int, cfg: A.AccountsConfig, last_announced: int) -> 
     # Retry any previously-parked rowids first. These are below `last_rowid`
     # by definition, so they don't affect cursor advancement.
     retry_results = _retry_parked(parked, cfg)
-    for rid, result, _row in retry_results:
+    for rid, result, row in retry_results:
         if result.get("_skip"):
             continue
         if not result.get("_created", True):
             continue
+        ts = _mac_date_to_dt(int(row["date_received"] or 0))
         payload = {k: v for k, v in result.items() if not k.startswith("_")}
-        payload = {"source": "macmail", "kind": "new_email", **payload}
-        P.emit_event(payload)
-        print(
-            f"[macmail-in] emitted (unparked) rowid={rid} → {result['account']} ({result['direction']})",
-            flush=True,
-        )
+        if _is_stale(ts):
+            _bucket_stale(result, ts)
+            print(
+                f"[macmail-in] bucketed (unparked,stale) rowid={rid} → {result['account']} ({result['direction']})",
+                flush=True,
+            )
+        else:
+            payload = {"source": "macmail", "kind": "new_email", **payload}
+            P.emit_event(payload)
+            print(
+                f"[macmail-in] emitted (unparked) rowid={rid} → {result['account']} ({result['direction']})",
+                flush=True,
+            )
         if rid > last_announced:
             last_announced = rid
         # Parked rowids are below last_rowid, so the cursor's first field
@@ -490,10 +553,18 @@ def _drain_live(last_rowid: int, cfg: A.AccountsConfig, last_announced: int) -> 
         if not result.get("_created", True):
             # Already on disk from a prior pass — don't re-emit.
             continue
+        ts = _mac_date_to_dt(int(row["date_received"] or 0))
         payload = {k: v for k, v in result.items() if not k.startswith("_")}
-        payload = {"source": "macmail", "kind": "new_email", **payload}
-        P.emit_event(payload)
-        print(f"[macmail-in] emitted rowid={rowid} → {result['account']} ({result['direction']})", flush=True)
+        if _is_stale(ts):
+            _bucket_stale(result, ts)
+            print(
+                f"[macmail-in] bucketed (stale) rowid={rowid} → {result['account']} ({result['direction']})",
+                flush=True,
+            )
+        else:
+            payload = {"source": "macmail", "kind": "new_email", **payload}
+            P.emit_event(payload)
+            print(f"[macmail-in] emitted rowid={rowid} → {result['account']} ({result['direction']})", flush=True)
         if rowid > last_announced:
             last_announced = rowid
         # rows is ordered ASC, so max_processed == rowid here and no
@@ -709,9 +780,12 @@ class _KqueueWatcher:
 
 
 async def run() -> None:
+    global _kernel_started_at
     if not ENVELOPE_INDEX.exists():
         print(f"[macmail-in] Envelope Index not found at {ENVELOPE_INDEX}; driver idle", flush=True)
         return
+
+    _kernel_started_at = datetime.now(timezone.utc).astimezone()
 
     cfg = await A.refresh()
     print(f"[macmail-in] discovered accounts: {A.summarize(cfg)}", flush=True)
@@ -753,7 +827,14 @@ async def run() -> None:
             await asyncio.sleep(POLL_INTERVAL)
             queue.put_nowait(None)
 
+    async def _stale_flusher() -> None:
+        while True:
+            await asyncio.sleep(5)
+            if _stale_buffer and (time.monotonic() - _stale_last_add) > DEBOUNCE_SECONDS:
+                _flush_stale()
+
     ticker_task = asyncio.create_task(_ticker())
+    flusher_task = asyncio.create_task(_stale_flusher())
     ticks = 0
 
     try:
@@ -777,5 +858,6 @@ async def run() -> None:
         raise
     finally:
         ticker_task.cancel()
+        flusher_task.cancel()
         watcher.stop()
         print("[macmail-in] stopped", flush=True)
