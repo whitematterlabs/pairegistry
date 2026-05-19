@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""remember — ask librarian-pai to persist a memory on behalf of the caller."""
+"""memorize — ask librarian-pai to commit a fact to memory on behalf of the caller."""
 
 from __future__ import annotations
 
@@ -21,8 +21,8 @@ def _resolve_librarian_pid() -> int | None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="remember",
-        description="Ask librarian-pai to write a memory on behalf of the calling PAI.",
+        prog="memorize",
+        description="Ask librarian-pai to commit a fact to memory on behalf of the calling PAI.",
     )
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--shared", action="store_true", help="write to shared memory (visible to whole fleet)")
@@ -33,7 +33,7 @@ def main(argv: list[str] | None = None) -> int:
     sender_raw = os.environ.get("PAI_PID")
     if not sender_raw:
         print(
-            "error: $PAI_PID not set — remember must be invoked from a PAI turn",
+            "error: $PAI_PID not set — memorize must be invoked from a PAI turn",
             file=sys.stderr,
         )
         return 1
@@ -53,11 +53,11 @@ def main(argv: list[str] | None = None) -> int:
 
     mode_str = "shared" if args.shared else "private"
     P.emit_event({
-        "source": "remember",
+        "source": "memorize",
         "kind": "pai_message",
         "target_pid": librarian_pid,
         "sender_pid": sender_pid,
-        "text": f"[remember:{mode_str}] {args.content}",
+        "text": f"[memorize:{mode_str}] {args.content}",
     })
     print(f"requested {mode_str} memory write")
     return 0

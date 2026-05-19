@@ -1,0 +1,5 @@
+name: memorize
+kind: bin
+version: 0.1.0
+description: Ask librarian-pai to commit a fact to memory (shared or private) on behalf of the calling PAI
+entrypoint: memorize.py
