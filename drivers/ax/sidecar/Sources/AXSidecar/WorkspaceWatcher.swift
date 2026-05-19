@@ -1,93 +1,40 @@
 import Foundation
 import AppKit
 
-/// Watches NSWorkspace.runningApplications and attaches an AppObserver
-/// per macOS app. Posts ax:app_launched / ax:app_terminated on lifecycle.
+/// Tracks NSWorkspace.didTerminateApplication only — that's the single
+/// system-wide signal we still need: when an app dies, every session for
+/// that pid must surface `ax:scope_lost`.
 ///
-/// One instance, owned by main.swift. Holds AppObservers in a dictionary
-/// keyed by PID so they outlive their attach scope.
+/// In the ambient-sensor model this file built an AppObserver per running
+/// app and emitted app_launched/app_terminated/window_changed/... for
+/// every app on the system. None of that survives: PAIs only see events
+/// for sessions they attached, and session-internal AX subscriptions live
+/// inside Session.startObserving.
 final class WorkspaceWatcher {
-    private var observersByPID: [pid_t: AppObserver] = [:]
-    private let queue = DispatchQueue(label: "ax.workspace")
+    static let shared = WorkspaceWatcher()
+
+    private init() {}
 
     func start() {
-        // Initial sweep.
-        for app in NSWorkspace.shared.runningApplications {
-            attach(app, emitLaunched: false)
-        }
-
-        let nc = NSWorkspace.shared.notificationCenter
-        nc.addObserver(
-            forName: NSWorkspace.didLaunchApplicationNotification,
-            object: nil, queue: nil
-        ) { [weak self] note in
-            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey]
-                    as? NSRunningApplication else { return }
-            self?.attach(app, emitLaunched: true)
-        }
-
-        nc.addObserver(
+        NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didTerminateApplicationNotification,
             object: nil, queue: nil
-        ) { [weak self] note in
+        ) { note in
             guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey]
                     as? NSRunningApplication else { return }
-            self?.detach(pid: app.processIdentifier,
-                         bundleID: app.bundleIdentifier ?? "")
-        }
-    }
-
-    var observedAppCount: Int {
-        queue.sync { observersByPID.count }
-    }
-
-    private func attach(_ app: NSRunningApplication, emitLaunched: Bool) {
-        // Skip our own process and background-only agents that have no AX
-        // surface (no UI, no menu bar) — they'd just clutter the observer
-        // pool with empty trees.
-        let pid = app.processIdentifier
-        if pid == ProcessInfo.processInfo.processIdentifier { return }
-        if app.activationPolicy == .prohibited { return }
-
-        let bundleID = app.bundleIdentifier ?? "unknown"
-        let name = app.localizedName ?? bundleID
-
-        queue.sync {
-            if observersByPID[pid] != nil { return }
-            guard let obs = AppObserver(pid: pid, bundleID: bundleID, appName: name) else {
-                FileHandle.standardError.write(
-                    Data("axd: could not build AppObserver for pid \(pid) (\(bundleID))\n".utf8))
-                return
-            }
-            obs.start()
-            observersByPID[pid] = obs
-
-            if emitLaunched {
+            let pid = app.processIdentifier
+            let lost = SessionManager.shared.removeAll(forPID: pid)
+            for s in lost {
                 NDJSONEmitter.shared.emit(
-                    kind: "ax:app_launched",
-                    pid: pid,
-                    bundleID: bundleID,
-                    payload: ["name": name]
+                    kind: "ax:scope_lost",
+                    targetPID: s.targetPID,
+                    extra: [
+                        "session_id": s.id,
+                        "reason": SessionManager.LossReason.appTerminated.rawValue,
+                    ]
                 )
             }
-
-            // If this is Notification Center, wire its special-case watcher
-            // so we capture every banner from every app.
-            if bundleID == "com.apple.notificationcenterui" {
-                NotificationCenterWatcher.shared.register(pid: pid)
-            }
-        }
-    }
-
-    private func detach(pid: pid_t, bundleID: String) {
-        queue.sync {
-            guard let obs = observersByPID.removeValue(forKey: pid) else { return }
-            obs.stop()
-            NDJSONEmitter.shared.emit(
-                kind: "ax:app_terminated",
-                pid: pid,
-                bundleID: bundleID
-            )
+            ForegroundWatcher.shared.unregisterApp(pid: pid)
         }
     }
 }

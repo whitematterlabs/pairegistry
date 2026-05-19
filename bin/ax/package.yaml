@@ -1,0 +1,5 @@
+name: ax
+kind: bin
+version: 0.1.0
+description: "Piloting client for the macOS Accessibility driver. JSON-RPC over /var/run/ax/axd.sock."
+entrypoint: ax.py
