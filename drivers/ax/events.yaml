@@ -1,151 +1,52 @@
 driver: ax
-description: macOS Accessibility — ambient desktop event feed (Phase 1, sensor only).
+description: macOS Accessibility — piloting surface. PAIs attach scoped sessions to (pid, window_id) and actuate background windows via the bin/ax RPC client. All events carry target_pid; the kernel routes point-to-point.
 
 processes:
   - slug: ax-in
     module: drivers.ax.inbound
     entrypoint: run
 
-# Per-event-type rate cap enforced inside the Swift sidecar (never Python).
-# Default 20/sec; overflow surfaces as a single ax:event_rate_capped event.
-metadata:
-  rate_cap_per_event_type_per_sec: 20
-
 events:
-  - kind: ax:focus_changed
-    description: Focused UI element changed (any app).
+  - kind: ax:scope_attached
+    description: A session was successfully attached to (pid, window_id). Sent only to the PAI that called attach().
     emitted_by: drivers/ax/sidecar
-    raw_kind: AXFocusedUIElementChanged
     payload:
-      pid: int
-      bundle_id: string
-      window_title: string
-      role: string
-      identifier: string
-      text: string
-
-  - kind: ax:window_changed
-    description: Focused or main window changed within an app.
-    emitted_by: drivers/ax/sidecar
-    raw_kind: AXFocusedWindowChanged|AXMainWindowChanged
-    payload:
+      target_pid: int        # owning PAI; kernel uses this to route, not wake_on
+      session_id: string
       pid: int
       bundle_id: string
       window_id: string
-      title: string
-      frame: [x, y, w, h]
+      tree: list             # compressed actionable surface — [{ref, role, label, value, enabled}, ...]
 
-  - kind: ax:window_created
-    description: A new window appeared.
+  - kind: ax:tree_changed
+    description: Refs were added, removed, or changed inside an attached session. Delta only.
     emitted_by: drivers/ax/sidecar
-    raw_kind: AXWindowCreated
     payload:
-      pid: int
-      bundle_id: string
-      window_id: string
-      title: string
+      target_pid: int
+      session_id: string
+      delta:
+        added: list           # [{ref, role, label, value, enabled}]
+        removed: list         # [ref, ...]
+        changed: list         # [{ref, label?, value?, enabled?}]
 
-  - kind: ax:window_destroyed
-    description: A window was destroyed.
+  - kind: ax:action_result
+    description: Result of a previously issued act/expand. request_id correlates with the RPC call.
     emitted_by: drivers/ax/sidecar
-    raw_kind: AXUIElementDestroyed
     payload:
-      pid: int
-      bundle_id: string
-      window_id: string
+      target_pid: int
+      session_id: string
+      request_id: string
+      ok: bool
+      error: string           # present only when ok=false (e.g. EFOREGROUND, EREFGONE, ESECUREINPUT)
+      tree_delta:             # optional; present when action mutated the tree
+        added: list
+        removed: list
+        changed: list
 
-  - kind: ax:announcement
-    description: App fired AXAnnouncementRequested (Apple/AppKit a11y apps).
+  - kind: ax:scope_lost
+    description: Session ended or cannot continue. Subkinds via `reason`. paused/resumed are non-terminal transitions in this family.
     emitted_by: drivers/ax/sidecar
-    raw_kind: AXAnnouncementRequested
     payload:
-      pid: int
-      bundle_id: string
-      text: string
-      priority: string
-
-  - kind: ax:live_region
-    description: AXValueChanged on an element with AXARIALive set (Gmail/Linear/Slack toasts).
-    emitted_by: drivers/ax/sidecar
-    raw_kind: AXValueChanged+AXARIALive
-    payload:
-      pid: int
-      bundle_id: string
-      role: string
-      text: string
-      politeness: string
-
-  - kind: ax:notification
-    description: Notification Center banner from any app (system-wide sink).
-    emitted_by: drivers/ax/sidecar
-    raw_kind: AXWindowCreated@com.apple.notificationcenterui
-    payload:
-      source_app: string
-      title: string
-      body: string
-      timestamp: float
-
-  - kind: ax:value_changed
-    description: AXValueChanged on tracked elements (coalesced).
-    emitted_by: drivers/ax/sidecar
-    raw_kind: AXValueChanged
-    payload:
-      pid: int
-      bundle_id: string
-      role: string
-      value: string
-
-  - kind: ax:url_changed
-    description: AXURL delta on an AXWebArea.
-    emitted_by: drivers/ax/sidecar
-    raw_kind: AXURL_delta
-    payload:
-      pid: int
-      bundle_id: string
-      old_url: string
-      new_url: string
-
-  - kind: ax:app_launched
-    description: New app appeared in NSWorkspace.runningApplications.
-    emitted_by: drivers/ax/sidecar
-    raw_kind: NSWorkspaceDidLaunchApplication
-    payload:
-      pid: int
-      bundle_id: string
-      name: string
-
-  - kind: ax:app_terminated
-    description: App removed from NSWorkspace.runningApplications.
-    emitted_by: drivers/ax/sidecar
-    raw_kind: NSWorkspaceDidTerminateApplication
-    payload:
-      pid: int
-      bundle_id: string
-
-  - kind: ax:permission_lost
-    description: kAXErrorAPIDisabled — Accessibility grant revoked.
-    emitted_by: drivers/ax/sidecar
-    raw_kind: kAXErrorAPIDisabled
-    payload:
-      grant: string
-
-  - kind: ax:secure_input_active
-    description: IsSecureEventInputEnabled transitioned to true (password field).
-    emitted_by: drivers/ax/sidecar
-    raw_kind: IsSecureEventInputEnabled+
-    payload: {}
-
-  - kind: ax:secure_input_cleared
-    description: IsSecureEventInputEnabled transitioned to false.
-    emitted_by: drivers/ax/sidecar
-    raw_kind: IsSecureEventInputEnabled-
-    payload: {}
-
-  - kind: ax:event_rate_capped
-    description: Per-event-type rate cap exceeded; reports overflow count for window.
-    emitted_by: drivers/ax/sidecar
-    raw_kind: rate_cap
-    payload:
-      event_kind: string
-      dropped: int
-      window_sec: float
+      target_pid: int
+      session_id: string
+      reason: string          # window_closed | app_terminated | grant_revoked | paused | resumed | detached

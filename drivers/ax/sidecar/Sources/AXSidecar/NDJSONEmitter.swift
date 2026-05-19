@@ -4,9 +4,14 @@ import Foundation
 /// by \n. All access serialized through an internal queue so concurrent emitters
 /// can't interleave half-lines.
 ///
+/// In the piloting model every event is point-to-point: the caller stamps
+/// `targetPID` on emit, the supervisor (Python `inbound.py`) hands it to
+/// `P.emit_event(..., target_pid=...)`, and the kernel routes only to that
+/// pid. There is no broadcast path here.
+///
 /// Format on the wire:
-///   {"kind":"ax:focus_changed","ts":1715900000.123,"pid":4711,
-///    "bundle_id":"com.apple.mail","payload":{...}}
+///   {"kind":"ax:scope_attached","ts":..., "target_pid":2,
+///    "session_id":"s1","pid":4711,"bundle_id":"com.apple.calculator", ...}
 final class NDJSONEmitter {
     static let shared = NDJSONEmitter()
 
@@ -15,19 +20,18 @@ final class NDJSONEmitter {
 
     private init() {}
 
-    /// Emit one event. `payload` is whatever fields fit the event kind;
-    /// the wrapper adds kind/ts and optional pid/bundle_id.
+    /// Emit one event. `targetPID` is required for routable events; pass
+    /// `nil` only for the boot-time `ax:permission_lost` notice (kernel
+    /// surfaces that via the supervisor log, not via the bus).
     func emit(kind: String,
-              pid: Int32? = nil,
-              bundleID: String? = nil,
-              payload: [String: Any] = [:]) {
+              targetPID: Int? = nil,
+              extra: [String: Any] = [:]) {
         var obj: [String: Any] = [
             "kind": kind,
             "ts": Date().timeIntervalSince1970,
         ]
-        if let pid = pid { obj["pid"] = Int(pid) }
-        if let bid = bundleID { obj["bundle_id"] = bid }
-        if !payload.isEmpty { obj["payload"] = sanitize(payload) }
+        if let t = targetPID { obj["target_pid"] = t }
+        for (k, v) in extra { obj[k] = sanitize(v) }
 
         queue.async { [weak self] in
             guard let self = self else { return }

@@ -1,17 +1,21 @@
-"""AX inbound driver (Phase 1, sensor only).
+"""AX inbound driver — supervises the Swift sidecar `axd`.
 
-Supervises the Swift sidecar `axd` as a subprocess. The sidecar fans in
-AXObserver notifications across every running macOS app and emits one
-NDJSON event per line on stdout. We re-emit them onto the kernel bus via
-P.emit_event and also append the raw NDJSON to /var/log/ax/events.ndjson
-for cheap `tail -f` debugging.
+The sidecar owns all session state, the RPC server (Unix socket), and
+target_pid stamping. This Python supervisor only:
 
-No actuation, no RPC, no tree compression in Phase 1.
+  - resolves the axd binary,
+  - spawns and restarts it (with rc=78 = Accessibility-grant-missing
+    handled as a long-sleep retry, not a crash loop),
+  - parses NDJSON events off its stdout,
+  - forwards them onto the kernel bus via P.emit_event(payload, target_pid=...).
+
+The sidecar has flipped from ambient sensor to piloting surface — PAIs
+talk to it via the `ax` bin tool (Unix socket JSON-RPC); only PAIs that
+attached a session receive events for that session. No firehose, no
+client-side filtering, no event log.
 
 Requires the Accessibility TCC grant for `axd` (System Settings → Privacy
-& Security → Accessibility). On first launch the sidecar will trigger the
-prompt; if denied it emits ax:permission_lost and exits cleanly so the
-kernel marks ax-in failed instead of crash-looping.
+& Security → Accessibility).
 """
 
 from __future__ import annotations
@@ -19,7 +23,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -29,36 +32,18 @@ from boot import processes as P
 PAI_ROOT = Path(os.environ.get("PAI_ROOT", str(Path.home() / ".pai")))
 
 # Two candidate binary locations: the post-install staged copy (preferred)
-# and the bundle-local dev build. build.sh stages to the libexec path on
-# install; running build.sh manually during development also stages it.
+# and the bundle-local dev build.
 AXD_LIBEXEC = PAI_ROOT / "usr" / "libexec" / "ax" / "axd"
 AXD_BUNDLE = PAI_ROOT / "usr" / "lib" / "drivers" / "ax" / "sidecar" / ".build" / "release" / "axd"
 
 STATE_DIR = PAI_ROOT / "sys" / "drivers" / "ax"
 SIDECAR_LOG = STATE_DIR / "sidecar.stderr.log"
 
-EVENT_LOG_DIR = PAI_ROOT / "var" / "log" / "ax"
-EVENT_LOG = EVENT_LOG_DIR / "events.ndjson"
-# Rotate when the live log exceeds this size; keep one .1 generation.
-EVENT_LOG_MAX_BYTES = 32 * 1024 * 1024
+# Socket lives under /var/run/ax/. The sidecar creates it on start; the
+# `ax` bin tool reads $PAI_ROOT/var/run/ax/axd.sock to connect.
+RUN_DIR = PAI_ROOT / "var" / "run" / "ax"
 
 SLUG = "ax-in"
-
-# Phase 1: only operationally critical events go on the kernel bus.
-# Everything else lives in the NDJSON event log. See the firehose comment
-# in _read_stdout.
-#
-# event_rate_capped is deliberately NOT on the bus: it's downstream of the
-# firehose volume, so when PAI's own LLM output redraws the Terminal it's
-# rendered in, Terminal's AXValueChanged stream trips the coalescer cap,
-# which would wake the catch-all PAI, which writes more output, which trips
-# the cap again — a self-sustaining feedback loop. The cap event still lands
-# in the NDJSON log, which is the right surface for operator awareness.
-_BUS_EMIT_KINDS = frozenset({
-    "permission_lost",
-    "secure_input_active",
-    "secure_input_cleared",
-})
 
 
 def _resolve_axd() -> Optional[Path]:
@@ -66,27 +51,6 @@ def _resolve_axd() -> Optional[Path]:
         if cand.exists() and os.access(cand, os.X_OK):
             return cand
     return None
-
-
-def _maybe_rotate_log() -> None:
-    try:
-        if EVENT_LOG.exists() and EVENT_LOG.stat().st_size > EVENT_LOG_MAX_BYTES:
-            rotated = EVENT_LOG.with_suffix(".ndjson.1")
-            if rotated.exists():
-                rotated.unlink()
-            EVENT_LOG.rename(rotated)
-    except OSError:
-        pass
-
-
-def _append_event_log(line: bytes) -> None:
-    try:
-        with EVENT_LOG.open("ab") as f:
-            f.write(line)
-            if not line.endswith(b"\n"):
-                f.write(b"\n")
-    except OSError as e:
-        print(f"[ax-in] event log write failed: {e!r}", flush=True)
 
 
 async def _drain_stderr(proc: asyncio.subprocess.Process) -> None:
@@ -106,23 +70,18 @@ async def _drain_stderr(proc: asyncio.subprocess.Process) -> None:
 
 
 async def _read_stdout(proc: asyncio.subprocess.Process) -> None:
-    """Parse one NDJSON event per line; forward to kernel bus + event log.
+    """Parse one NDJSON event per line; forward to the kernel bus.
 
-    Sidecar is the single source of truth for coalescing and rate caps;
-    Python does not filter, drop, or batch."""
+    Each line is a full event payload from the sidecar. The sidecar stamps
+    `kind: "ax:foo"`, `target_pid`, and any payload fields. We re-pack
+    into the kernel's event shape (source/kind separated) and call
+    P.emit_event with the explicit target_pid so the router delivers
+    point-to-point instead of fanning out by wake_on."""
     assert proc.stdout is not None
-    rotate_check_counter = 0
     while True:
         line = await proc.stdout.readline()
         if not line:
             return
-
-        # Append to event log unconditionally (cheap tail target).
-        _append_event_log(line)
-        rotate_check_counter += 1
-        if rotate_check_counter >= 1000:
-            rotate_check_counter = 0
-            _maybe_rotate_log()
 
         try:
             data = json.loads(line.decode("utf-8", errors="replace").strip())
@@ -135,35 +94,24 @@ async def _read_stdout(proc: asyncio.subprocess.Process) -> None:
             print(f"[ax-in] dropping event with bad kind: {kind!r}", flush=True)
             continue
 
-        # Wire format from the sidecar matches the events.yaml public name
-        # ("ax:foo"), but the kernel re-prefixes with source — so we'd end
-        # up with `ax:ax:foo` nudges. Strip the prefix before emit.
+        # Strip the "ax:" prefix; the kernel re-prefixes with the source
+        # field when it forms the public kind for routing.
         bare_kind = kind[len("ax:"):]
 
-        # Phase 1 firehose suppression. AX is an ambient sensor feed (every
-        # keystroke fires ax:value_changed, every focus change fires
-        # ax:focus_changed). With no ax-pilot persub yet to consume with
-        # wake_on filters, every event falls back to the catch-all PAI and
-        # wakes the LLM per keystroke. Per AX_PLAN Phase 1 exit criterion,
-        # validation is via ~/.pai/var/log/ax/events.ndjson (`tail -f`), not
-        # the kernel bus. We still emit operationally critical events
-        # (permission_lost, secure_input_*, event_rate_capped) so the
-        # kernel/owner notices grant revocation or runaway rates. Re-enable
-        # the rest when Phase 3 lands a persub subscriber.
-        if bare_kind not in _BUS_EMIT_KINDS:
+        target_pid = data.get("target_pid")
+        if not isinstance(target_pid, int):
+            print(f"[ax-in] dropping event without target_pid: {kind!r}", flush=True)
             continue
 
-        payload = {
-            "source": "ax",
-            "kind": bare_kind,
-            "ts": data.get("ts"),
-            "pid": data.get("pid"),
-            "bundle_id": data.get("bundle_id"),
-            **(data.get("payload") or {}),
-        }
-        # Drop None-valued top-level keys to keep events.yaml-style tidy.
-        payload = {k: v for k, v in payload.items() if v is not None}
-        P.emit_event(payload)
+        payload: dict = {"source": "ax", "kind": bare_kind}
+        for k, v in data.items():
+            if k in ("kind", "target_pid"):
+                continue
+            if v is None:
+                continue
+            payload[k] = v
+
+        P.emit_event(payload, target_pid=target_pid)
 
 
 async def _supervise(axd: Path) -> None:
@@ -175,7 +123,7 @@ async def _supervise(axd: Path) -> None:
         try:
             proc = await asyncio.create_subprocess_exec(
                 str(axd),
-                stdin=asyncio.subprocess.PIPE,  # Phase 2: RPC writes here
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env={**os.environ, "PAI_ROOT": str(PAI_ROOT)},
@@ -225,7 +173,7 @@ async def _supervise(axd: Path) -> None:
 async def run() -> None:
     print(f"[ax-in] starting at {datetime.now().isoformat(timespec='seconds')}", flush=True)
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    EVENT_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    RUN_DIR.mkdir(parents=True, exist_ok=True)
 
     axd = _resolve_axd()
     if axd is None:

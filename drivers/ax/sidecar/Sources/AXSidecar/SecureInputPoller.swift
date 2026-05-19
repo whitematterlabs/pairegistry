@@ -1,40 +1,19 @@
 import Foundation
 import Carbon.HIToolbox
 
-/// Polls IsSecureEventInputEnabled() at 2Hz, emits transition events.
+/// Queryable wrapper around IsSecureEventInputEnabled().
 ///
-/// Secure Input is set whenever the user is typing into a password field,
-/// 1Password unlock, sudo prompt, etc. Phase 2 ax-pilot keystroke-synth
-/// paths must check this and bail. Phase 1 just records the transitions
-/// so the event log has them.
+/// In the piloting model this is a *getter*, not an emitter. The Actuator
+/// calls `isActive` before any keystroke-synthesis path; if secure input
+/// is on (password field, sudo prompt, 1Password unlock), the action is
+/// refused with `ESECUREINPUT`. No system-wide stream lands on the kernel
+/// bus — that channel was the keylogger surface we deliberately removed.
 final class SecureInputPoller {
-    private var timer: DispatchSourceTimer?
-    private var lastActive = false
+    static let shared = SecureInputPoller()
 
-    func start() {
-        let t = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
-        t.schedule(deadline: .now() + .milliseconds(500),
-                   repeating: .milliseconds(500))
-        t.setEventHandler { [weak self] in
-            self?.tick()
-        }
-        timer = t
-        t.resume()
-    }
+    private init() {}
 
-    func stop() {
-        timer?.cancel()
-        timer = nil
-    }
-
-    private func tick() {
-        let active = IsSecureEventInputEnabled()
-        if active == lastActive { return }
-        lastActive = active
-        if active {
-            NDJSONEmitter.shared.emit(kind: "ax:secure_input_active")
-        } else {
-            NDJSONEmitter.shared.emit(kind: "ax:secure_input_cleared")
-        }
+    var isActive: Bool {
+        return IsSecureEventInputEnabled()
     }
 }
