@@ -682,7 +682,7 @@ def cmd_screenshot(args: argparse.Namespace) -> int:
         r = cdp.call("Page.captureScreenshot", {"format": "png"}, timeout=20.0)
         data = base64.b64decode(r.get("data", ""))
         out.write_bytes(data)
-        print(f"saved {out} ({len(data)} bytes)")
+        print(f"![viewport]({out}) (saved, {len(data)} bytes)")
     finally:
         cdp.close()
     return 0
