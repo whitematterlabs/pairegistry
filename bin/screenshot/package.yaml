@@ -1,0 +1,5 @@
+name: screenshot
+kind: bin
+version: 0.1.0
+description: "Capture the desktop or a specific window by exact title (or window id) to a PNG."
+entrypoint: screenshot.py
