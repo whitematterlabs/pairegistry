@@ -97,6 +97,10 @@ final class ForegroundWatcher {
             let wasForeground = session.isForeground
             if scopedIsMain != wasForeground {
                 session.isForeground = scopedIsMain
+                // show_owner sessions intentionally act in the foreground;
+                // emitting paused/resumed would falsely tell the PAI it lost
+                // actuation. Track the bit, skip the signal.
+                if session.allowForeground { continue }
                 let reason = scopedIsMain ? "paused" : "resumed"
                 NDJSONEmitter.shared.emit(
                     kind: "ax:scope_lost",

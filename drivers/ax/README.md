@@ -81,8 +81,15 @@ frontmost app** — that's the owner's active context, not background
 automation. A scoped window coming to foreground emits
 `ax:scope_lost {reason: "paused"}`; going back to background emits
 `{reason: "resumed"}`. Observation continues across pause; only
-actuation is gated. (A future `show_owner=true` attach flag will permit
-foreground action; deferred for v1.)
+actuation is gated.
+
+**Override: `attach --show-owner`.** Owner-initiated tasks in a visible
+app (e.g. "set an alarm in Clock") *want* PAI to drive the window the
+owner is looking at. Attaching with `--show-owner` waives the foreground
+gate for that session and suppresses the paused/resumed `scope_lost`
+chatter. Secure-input gating (passwords, sudo, 1Password) still applies
+regardless. Without `--show-owner`, foreground `act` returns
+`EFOREGROUND`.
 
 ## Owner privacy
 
@@ -94,13 +101,17 @@ surveillance.
 ## Install
 
 ```
-paiman install ax
+paiman install drivers/ax
 ```
 
-Copies the driver bundle to `~/.pai/opt/paiman/ax/`, symlinks
+Use the typed `drivers/ax` form: the driver and its `ax` bin client share
+the name `ax`, so a bare `paiman install ax` resolves to the bin alone.
+Installing the driver pulls the bin in via `deps:`.
+
+Copies the driver bundle to `~/.pai/opt/paiman/driver/ax/`, symlinks
 `~/.pai/usr/lib/drivers/ax/`, runs `sidecar/build.sh` to build and stage
 `axd` at `~/.pai/usr/libexec/ax/axd`, and (via deps) installs the `ax`
-bin tool to `~/.pai/usr/bin/ax`.
+bin tool to `~/.pai/usr/bin/ax` (staged at `~/.pai/opt/paiman/bin/ax/`).
 
 ## Accessibility grant (required)
 
@@ -133,6 +144,16 @@ ax list_sessions
 ax detach s1
 ```
 
+Owner-initiated task in a visible app — set a Clock alarm:
+
+```bash
+ax attach com.apple.clock --show-owner   # waive the foreground gate
+# find the "Add an alarm" ref in the tree, then:
+ax act s1 <add-ref> press
+ax act s1 <time-field-ref> set_value --value 0650
+ax detach s1
+```
+
 ## Disable
 
 ```
@@ -143,7 +164,6 @@ Sidecar terminates cleanly within ~5s; every live session is torn down.
 
 ## Out of scope (v1)
 
-- `show_owner=true` foreground-actuation flag.
 - App-typed schemas (Spotify/Mail domain models on top of the generic tree).
 - CGEvent keystroke synthesis for fields that don't respond to `AXSetValue`.
 - Persistence across kernel reboots.

@@ -3,7 +3,7 @@
 
 Subcommands map 1:1 to the axd JSON-RPC methods:
 
-  ax attach <bundle_id> [--no-launch]
+  ax attach <bundle_id> [--no-launch] [--show-owner]
   ax detach <session_id>
   ax act <session_id> <ref> [press|set_value|show_menu|pick_menu_item] [--value V] [--title T]
   ax expand <session_id> <ref>
@@ -34,6 +34,19 @@ from pathlib import Path
 
 PAI_ROOT = Path(os.environ.get("PAI_ROOT", str(Path.home() / ".pai")))
 SOCKET_PATH = PAI_ROOT / "var" / "run" / "ax" / "axd.sock"
+AXD_BIN = PAI_ROOT / "usr" / "libexec" / "ax" / "axd"
+
+
+def _socket_diagnostic() -> str:
+    """Distinguish the three reasons the socket is absent so the caller
+    isn't sent down a dead end (the failure mode that cost a 10-minute
+    osascript fumble before this tool was reachable)."""
+    if not AXD_BIN.exists():
+        return (f"axd not built at {AXD_BIN} — the ax driver isn't installed. "
+                f"Run: paiman install ax")
+    return (f"axd socket not present at {SOCKET_PATH} — the sidecar is built "
+            f"but the supervisor isn't running. Run: paictl start ax-in "
+            f"(check: paictl status ax-in)")
 
 
 def _resolve_target_pid() -> int:
@@ -51,9 +64,7 @@ def _resolve_target_pid() -> int:
 
 def _call(method: str, params: dict) -> dict:
     if not SOCKET_PATH.exists():
-        print(f"error: axd socket not present at {SOCKET_PATH} — "
-              f"is the ax-in driver running? (paictl status ax-in)",
-              file=sys.stderr)
+        print(f"error: {_socket_diagnostic()}", file=sys.stderr)
         sys.exit(2)
 
     request_id = uuid.uuid4().hex[:8]
@@ -106,6 +117,7 @@ def cmd_attach(args: argparse.Namespace) -> None:
         "bundle_id": args.bundle_id,
         "target_pid": _resolve_target_pid(),
         "launch_if_needed": not args.no_launch,
+        "show_owner": args.show_owner,
     }
     _print_and_exit(_call("attach", params))
 
@@ -151,6 +163,10 @@ def main() -> None:
     a.add_argument("bundle_id")
     a.add_argument("--no-launch", action="store_true",
                    help="Refuse to launch if the app isn't already running.")
+    a.add_argument("--show-owner", action="store_true",
+                   help="Waive the foreground gate: act even while the scoped "
+                        "window is frontmost. Use for owner-initiated tasks in "
+                        "a visible app (e.g. set an alarm in Clock).")
     a.set_defaults(func=cmd_attach)
 
     d = subs.add_parser("detach", help="Tear down a session.")

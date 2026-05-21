@@ -49,6 +49,7 @@ final class SessionManager {
                 windowID: String,
                 window: UIElement,
                 application: Application,
+                allowForeground: Bool = false,
                 onTreeChanged: @escaping (Session, UIElement) -> Void,
                 onWindowDestroyed: @escaping (Session) -> Void) -> Result<Session, AttachError> {
         return queue.sync {
@@ -61,7 +62,8 @@ final class SessionManager {
             let session = Session(
                 id: id, targetPID: targetPID, pid: pid,
                 bundleID: bundleID, windowID: windowID,
-                window: window, application: application
+                window: window, application: application,
+                allowForeground: allowForeground
             )
             sessions[id] = session
             byScope[key] = id

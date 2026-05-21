@@ -1,0 +1,6 @@
+name: drive-macos-ui
+kind: skill
+topic: operating
+version: 0.1.0
+description: Drive a macOS app's UI when there's no CLI/API — prefer the ax driver (scoped AX sessions), fall back to osascript/System Events. Includes the AX error-code decoder, the "dump the tree first" rule, the keyboard-activation trick for Catalyst/SwiftUI controls, and the proven Clock-alarm recipe.
+entrypoint: SKILL.md

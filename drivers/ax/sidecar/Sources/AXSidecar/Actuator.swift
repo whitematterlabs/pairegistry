@@ -38,7 +38,10 @@ enum Actuator {
                         args: [String: Any]) -> Result<Void, ActError> {
         // Pre-flight. Foreground gate is the headline rule; pause + secure
         // input cover the narrower cases where the gate isn't strict enough.
-        if session.isForeground {
+        // A session attached with show_owner waives the gate — the owner
+        // asked PAI to act in the window they're looking at. Secure-input
+        // gating (in set_value, below) still applies regardless.
+        if session.isForeground && !session.allowForeground {
             return .failure(.foreground)
         }
         guard let element = session.element(forRef: ref) else {

@@ -36,13 +36,22 @@ final class Session {
     /// foreground.
     var isForeground: Bool = false
 
+    /// When true, the foreground gate is waived for this session: the PAI
+    /// may actuate even while the scoped window is frontmost. Set at attach
+    /// time via `show_owner` for owner-initiated tasks in a visible app
+    /// (e.g. "set an alarm in Clock"), where the owner *wants* PAI to drive
+    /// the window they're looking at. Default false keeps background-only
+    /// piloting the norm. Secure-input gating still applies regardless.
+    let allowForeground: Bool
+
     init(id: String,
          targetPID: Int,
          pid: pid_t,
          bundleID: String,
          windowID: String,
          window: UIElement,
-         application: Application) {
+         application: Application,
+         allowForeground: Bool = false) {
         self.id = id
         self.targetPID = targetPID
         self.pid = pid
@@ -50,6 +59,7 @@ final class Session {
         self.windowID = windowID
         self.window = window
         self.application = application
+        self.allowForeground = allowForeground
     }
 
     /// Wire the session's AXObserver to the scoped application. We attach

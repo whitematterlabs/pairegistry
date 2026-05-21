@@ -137,6 +137,10 @@ final class RPCServer {
             return
         }
         let launch = (params["launch_if_needed"] as? Bool) ?? true
+        // show_owner waives the foreground gate for owner-initiated tasks in
+        // a visible app. Defaults false: background-only piloting stays the
+        // norm.
+        let showOwner = (params["show_owner"] as? Bool) ?? false
 
         let resolved: Launcher.Resolved
         switch Launcher.resolve(bundleID: bundleID, launchIfNeeded: launch) {
@@ -153,6 +157,7 @@ final class RPCServer {
             windowID: resolved.windowID,
             window: resolved.window,
             application: resolved.application,
+            allowForeground: showOwner,
             onTreeChanged: { session, _ in
                 // Coarse: re-walk and report as a single "changed" set. A
                 // smarter delta would diff against last walk; sufficient
