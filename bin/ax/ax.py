@@ -7,6 +7,7 @@ Subcommands map 1:1 to the axd JSON-RPC methods:
   ax detach <session_id>
   ax act <session_id> <ref> [press|set_value|show_menu|pick_menu_item] [--value V] [--title T]
   ax expand <session_id> <ref>
+  ax redump <session_id>
   ax list_sessions [--mine]
 
 Connects to $PAI_ROOT/var/run/ax/axd.sock. Sends one line of JSON, reads
@@ -145,6 +146,10 @@ def cmd_expand(args: argparse.Namespace) -> None:
     }))
 
 
+def cmd_redump(args: argparse.Namespace) -> None:
+    _print_and_exit(_call("redump", {"session_id": args.session_id}))
+
+
 def cmd_list_sessions(args: argparse.Namespace) -> None:
     params: dict = {}
     if args.mine:
@@ -186,6 +191,12 @@ def main() -> None:
     e.add_argument("session_id")
     e.add_argument("ref")
     e.set_defaults(func=cmd_expand)
+
+    rd = subs.add_parser("redump",
+                         help="Re-read the current tree for a session "
+                              "(after an action changed the UI).")
+    rd.add_argument("session_id")
+    rd.set_defaults(func=cmd_redump)
 
     ls = subs.add_parser("list_sessions", help="List sessions (all, or just this PAI's).")
     ls.add_argument("--mine", action="store_true",

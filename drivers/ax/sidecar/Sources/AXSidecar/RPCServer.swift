@@ -10,6 +10,7 @@ import AXSwift
 ///   detach(session_id)
 ///   act(session_id, ref, action, args?)         // args optional, defaults {}
 ///   expand(session_id, ref)
+///   redump(session_id)                          // re-read the current tree
 ///   list_sessions(target_pid?)
 ///
 /// The socket lives at $PAI_ROOT/var/run/ax/axd.sock. We `unlink` first so
@@ -118,6 +119,7 @@ final class RPCServer {
         case "detach":        handleDetach(params, requestID: requestID, fd: fd)
         case "act":           handleAct(params, requestID: requestID, fd: fd)
         case "expand":        handleExpand(params, requestID: requestID, fd: fd)
+        case "redump":        handleRedump(params, requestID: requestID, fd: fd)
         case "list_sessions": handleListSessions(params, requestID: requestID, fd: fd)
         default:
             sendError(fd, requestID: requestID, code: "EMETHOD",
@@ -283,6 +285,20 @@ final class RPCServer {
         let children = TreeExtractor.expand(session: session, ref: ref)
         sendOK(fd, requestID: requestID,
                result: ["session_id": sid, "ref": ref, "children": children])
+    }
+
+    private func handleRedump(_ params: [String: Any], requestID: String, fd: Int32) {
+        guard let sid = params["session_id"] as? String,
+              let session = SessionManager.shared.session(id: sid) else {
+            sendError(fd, requestID: requestID, code: "ENOSESSION", message: "")
+            return
+        }
+        // Re-walk session.window from scratch. Picks up sheets/popovers that
+        // appeared since attach. allocRef is monotonic, so this mints fresh
+        // refs for the current elements; older refs keep resolving.
+        let tree = TreeExtractor.dump(session: session)
+        sendOK(fd, requestID: requestID,
+               result: ["session_id": sid, "tree": tree])
     }
 
     private func handleListSessions(_ params: [String: Any], requestID: String, fd: Int32) {
