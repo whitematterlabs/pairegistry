@@ -22,6 +22,7 @@ enum AXHelpers {
         "AXCheckBox", "AXRadioButton",
         "AXComboBox",
         "AXSlider", "AXIncrementor",
+        "AXDateTimeArea", "AXDateField", "AXTimeField",
         "AXTabGroup",
         "AXDisclosureTriangle",
     ]
@@ -43,6 +44,11 @@ enum AXHelpers {
         if let u = v as? URL { return u.absoluteString }
         if let n = v as? NSNumber { return n.stringValue }
         if let b = v as? Bool { return b ? "true" : "false" }
+        if let d = v as? Date {
+            let f = ISO8601DateFormatter()
+            f.timeZone = TimeZone(identifier: "UTC")
+            return f.string(from: d)
+        }
         return nil
     }
 
@@ -66,6 +72,50 @@ enum AXHelpers {
             element.element, kAXChildrenAttribute as CFString, &value)
         guard err == .success, let arr = value as? [AXUIElement] else { return [] }
         return arr.map { UIElement($0) }
+    }
+
+    /// Raw attribute value as the bridged Foundation object (no String
+    /// coercion). Lets callers inspect the dynamic type — e.g. a date
+    /// picker's AXValue is a Date, which set_value must set as a CFDate.
+    static func rawAttr(_ element: UIElement, _ key: String) -> AnyObject? {
+        var value: AnyObject?
+        let err = AXUIElementCopyAttributeValue(
+            element.element, key as CFString, &value)
+        guard err == .success else { return nil }
+        return value
+    }
+
+    /// Parse a wall-clock time ("07:50", "7:50 AM", "0750", "19:50") into a
+    /// Date that keeps `ref`'s calendar day but replaces hour/minute,
+    /// evaluated in UTC — the convention macOS date pickers use for AXValue
+    /// (a UTC date whose H:M is what the picker displays). nil if unparseable
+    /// or out of range.
+    static func parseTimeOfDay(_ raw: String, basedOn ref: Date) -> Date? {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        var pm = false, am = false
+        if s.hasSuffix("AM") { am = true; s.removeLast(2) }
+        else if s.hasSuffix("PM") { pm = true; s.removeLast(2) }
+        s = s.trimmingCharacters(in: .whitespaces)
+
+        var hour: Int? = nil
+        var minute: Int? = nil
+        if s.contains(":") {
+            let parts = s.split(separator: ":", maxSplits: 1)
+            if parts.count == 2 { hour = Int(parts[0]); minute = Int(parts[1]) }
+        } else if let n = Int(s) {
+            if s.count <= 2 { hour = n; minute = 0 }       // "7", "19"
+            else { hour = n / 100; minute = n % 100 }       // "0750" -> 7,50
+        }
+        guard var h = hour, let m = minute, (0...59).contains(m) else { return nil }
+        if pm && h < 12 { h += 12 }
+        if am && h == 12 { h = 0 }
+        guard (0...23).contains(h) else { return nil }
+
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "UTC")!
+        var comp = cal.dateComponents([.year, .month, .day], from: ref)
+        comp.hour = h; comp.minute = m; comp.second = 0
+        return cal.date(from: comp)
     }
 
     static func elementText(_ element: UIElement) -> String {

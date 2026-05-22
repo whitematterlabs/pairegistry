@@ -76,6 +76,18 @@ enum Actuator {
         guard let value = args["value"] as? String else {
             return .failure(.unsupportedAction("set_value:missing value"))
         }
+        // Date/time pickers (e.g. Clock's alarm AXDateTimeArea) carry a
+        // CFDate AXValue; setting a CFString silently fails or no-ops.
+        // Detect by the current value's type and set a CFDate instead.
+        if let curDate = AXHelpers.rawAttr(element, kAXValueAttribute as String) as? Date {
+            guard let newDate = AXHelpers.parseTimeOfDay(value, basedOn: curDate) else {
+                return .failure(.unsupportedAction("set_value:bad time \(value)"))
+            }
+            let err = AXUIElementSetAttributeValue(
+                element.element, kAXValueAttribute as CFString, newDate as NSDate)
+            if err == .success { return .success(()) }
+            return .failure(.axError("setDate=\(err.rawValue)"))
+        }
         let err = AXUIElementSetAttributeValue(
             element.element,
             kAXValueAttribute as CFString,
