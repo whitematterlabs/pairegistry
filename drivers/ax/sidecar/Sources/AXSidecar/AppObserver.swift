@@ -112,8 +112,14 @@ enum AXHelpers {
             else { hour = n / 100; minute = n % 100 }       // "0750" -> 7,50
         }
         guard var h = hour, let m = minute, (0...59).contains(m) else { return nil }
-        if pm && h < 12 { h += 12 }
-        if am && h == 12 { h = 0 }
+        if am || pm {
+            // A meridiem only makes sense on a 12-hour clock hour; reject
+            // contradictions like "19:50 PM" or "15 AM" rather than
+            // silently ignoring the AM/PM and setting the wrong alarm.
+            guard (1...12).contains(h) else { return nil }
+            if pm && h < 12 { h += 12 }
+            if am && h == 12 { h = 0 }
+        }
         guard (0...23).contains(h) else { return nil }
 
         var cal = Calendar(identifier: .gregorian)
