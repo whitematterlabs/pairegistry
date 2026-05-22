@@ -46,7 +46,10 @@ enum AXHelpers {
         if let b = v as? Bool { return b ? "true" : "false" }
         if let d = v as? Date {
             let f = ISO8601DateFormatter()
-            f.timeZone = TimeZone(identifier: "UTC")
+            // Render in the local zone so the H:M shown matches the picker's
+            // on-screen wall-clock (Clock interprets the AXValue's instant in
+            // local time). A UTC render would be off by the zone offset.
+            f.timeZone = TimeZone.current
             return f.string(from: d)
         }
         return nil
@@ -87,9 +90,11 @@ enum AXHelpers {
 
     /// Parse a wall-clock time ("07:50", "7:50 AM", "0750", "19:50") into a
     /// Date that keeps `ref`'s calendar day but replaces hour/minute,
-    /// evaluated in UTC — the convention macOS date pickers use for AXValue
-    /// (a UTC date whose H:M is what the picker displays). nil if unparseable
-    /// or out of range.
+    /// evaluated in the local time zone — Clock interprets a date picker's
+    /// CFDate AXValue in local time, so the H:M we set is the wall-clock the
+    /// saved alarm shows (a UTC build would land off by the zone offset).
+    /// The Calendar resolves the offset for `ref`'s own date, so seasonal
+    /// DST is handled correctly. nil if unparseable or out of range.
     static func parseTimeOfDay(_ raw: String, basedOn ref: Date) -> Date? {
         var s = raw.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         var pm = false, am = false
@@ -112,7 +117,7 @@ enum AXHelpers {
         guard (0...23).contains(h) else { return nil }
 
         var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = TimeZone(identifier: "UTC")!
+        cal.timeZone = TimeZone.current
         var comp = cal.dateComponents([.year, .month, .day], from: ref)
         comp.hour = h; comp.minute = m; comp.second = 0
         return cal.date(from: comp)

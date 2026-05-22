@@ -40,6 +40,15 @@ stay blocked regardless.)
 `expand <ref>` drills into a node; `show_menu` / `pick_menu_item --title`
 handle dropdowns.
 
+After any `press`/`set_value` that should change the UI, call `ax redump
+<sid>` to see the result — don't conclude "the press no-oped" from a stale
+tree. A press that returns `{"ok": true}` did fire; if nothing seems to
+have changed, redump before retrying. Re-`attach` returns `EDUPSCOPE`
+while the session is live.
+
+Time fields surface as `AXDateTimeArea`; set them by ref:
+`ax act <sid> <ref> set_value --value "7:50 AM"`. No keyboard fumbling.
+
 ## Fallback: osascript / System Events
 
 When `ax` isn't installed, drive `System Events`. Three rules turn a 10-minute
@@ -65,11 +74,14 @@ end tell
 `-1719 Invalid index` error means, not "no such control." Read the dump, find
 the real role+description, then target it.
 
-### 2. AXPress often silently no-ops — use the keyboard
+### 2. Via `osascript`, `click` on nested elements often no-ops — use the keyboard
 
-Catalyst/SwiftUI apps (Clock, many system apps) expose controls to
-Accessibility for *reading* but `click`/AXPress frequently does nothing — no
-error, no effect. **Don't keep re-clicking.** Pivot to keyboard activation:
+When you're in the `osascript` fallback (no `ax`), `click`-ing a control
+found by `entire contents` sometimes does nothing on Catalyst/SwiftUI apps
+(Clock, many system apps) — no error, no effect. (Through the `ax` driver,
+`press` actuates these same controls fine — prefer it, and `redump` after to
+confirm rather than assuming a no-op.) **Don't keep re-clicking.** If a
+System Events `click` doesn't take, pivot to keyboard activation:
 
 ```applescript
 tell application "System Events" to tell process "<App>"
@@ -115,8 +127,12 @@ false report. Confirm the element exists in the tree dump first.
 
 ## Proven recipe — Clock alarm
 
-With `ax` (preferred): `attach com.apple.clock --show-owner` → press the
-`Add an alarm` ref → `set_value` the time field → detach.
+With `ax` (preferred): `attach com.apple.clock --show-owner` → `press` the
+`Alarms` radio → `press` `Add an alarm` → `redump` → `set_value` the
+`AXDateTimeArea` ref (`--value "6:50 AM"`) → `press` `Save` → `detach`.
+Re-`redump` after each step instead of guessing. (The time field is an
+`AXDateTimeArea`; the driver writes a CFDate in local time, so the wall-clock
+you pass is the alarm you get.)
 
 With osascript (fallback), the exact sequence that works:
 

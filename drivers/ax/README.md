@@ -43,7 +43,7 @@ The shell-callable `ax` RPC client lives in a sibling bin bundle at
 
 - **PAI → axd** runs through `bin/ax`, a thin client that opens
   `$PAI_ROOT/var/run/ax/axd.sock` and speaks line-delimited JSON-RPC.
-  Methods: `attach`, `detach`, `act`, `expand`, `list_sessions`.
+  Methods: `attach`, `detach`, `act`, `expand`, `redump`, `list_sessions`.
 - **axd → PAI** goes through this driver. axd writes NDJSON to stdout
   with `target_pid` on every event; `inbound.py` calls
   `P.emit_event(payload, target_pid=...)`. The kernel router (modified
@@ -73,6 +73,19 @@ ref table.
 
 Use `expand(ref)` to drill into a node's children. Use `act(ref, ...)`
 to fire `press`, `set_value`, `show_menu`, or `pick_menu_item`.
+
+After an action changes the UI (a sheet opens, a value updates), call
+`redump(session_id)` to get the fresh tree — re-`attach` is refused with
+`EDUPSCOPE` while a session is live, and `expand` only drills a ref you
+already hold.
+
+Date/time pickers surface as `AXDateTimeArea` (also `AXDateField` /
+`AXTimeField`). Their `value` is rendered as an ISO-8601 string in the
+**local** time zone (e.g. `2000-01-01T07:50:00-08:00`); the H:M shown
+there is the picker's on-screen time. Set them with
+`act <ref> set_value --value "7:50 AM"` (also accepts `07:50`, `0750`,
+`19:50`) — the driver writes a CFDate (in local time, the convention the
+picker uses), not a string.
 
 ## Foreground gate
 
@@ -148,9 +161,13 @@ Owner-initiated task in a visible app — set a Clock alarm:
 
 ```bash
 ax attach com.apple.clock --show-owner   # waive the foreground gate
-# find the "Add an alarm" ref in the tree, then:
+# press the "Alarms" radio, then "Add an alarm" (redump between steps),
+# then set the time and save:
+ax act s1 <alarms-ref> press
 ax act s1 <add-ref> press
-ax act s1 <time-field-ref> set_value --value 0650
+ax redump s1                             # the sheet's AXDateTimeArea now appears
+ax act s1 <datetime-ref> set_value --value "6:50 AM"
+ax act s1 <save-ref> press
 ax detach s1
 ```
 
