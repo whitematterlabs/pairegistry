@@ -104,6 +104,16 @@ chatter. Secure-input gating (passwords, sudo, 1Password) still applies
 regardless. Without `--show-owner`, foreground `act` returns
 `EFOREGROUND`.
 
+A `--show-owner` session also **raises the scoped app to the front before
+each `act`**. This is load-bearing, not cosmetic: many controls (Clock's
+"Add an alarm", any sheet/modal-spawning button) only present their sheet
+when their app is the *active* app — `AXPress` on a backgrounded app
+returns success but silently no-ops, and the sheet never appears. A PAI
+lives in a terminal, so the app it's driving is almost never frontmost on
+its own. The raise is idempotent (skipped when already active, no
+flicker) and scoped to `--show-owner` only; background piloting
+(`allowForeground=false`) keeps its no-focus-steal contract.
+
 ## Owner privacy
 
 With no session attached, axd does not observe the owner. There is no

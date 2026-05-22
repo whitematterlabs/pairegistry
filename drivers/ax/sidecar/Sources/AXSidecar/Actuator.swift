@@ -1,5 +1,6 @@
 import Foundation
 import ApplicationServices
+import AppKit
 import AXSwift
 
 /// Perform actions against a session's elements. All actions go through
@@ -44,6 +45,18 @@ enum Actuator {
         if session.isForeground && !session.allowForeground {
             return .failure(.foreground)
         }
+        // show_owner sessions drive the window the owner is looking at. Many
+        // controls (Clock's "Add an alarm", any sheet/modal-spawning button)
+        // only present their sheet when the app is the *active* app — AXPress
+        // otherwise returns success but silently no-ops. The owner watching a
+        // visible app is no guarantee it's frontmost: the PAI lives in a
+        // terminal, which is the active app while it works. So raise the
+        // scoped app to the front before actuating. Idempotent — skipped when
+        // it's already active (no flicker, no cost). Background piloting
+        // (allowForeground=false) keeps its no-focus-steal contract.
+        if session.allowForeground {
+            raiseToFront(session)
+        }
         guard let element = session.element(forRef: ref) else {
             return .failure(.refGone)
         }
@@ -60,6 +73,23 @@ enum Actuator {
         default:
             return .failure(.unsupportedAction(action))
         }
+    }
+
+    // MARK: - Foreground
+
+    /// Make the scoped app the active app and raise its window, so AXPress on
+    /// sheet/modal-spawning controls actually presents. No-op when already
+    /// active. Sleeps briefly only when it had to switch, to let the app
+    /// become key before the action fires (otherwise the press races the
+    /// activation and no-ops just as it does from the background).
+    private static func raiseToFront(_ session: Session) {
+        guard let app = NSRunningApplication(processIdentifier: session.pid) else {
+            return
+        }
+        AXUIElementPerformAction(session.window.element, kAXRaiseAction as CFString)
+        if app.isActive { return }
+        app.activate(options: [.activateIgnoringOtherApps])
+        Thread.sleep(forTimeInterval: 0.3)
     }
 
     // MARK: - Concrete actions
