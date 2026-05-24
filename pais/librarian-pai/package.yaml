@@ -1,7 +1,7 @@
 name: librarian-pai
 kind: pai
 version: 0.1.0
-description: Nightly librarian — consolidates fleet journals into durable shared/topics, shared/people, and rewrites MEMORY.md indexes.
+description: Nightly librarian — handles memorize writes, remember lookups, and durable shared/private memory indexes.
 provider: deepseek
 model: deepseek-v4-pro
 prompt: prompt.md

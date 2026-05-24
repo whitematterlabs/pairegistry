@@ -16,6 +16,7 @@ Schema (`{HOME}/tmp/drivers/macmail/accounts.yaml`):
         addresses: [arda.tasci@icloud.com, alias@privaterelay.appleid.com]
         inbox_name: INBOX
         sent_name: Sent Messages
+        all_mail_name: null
       BFFD063A-...:
         addresses: [ardatasci@outlook.com]
         inbox_name: Gelen Kutusu
@@ -53,6 +54,7 @@ class Account:
     addresses: list[str] = field(default_factory=list)  # primary first
     inbox_name: Optional[str] = None
     sent_name: Optional[str] = None
+    all_mail_name: Optional[str] = None
 
 
 @dataclass
@@ -82,6 +84,16 @@ class AccountsConfig:
                     return True
         return False
 
+    def owns_address(self, uuid: str, address: str) -> bool:
+        """True if `address` belongs to the specified Mail.app account."""
+        if not address:
+            return False
+        acc = self.accounts.get(uuid)
+        if acc is None:
+            return False
+        addr = address.strip().lower()
+        return any(x.lower() == addr for x in acc.addresses)
+
     def all_addresses(self) -> list[str]:
         return sorted({x.lower() for a in self.accounts.values() for x in a.addresses})
 
@@ -97,28 +109,31 @@ class AccountsConfig:
         for acc in self.accounts.values():
             if acc.inbox_name:
                 out.append((f"%{acc.uuid}%/{_url_encode_mailbox_name(acc.inbox_name)}", "inbound"))
+            if acc.all_mail_name:
+                # Gmail rows that Mail.app shows in Inbox can be stored in
+                # `[Gmail]/All Mail` in the Envelope Index. Treat it as an
+                # inbound source for filtering; inbound.py infers final
+                # direction from headers so sent rows are not mislabeled.
+                out.append((f"%{acc.uuid}%/{_url_encode_mailbox_name(acc.all_mail_name)}", "inbound"))
             if acc.sent_name:
                 out.append((f"%{acc.uuid}%/{_url_encode_mailbox_name(acc.sent_name)}", "outbound"))
         return out
 
+    def is_all_mail_url(self, url: str) -> bool:
+        """True if `url` matches a discovered Gmail-style All Mail mailbox."""
+        patterns: list[str] = []
+        for acc in self.accounts.values():
+            if acc.all_mail_name:
+                patterns.append(f"%{acc.uuid}%/{_url_encode_mailbox_name(acc.all_mail_name)}")
+        for pat in patterns:
+            if _like_pattern_matches_url(pat, url):
+                return True
+        return False
+
     def role_for_url(self, url: str) -> Optional[str]:
         """Classify a `mailboxes.url` value as "inbound" / "outbound" / None."""
         for pat, role in self.url_like_patterns():
-            # Translate SQL LIKE semantics to Python: `%X%` → substring match.
-            # Our patterns are `%uuid%/name` with exactly two `%` segments at
-            # the start and middle (no `%` inside name after URL-encoding).
-            # So: split on `%`, every fragment must appear in order in url.
-            ok = True
-            cursor = 0
-            for fragment in pat.split("%"):
-                if not fragment:
-                    continue
-                idx = url.find(fragment, cursor)
-                if idx < 0:
-                    ok = False
-                    break
-                cursor = idx + len(fragment)
-            if ok:
+            if _like_pattern_matches_url(pat, url):
                 return role
         return None
 
@@ -128,10 +143,26 @@ class AccountsConfig:
 
 # ---------- AppleScript -----------------------------------------------------
 
+def _like_pattern_matches_url(pattern: str, url: str) -> bool:
+    # Translate SQL LIKE semantics to Python: `%X%` → substring match.
+    # Our patterns are `%uuid%/name` with exactly two `%` segments at
+    # the start and middle (no `%` inside name after URL-encoding).
+    # So: split on `%`, every fragment must appear in order in url.
+    cursor = 0
+    for fragment in pattern.split("%"):
+        if not fragment:
+            continue
+        idx = url.find(fragment, cursor)
+        if idx < 0:
+            return False
+        cursor = idx + len(fragment)
+    return True
+
 # Single AppleScript call returns three sections joined by newlines:
 #   ADDR|<uuid>|<address>     (one line per address per account)
 #   INBOX|<uuid>|<name>       (one line per per-account inbox)
 #   SENT|<uuid>|<name>        (one line per per-account sent mailbox)
+#   ALLMAIL|<uuid>|<name>     (Gmail's All Mail folder, if present)
 _DISCOVERY_SCRIPT = (
     'tell application "Mail"\n'
     '  set out to ""\n'
@@ -155,6 +186,16 @@ _DISCOVERY_SCRIPT = (
     '      set u to id of (account of mb)\n'
     '      set out to out & "SENT|" & u & "|" & (name of mb) & linefeed\n'
     '    end try\n'
+    '  end repeat\n'
+    '  repeat with a in accounts\n'
+    '    set u to id of a\n'
+    '    repeat with mb in (every mailbox of a)\n'
+    '      try\n'
+    '        if (name of mb) is "All Mail" then\n'
+    '          set out to out & "ALLMAIL|" & u & "|" & (name of mb) & linefeed\n'
+    '        end if\n'
+    '      end try\n'
+    '    end repeat\n'
     '  end repeat\n'
     '  return out\n'
     'end tell'
@@ -218,6 +259,8 @@ def parse_discovery_output(text: str) -> AccountsConfig:
             acc.inbox_name = value
         elif kind == "SENT":
             acc.sent_name = value
+        elif kind == "ALLMAIL":
+            acc.all_mail_name = value
     return AccountsConfig(accounts=accounts)
 
 
@@ -238,6 +281,7 @@ def _to_yaml(cfg: AccountsConfig) -> dict:
                 "addresses": list(acc.addresses),
                 "inbox_name": acc.inbox_name,
                 "sent_name": acc.sent_name,
+                "all_mail_name": acc.all_mail_name,
             }
             for uuid, acc in sorted(cfg.accounts.items())
         }
@@ -262,6 +306,7 @@ def _from_yaml(data: dict) -> AccountsConfig:
             addresses=[str(a) for a in addrs],
             inbox_name=body.get("inbox_name") or None,
             sent_name=body.get("sent_name") or None,
+            all_mail_name=body.get("all_mail_name") or None,
         )
     return AccountsConfig(accounts=accounts)
 
@@ -305,7 +350,10 @@ def summarize(cfg: AccountsConfig) -> str:
     parts = []
     for uuid, acc in sorted(cfg.accounts.items()):
         primary = acc.addresses[0] if acc.addresses else "?"
-        parts.append(f"{primary} (inbox={acc.inbox_name!r}, sent={acc.sent_name!r})")
+        parts.append(
+            f"{primary} (inbox={acc.inbox_name!r}, sent={acc.sent_name!r}, "
+            f"all_mail={acc.all_mail_name!r})"
+        )
     return ", ".join(parts) if parts else "<none>"
 
 

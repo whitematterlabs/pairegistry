@@ -8,7 +8,7 @@ processes:
 
 events:
   - kind: ax:scope_attached
-    description: A session was successfully attached to (pid, window_id). Sent only to the PAI that called attach().
+    description: A session was successfully attached to (pid, window_id). Sidecar confirmation; inbound suppresses normal successes because attach returns this inline.
     emitted_by: drivers/ax/sidecar
     payload:
       target_pid: int        # owning PAI; kernel uses this to route, not wake_on
@@ -30,7 +30,7 @@ events:
         changed: list         # [{ref, label?, value?, enabled?}]
 
   - kind: ax:action_result
-    description: Result of a previously issued act/expand. request_id correlates with the RPC call.
+    description: Result of a previously issued act/expand. request_id correlates with the RPC call. Inbound forwards failures; successful action confirmations stay private because act returns inline.
     emitted_by: drivers/ax/sidecar
     payload:
       target_pid: int
@@ -44,7 +44,7 @@ events:
         changed: list
 
   - kind: ax:scope_lost
-    description: Session ended or cannot continue. Subkinds via `reason`. paused/resumed are non-terminal transitions in this family.
+    description: Session ended or cannot continue. Subkinds via `reason`. paused/resumed are non-terminal transitions in this family. Explicit detach confirmations stay private.
     emitted_by: drivers/ax/sidecar
     payload:
       target_pid: int

@@ -3,4 +3,6 @@ kind: subagent
 version: 0.2.0
 description: Drives the owner's real Chrome via thin CDP verbs across multiple bash turns. No nested LLM loop.
 prompt: usr/lib/subagents/browse/prompt.md
+deps:
+  - bin/browse
 # provider/model intentionally omitted → cascade: parent PAI → fleet default

@@ -283,6 +283,27 @@ def _build_msg_dict(msg, direction: str, ts: datetime, conversation_id: int) -> 
     return out
 
 
+def _direction_for_message(
+    role: str,
+    msg,
+    cfg: A.AccountsConfig,
+    account_uuid: str,
+    *,
+    all_mail: bool,
+) -> str:
+    """Return inbound/outbound for a parsed message.
+
+    Gmail can store Inbox-visible messages under `[Gmail]/All Mail` in
+    Mail.app's Envelope Index. That mailbox can also contain sent mail, so
+    classify All Mail rows by the message's From address.
+    """
+    if not all_mail:
+        return role
+    from_addrs = E.extract_addresses(msg.get("From"))
+    from_addr = from_addrs[0]["address"] if from_addrs else ""
+    return "outbound" if cfg.owns_address(account_uuid, from_addr) else "inbound"
+
+
 def ingest_row(row, cfg: A.AccountsConfig) -> Optional[dict]:
     """Process one delta row. Returns an event-payload dict on success or
     None if we should leave the cursor parked (e.g. partial emlx).
@@ -291,12 +312,13 @@ def ingest_row(row, cfg: A.AccountsConfig) -> Optional[dict]:
     """
     rowid = int(row["rowid"])
     url = row["url"] or ""
-    account_uuid, direction = _parse_url(url, cfg)
-    if direction is None:
+    account_uuid, role = _parse_url(url, cfg)
+    if role is None:
         # URL didn't match any known inbox/sent role — shouldn't happen
         # for rows the SQL filter accepts, but skip defensively.
         print(f"[macmail-in] no role for url={url!r}; skipping rowid={rowid}", flush=True)
         return {"_skip": True}
+    all_mail = cfg.is_all_mail_url(url)
 
     # Mailbox-name path component, used by emlx layout. Mail.app stores
     # `.mbox` directories on disk by the same name shown in the URL.
@@ -329,6 +351,7 @@ def ingest_row(row, cfg: A.AccountsConfig) -> Optional[dict]:
         return {"_skip": True}
 
     ts = _mac_date_to_dt(int(row["date_received"] or 0))
+    direction = _direction_for_message(role, msg, cfg, account_uuid, all_mail=all_mail)
     msg_dict = _build_msg_dict(msg, direction, ts, int(row["conversation_id"] or 0))
 
     account_dir = paths.var_spool_email() / address

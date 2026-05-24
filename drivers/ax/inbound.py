@@ -7,7 +7,7 @@ target_pid stamping. This Python supervisor only:
   - spawns and restarts it (with rc=78 = Accessibility-grant-missing
     handled as a long-sleep retry, not a crash loop),
   - parses NDJSON events off its stdout,
-  - forwards them onto the kernel bus via P.emit_event(payload, target_pid=...).
+  - forwards public async/failure events via P.emit_event(payload, target_pid=...).
 
 The sidecar has flipped from ambient sensor to piloting surface — PAIs
 talk to it via the `ax` bin tool (Unix socket JSON-RPC); only PAIs that
@@ -46,6 +46,41 @@ RUN_DIR = PAI_ROOT / "var" / "run" / "ax"
 SLUG = "ax-in"
 
 
+def _public_event_from_sidecar(data: dict) -> tuple[dict, int] | None:
+    """Return the kernel-bus event for a sidecar event, if it should wake PAI.
+
+    The `ax` CLI already returns synchronous attach/act/detach confirmations
+    inline to the caller. Keep those private to the driver so completed
+    one-shot tasks do not get replayed as follow-up nudges. Asynchronous state
+    changes and failures still cross the public event bus.
+    """
+    kind = data.get("kind", "")
+    if not isinstance(kind, str) or not kind.startswith("ax:"):
+        return None
+
+    target_pid = data.get("target_pid")
+    if not isinstance(target_pid, int):
+        return None
+
+    bare_kind = kind[len("ax:"):]
+    if bare_kind == "scope_attached":
+        return None
+    if bare_kind == "action_result" and data.get("ok") is True:
+        return None
+    if bare_kind == "scope_lost" and data.get("reason") == "detached":
+        return None
+
+    payload: dict = {"source": "ax", "kind": bare_kind}
+    for k, v in data.items():
+        if k in ("kind", "target_pid"):
+            continue
+        if v is None:
+            continue
+        payload[k] = v
+
+    return payload, target_pid
+
+
 def _resolve_axd() -> Optional[Path]:
     for cand in (AXD_LIBEXEC, AXD_BUNDLE):
         if cand.exists() and os.access(cand, os.X_OK):
@@ -70,13 +105,13 @@ async def _drain_stderr(proc: asyncio.subprocess.Process) -> None:
 
 
 async def _read_stdout(proc: asyncio.subprocess.Process) -> None:
-    """Parse one NDJSON event per line; forward to the kernel bus.
+    """Parse one NDJSON event per line; forward public events to the bus.
 
     Each line is a full event payload from the sidecar. The sidecar stamps
-    `kind: "ax:foo"`, `target_pid`, and any payload fields. We re-pack
-    into the kernel's event shape (source/kind separated) and call
-    P.emit_event with the explicit target_pid so the router delivers
-    point-to-point instead of fanning out by wake_on."""
+    `kind: "ax:foo"`, `target_pid`, and any payload fields. Public events are
+    re-packed into the kernel's event shape (source/kind separated) and emitted
+    with the explicit target_pid so the router delivers point-to-point instead
+    of fanning out by wake_on."""
     assert proc.stdout is not None
     while True:
         line = await proc.stdout.readline()
@@ -89,28 +124,11 @@ async def _read_stdout(proc: asyncio.subprocess.Process) -> None:
             print(f"[ax-in] bad ndjson line: {e}", flush=True)
             continue
 
-        kind = data.get("kind", "")
-        if not isinstance(kind, str) or not kind.startswith("ax:"):
-            print(f"[ax-in] dropping event with bad kind: {kind!r}", flush=True)
+        public = _public_event_from_sidecar(data)
+        if public is None:
             continue
 
-        # Strip the "ax:" prefix; the kernel re-prefixes with the source
-        # field when it forms the public kind for routing.
-        bare_kind = kind[len("ax:"):]
-
-        target_pid = data.get("target_pid")
-        if not isinstance(target_pid, int):
-            print(f"[ax-in] dropping event without target_pid: {kind!r}", flush=True)
-            continue
-
-        payload: dict = {"source": "ax", "kind": bare_kind}
-        for k, v in data.items():
-            if k in ("kind", "target_pid"):
-                continue
-            if v is None:
-                continue
-            payload[k] = v
-
+        payload, target_pid = public
         P.emit_event(payload, target_pid=target_pid)
 
 

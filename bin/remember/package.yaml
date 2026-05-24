@@ -1,0 +1,5 @@
+name: remember
+kind: bin
+version: 0.1.0
+description: Ask librarian-pai for memory/context; replies asynchronously to the calling PAI.
+entrypoint: remember.py

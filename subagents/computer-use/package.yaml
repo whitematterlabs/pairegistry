@@ -1,0 +1,7 @@
+name: computer-use
+kind: subagent
+version: 0.2.0
+description: Drives macOS apps through AX plus raw AppleScript, Shortcuts, and Automator.
+prompt: prompt.md
+deps:
+  - drivers/ax

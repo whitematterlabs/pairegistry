@@ -45,9 +45,10 @@ The shell-callable `ax` RPC client lives in a sibling bin bundle at
   `$PAI_ROOT/var/run/ax/axd.sock` and speaks line-delimited JSON-RPC.
   Methods: `attach`, `detach`, `act`, `expand`, `redump`, `list_sessions`.
 - **axd → PAI** goes through this driver. axd writes NDJSON to stdout
-  with `target_pid` on every event; `inbound.py` calls
-  `P.emit_event(payload, target_pid=...)`. The kernel router (modified
-  in `src/boot/routing.py`) honors `target_pid` and bypasses `wake_on`
+  with `target_pid` on every event; `inbound.py` suppresses synchronous
+  success confirmations that the `ax` CLI already returned inline, and
+  calls `P.emit_event(payload, target_pid=...)` for async updates and
+  failures. The kernel router honors `target_pid` and bypasses `wake_on`
   matching, delivering the nudge point-to-point.
 
 ## Sessions
@@ -58,8 +59,9 @@ enforces uniqueness — a second `attach` to the same scope returns
 `EDUPSCOPE`.
 
 State is in-memory in axd. There is no persistence: kernel is always-on,
-and a sidecar restart is equivalent to revoking every session. Lost
-sessions surface as `ax:scope_lost`.
+and a sidecar restart is equivalent to revoking every session. Unexpected
+losses surface as `ax:scope_lost`; explicit `ax detach` confirmations stay
+private because the CLI already returned success inline.
 
 ## The tree
 
@@ -160,8 +162,8 @@ ax act s1 press 1
 ax act s1 press 17     # the "+" button
 ax act s1 press 4      # "3"
 ax act s1 press 23     # "="
-# Calculator now reads "10". Each act emits an ax:action_result nudge
-# to the calling PAI only.
+# Calculator now reads "10". Successful acts return inline and do not create
+# follow-up nudges; failed acts still surface as ax:action_result.
 
 ax list_sessions
 ax detach s1
@@ -194,5 +196,6 @@ Sidecar terminates cleanly within ~5s; every live session is torn down.
 - App-typed schemas (Spotify/Mail domain models on top of the generic tree).
 - CGEvent keystroke synthesis for fields that don't respond to `AXSetValue`.
 - Persistence across kernel reboots.
-- Coalescing / rate caps — without an ambient firehose there's nothing
-  to cap.
+- Broad coalescing / rate caps — without an ambient firehose there's nothing
+  to cap. The inbound driver only suppresses duplicate synchronous success
+  confirmations.

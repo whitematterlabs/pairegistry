@@ -1,11 +1,12 @@
 #!/usr/bin/env python
-"""memorize — ask librarian-pai to commit a fact to memory on behalf of the caller."""
+"""remember - ask librarian-pai to retrieve memory/context for the caller."""
 
 from __future__ import annotations
 
 import argparse
 import os
 import sys
+import uuid
 
 from boot import processes as P
 
@@ -21,31 +22,23 @@ def _resolve_librarian_pid() -> int | None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="memorize",
+        prog="remember",
         description=(
-            "Ask librarian-pai to commit a fact to memory on behalf of the "
-            "calling PAI. Use plain memorize by default; reserve "
-            "memorize --private for classified or very sensitive information."
+            "Ask librarian-pai to search memory/context and reply to the "
+            "calling PAI. The answer arrives asynchronously via send-message."
         ),
     )
-    mode = parser.add_mutually_exclusive_group()
-    mode.add_argument(
-        "--shared",
-        action="store_true",
-        help=argparse.SUPPRESS,
+    parser.add_argument(
+        "query",
+        nargs="+",
+        help="question or context request to send to librarian-pai",
     )
-    mode.add_argument(
-        "--private",
-        action="store_true",
-        help="write classified or very sensitive memory only this PAI should receive",
-    )
-    parser.add_argument("--content", required=True, help="memory text")
     args = parser.parse_args(argv)
 
     sender_raw = os.environ.get("PAI_PID")
     if not sender_raw:
         print(
-            "error: $PAI_PID not set — memorize must be invoked from a PAI turn",
+            "error: $PAI_PID not set — remember must be invoked from a PAI turn",
             file=sys.stderr,
         )
         return 1
@@ -63,15 +56,16 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    mode_str = "private" if args.private else "shared"
+    request_id = uuid.uuid4().hex[:12]
+    query = " ".join(args.query).strip()
     P.emit_event({
-        "source": "memorize",
+        "source": "remember",
         "kind": "pai_message",
         "target_pid": librarian_pid,
         "sender_pid": sender_pid,
-        "text": f"[memorize:{mode_str}] {args.content}",
+        "text": f"[remember:{request_id}] {query}",
     })
-    print(f"requested {mode_str} memory write")
+    print(f"requested memory context lookup ({request_id})")
     return 0
 
 
