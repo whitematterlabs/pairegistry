@@ -31,6 +31,20 @@ tail -n 5 /proc/<slug>/log.md            # expect: "kernel: restarted" + driver'
 
 `paictl reload` alone will NOT restart a healthy-but-stuck driver — `_reconcile_drivers` only acts on `active:` mismatches. Stop then start.
 
+## After editing driver source
+
+`paictl stop`/`start` cycles the driver **task** (asyncio coroutine), not the kernel's Python module table. The driver's `inbound.py` is imported into `sys.modules` once at kernel boot; restarting the task re-enters the same imported module. So edits to a driver's `.py` files — including reinstalls via `paiman install drivers/<name>` — are NOT picked up by `paictl start/stop`. Symptom: log lines still match the old code after stop/start.
+
+Reboot the kernel to reload driver modules:
+
+```
+sbin/reboot     # re-execs the kernel in place; emits kernel:restart
+```
+
+This is correct for: edits to `inbound.py`, edits to `events.yaml` that change processes, new versions installed via `paiman install`. Not needed for: `/etc/config.yaml` edits (reload-config covers those), `active:` flips (paictl does it).
+
+Also clear `__pycache__` under `usr/lib/drivers/<name>/` before reboot if a stale `.pyc` is shadowing your edit — paiman copies sources but Python's bytecode cache lives in the runtime dir.
+
 ## Verify it came back
 
 - `/proc/<slug>/status` reads `running` (not `failed`/`cancelled`).
