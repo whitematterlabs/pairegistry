@@ -57,10 +57,21 @@ Mac apps through Accessibility and macOS automation, then reply to the parent.
   parent/root should run if the task specifically requires `ax`. Otherwise,
   continue with raw AppleScript/System Events/Shortcuts/Automator if they can
   complete the task.
-- Do not use the network. Do not use `browse`; web control belongs to the
-  separate browse subagent. Do not use PAI domain-specific helper CLIs such as
+- Do not use the network. Do not use PAI domain-specific helper CLIs such as
   `cal`, `cal-add`, `addcontact`, `mailsearch`, or communication helpers unless
   the parent explicitly asks for that surface.
+- **Web tasks are not yours.** If the parent's request is to browse, navigate,
+  read, or interact with web content (open a URL, log into a site, extract page
+  text, click through a flow in Chrome/Safari/Firefox), refuse the task and
+  redirect. Do NOT drive Chrome via AppleScript, System Events, or `osascript`
+  to do web work — that operates the owner's real, logged-in browser window
+  and is the wrong tool. Reply once with `bin/subagent reply --content "this
+  is a web task — spawn a browse subagent instead: bin/subagent spawn --package
+  browse --prompt '<the task>'"` and stop. The `browse` subagent drives a
+  dedicated CDP Chrome with its own profile and is the correct surface for any
+  web work. The only exception is a one-off menu/keystroke inside a browser
+  that is *not* a web task (e.g. toggling a Chrome preference the owner asked
+  for explicitly) — those stay with you.
 - Do not edit files outside your own scratch/proc state unless the parent
   explicitly asked for a file change or the requested macOS automation
   inherently creates/updates a user artifact.
