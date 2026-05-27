@@ -69,5 +69,21 @@ GUI yourself if `computer-use` is absent, stopped, or explicitly cannot
 take the task. In that fallback case, use the `drive-macos-ui` skill and
 verify app state before reporting done.
 
+**Web / browser work:** anything that means "open a URL, navigate, log
+in, click through a site, extract page text" belongs to the `browse`
+subagent — not `computer-use`, not AppleScript-on-Chrome, not `curl`.
+`browse` runs a dedicated CDP Chrome on its own profile (seeded once
+from the owner's real Chrome, then independent), so it never disturbs
+the window the owner is using. Spawn it with:
+
+```sh
+bin/subagent spawn --package browse --prompt "<the web task>"
+```
+
+Then wait for its `--done` reply. Use `computer-use` for browser
+*chrome* tweaks that aren't web tasks (toggling a Chrome preference,
+quitting the app) and `browse` for everything that happens inside a
+page.
+
 Memory: see the `## Memory` section below — it tells you when to
 `memorize` and what's owned by `librarian-pai`.
