@@ -172,13 +172,15 @@ async def _supervise(axd: Path) -> None:
 
         rc = await proc.wait()
         # rc == 78 → sidecar voluntarily exited because the Accessibility
-        # grant is missing. Don't crash-loop: surface, sleep long, retry.
+        # grant is missing. Don't crash-loop and don't badger the owner with
+        # TCC prompts every minute: log once, sleep half an hour. Grant is a
+        # human action; checking sooner achieves nothing.
         if rc == 78:
             print("[ax-in] sidecar exited: Accessibility grant missing. "
                   "Grant axd in System Settings → Privacy → Accessibility. "
-                  "Retrying in 60s.", flush=True)
-            P.append_log(SLUG, "Accessibility grant missing — retry in 60s")
-            await asyncio.sleep(60)
+                  "Retrying in 30m.", flush=True)
+            P.append_log(SLUG, "Accessibility grant missing — retry in 30m")
+            await asyncio.sleep(1800)
             backoff = 1
             continue
 
