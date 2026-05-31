@@ -708,6 +708,12 @@ class _KqueueWatcher:
             return os.open(str(path), os.O_RDONLY)
         except FileNotFoundError:
             return None
+        except PermissionError:
+            # Full Disk Access was lost after run()'s preflight passed. Skip
+            # the target rather than crash the driver with a raw EPERM
+            # traceback; run() surfaces the actionable hint on (re)start.
+            print(_FDA_HINT, flush=True)
+            return None
 
     def _register(self, fd: int, name: str) -> None:
         assert self._kq is not None
@@ -802,9 +808,48 @@ class _KqueueWatcher:
             self._kq = None
 
 
+# Surfaced when the Mail store exists but macOS refuses the read. The only
+# cause is a missing Full Disk Access grant, and there is no system prompt for
+# it — so we log an actionable hint instead of a raw EPERM traceback or the
+# misleading "not found" (`Path.exists()` returns False under a TCC denial,
+# which used to mask a permission wall as an absent mailbox).
+_FDA_HINT = (
+    "[macmail-in] cannot read Mail: PAI is missing Full Disk Access. Grant it in "
+    "System Settings → Privacy & Security → Full Disk Access, then restart "
+    "PAI. Driver idle until granted."
+)
+
+
+def _index_access() -> str:
+    """Classify access to the Envelope Index without raising.
+
+    Returns 'ok' (exists and readable), 'denied' (exists but the open was
+    refused — Full Disk Access missing), or 'absent' (no Mail store here).
+    Unlike ``Path.exists()``, a TCC denial is reported as 'denied' rather than
+    silently collapsing to "absent".
+    """
+    try:
+        fd = os.open(str(ENVELOPE_INDEX), os.O_RDONLY)
+    except PermissionError:
+        return "denied"
+    except FileNotFoundError:
+        return "absent"
+    except OSError:
+        # Any other open failure (e.g. an unreadable parent directory) is far
+        # more likely a permission wall than a genuinely absent store — surface
+        # the actionable FDA hint rather than going idle as if Mail is unset.
+        return "denied"
+    os.close(fd)
+    return "ok"
+
+
 async def run() -> None:
     global _kernel_started_at
-    if not ENVELOPE_INDEX.exists():
+    access = _index_access()
+    if access == "denied":
+        print(_FDA_HINT, flush=True)
+        return
+    if access == "absent":
         print(f"[macmail-in] Envelope Index not found at {ENVELOPE_INDEX}; driver idle", flush=True)
         return
 
