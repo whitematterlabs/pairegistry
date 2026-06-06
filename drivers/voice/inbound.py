@@ -17,12 +17,23 @@ import wave
 from datetime import datetime
 from pathlib import Path
 
-import numpy as np
-
 from boot import processes as P
 
-from . import stt
-from .wake import SAMPLE_RATE, WAKE_BLOCK, VAD_FRAME, WakeDetector, SilenceDetector
+# Heavy, optional native deps (numpy, sounddevice, openwakeword/onnxruntime,
+# whisper.cpp) are provisioned by libexec/install.sh, NOT by the kernel's base
+# venv. If voice was never provisioned (or the venv was rebuilt), these imports
+# fail — degrade gracefully in run() with an actionable message instead of
+# crashing the module load with a raw traceback.
+try:
+    import numpy as np
+
+    from . import stt
+    from .wake import SAMPLE_RATE, WAKE_BLOCK, VAD_FRAME, WakeDetector, SilenceDetector
+
+    _MISSING_DEP: str | None = None
+except ImportError as _import_err:
+    np = None  # type: ignore[assignment]
+    _MISSING_DEP = str(_import_err)
 
 PAI_ROOT = Path(os.environ.get("PAI_ROOT", str(Path.home() / ".pai")))
 CAPTURES_DIR = PAI_ROOT / "sys" / "drivers" / "voice" / "captures"
@@ -181,6 +192,17 @@ async def _audio_loop() -> None:
 
 async def run() -> None:
     print("[voice-in] starting", flush=True)
+    if _MISSING_DEP is not None:
+        # Return (not raise): an unprovisioned optional driver is not a crash.
+        # Raising would mark the proc `failed` and nudge root every restart.
+        msg = (
+            f"voice driver not provisioned — missing Python dep ({_MISSING_DEP}). "
+            "Run drivers/voice/libexec/install.sh to install "
+            "numpy/sounddevice/openwakeword and build whisper.cpp, then re-enable."
+        )
+        print(f"[voice-in] {msg}", flush=True)
+        P.emit_event({"source": "voice", "kind": "unprovisioned", "reason": _MISSING_DEP})
+        return
     CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
     try:
         await _audio_loop()
