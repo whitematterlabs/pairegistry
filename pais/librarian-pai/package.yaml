@@ -9,7 +9,14 @@ wake_on:
   - librarian:consolidate
 hooks:
   # Idempotent on every kernel boot: register the nightly trigger.
-  # `paicron ensure` is a no-op if the slug already exists with the
-  # same spec; otherwise it replaces.
+  # `paicron ensure` is a no-op if the slug already exists with the same
+  # spec; otherwise it replaces (stable slug, never a dated duplicate).
+  #
+  # Schedule-only (no --run): on fire, the kernel nudges the parent PAI
+  # (librarian-pai) directly with reason "schedule fired". There is no CLI
+  # that emits a raw bus event, so the old `--run "send_message emit
+  # librarian:consolidate"` could never work (rc=127/rc=2). The --description
+  # carries the intent into the wake context; the prompt treats a scheduled
+  # wake as the nightly consolidation run.
   boot:
-    - 'bin/paicron ensure --slug librarian-nightly --parent-slug librarian-pai --schedule "0 3 * * *" --run "bin/send_message emit librarian:consolidate"'
+    - 'bin/paicron ensure --slug librarian-nightly --parent-slug librarian-pai --schedule "0 3 * * *" --description "nightly memory consolidation run"'
