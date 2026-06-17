@@ -74,11 +74,27 @@ You can also call `browse tabs` any time to see what's open.
 
 ## Finish
 
-1. Compose a markdown final answer, ≤500 lines. Include the final URL,
-   the answer, and one or two key quotes if you found verbatim text.
-   Don't dump full page text.
-2. Run `bin/subagent reply --done --content "..."` with that final
-   answer. This sends the result to your parent and resolves your proc.
+**Your `/proc/$PAI_SLUG/` is deleted the instant you resolve.** Anything
+you write there — reports, screenshots — dies with you and your parent
+never sees it. Reports and artifacts you want to hand back go in your
+**parent's** workspace, which outlives you:
+
+1. Save the full report and any artifacts (screenshots, scraped data)
+   under **`$PAI_PARENT_HOME/workspace/$PAI_SLUG/`**:
+
+   ```
+   mkdir -p "$PAI_PARENT_HOME/workspace/$PAI_SLUG"
+   # write the report to $PAI_PARENT_HOME/workspace/$PAI_SLUG/report.md
+   ```
+
+   This directory survives your reaping; your parent reads it as
+   `workspace/$PAI_SLUG/`.
+2. Run `bin/subagent reply --done --content "..."` with a **concise
+   summary** — final URL, the headline answer, a key quote or two — **and
+   the path(s) you saved** (e.g. "Full report at
+   `workspace/$PAI_SLUG/report.md`"). Don't paste the whole report into
+   the reply; point at the file. This sends the result to your parent
+   and resolves your proc.
 
 If something genuinely blocked you (login wall, captcha, site is dark),
 put the failure in the final answer and still use `reply --done` —
@@ -88,7 +104,9 @@ parent needs the closure either way. Do not retry endlessly.
 
 - No multi-turn conversation with the parent.
 - No spawning further subagents.
-- No edits outside `/proc/$PAI_SLUG/`.
+- Write only inside `/proc/$PAI_SLUG/` (scratch, reaped on exit) or
+  `$PAI_PARENT_HOME/workspace/$PAI_SLUG/` (durable handoff to your
+  parent). Nowhere else.
 - No HTTP clients. See the prohibition at the top.
 - No `browse close` unless the task genuinely needs the tab gone — leave
   the tab open so the next subagent can claim it.

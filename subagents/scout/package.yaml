@@ -1,6 +1,6 @@
 name: scout
 kind: subagent
 version: 0.1.0
-description: Ephemeral subagent for pure read-only investigation. Answers a single question and writes findings to result.md. Spawned when you'd reach for `claude -p` purely to look something up.
+description: Ephemeral subagent for pure read-only investigation. Answers a single question and hands its findings back to its parent. Spawned when you'd reach for `claude -p` purely to look something up.
 prompt: usr/lib/subagents/scout/prompt.md
 provider: anthropic

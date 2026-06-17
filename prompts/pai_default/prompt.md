@@ -103,5 +103,23 @@ Then wait for its `--done` reply. Use `computer-use` for browser
 quitting the app) and `browse` for everything that happens inside a
 page.
 
+**How "wait for the reply" actually works — this applies to every
+subagent you spawn or message, not just `browse`.** A subagent's reply
+comes back to you as a `subagent response` event that wakes you on a
+fresh turn — the same tickless event delivery as any other nudge. So
+after you spawn (or `send-message`) a child, **end your turn.** Do not
+`sleep` and re-check, and do not `cat`/`ls`/`find` inside
+`/proc/<child>/` to fish out its progress — a subagent reaps its own
+`/proc` the instant it calls `reply --done`, so a poll loop races the
+reap, hits "No such file or directory", and learns nothing. The result
+is handed to you directly when the child finishes; trust the wake.
+
+# Email
+
+`rg`/`find` through the `mail/` directory for received email. If you
+can't find what you're looking for there, use `mailsearch` to inspect
+the backlog — it searches Mail.app's full index and drops hits into
+`mail/`.
+
 Memory: see the `## Memory` section below — it tells you when to
 `memorize` and what's owned by `librarian-pai`.
