@@ -4,9 +4,16 @@
 Queries the same SQLite index macmail-in watches for new mail, but does
 it on demand against the entire history Mail.app has cached. Each hit
 gets materialized into the canonical yaml tree under
-`var/spool/communication/email/{account}/{date}/...` (idempotent — uses
+`~/communication/email/{account}/{date}/...` (idempotent — uses
 `shared.write_message_yaml`'s Message-ID dedup), so future greps and
 PAI's reply flow "just work" on the result.
+
+Result `path`s are emitted in the home view (`communication/email/...`),
+matching what the email SKILL teaches and what the calling PAI can grep
+or read directly — not the FHS `var/spool/...` spelling.
+
+`--from` / `--to` match the address substring OR the contact's display
+name, so both `--from cjnewton@mit.edu` and `--from "Curt Newton"` hit.
 
 Usage:
     mailsearch --from bob@example.com --limit 10
@@ -35,6 +42,18 @@ from drivers.email.macmail import inbound as IN
 
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 200
+
+
+def _home_view(rel_path: str) -> str:
+    """Rewrite a PAI_ROOT-relative spool path into the home-view path a PAI
+    actually uses. `ingest_row` returns `var/spool/communication/email/...`
+    (FHS), but every email-capable PAI sees that tree through its home link
+    `communication/email -> var/spool/communication/email`, which the email
+    SKILL teaches as `~/communication/email/<account>/...`. Stripping the
+    `var/spool/` prefix yields exactly that home-relative path. Paths that
+    don't start with the prefix are returned unchanged."""
+    prefix = "var/spool/"
+    return rel_path[len(prefix):] if rel_path.startswith(prefix) else rel_path
 
 
 def _split_terms(value: Optional[str]) -> list[str]:
@@ -72,23 +91,37 @@ def build_query(args: argparse.Namespace, cfg: A.AccountsConfig) -> tuple[str, l
         params.extend(mb_patterns)
 
     def add_or_likes(column: str, terms: list[str]) -> None:
+        add_or_likes_cols([column], terms)
+
+    def add_or_likes_cols(columns: list[str], terms: list[str]) -> None:
+        """Match each term against any of `columns` (substring LIKE), with
+        the terms OR-joined. Used so an address filter matches both the
+        raw address and its display-name `comment` — `--from newton` finds
+        `cjnewton@mit.edu`, and `--from "Curt Newton"` finds it too."""
         if not terms:
             return
-        where.append("(" + " OR ".join([f"{column} LIKE ?"] * len(terms)) + ")")
-        params.extend(f"%{t}%" for t in terms)
+        per_term = "(" + " OR ".join(f"{c} LIKE ?" for c in columns) + ")"
+        where.append("(" + " OR ".join([per_term] * len(terms)) + ")")
+        for t in terms:
+            params.extend(f"%{t}%" for _ in columns)
 
-    add_or_likes("sender.address", _split_terms(args.from_addr))
+    add_or_likes_cols(["sender.address", "sender.comment"],
+                      _split_terms(args.from_addr))
     add_or_likes("s.subject", _split_terms(args.subject))
 
     to_terms = _split_terms(args.to_addr)
     if to_terms:
-        ors = " OR ".join(["ra.address LIKE ?"] * len(to_terms))
+        ors = " OR ".join(
+            ["(ra.address LIKE ? OR ra.comment LIKE ?)"] * len(to_terms)
+        )
         where.append(
             "EXISTS (SELECT 1 FROM recipients r "
             "JOIN addresses ra ON ra.ROWID = r.address "
             f"WHERE r.message = m.ROWID AND ({ors}))"
         )
-        params.extend(f"%{t}%" for t in to_terms)
+        for t in to_terms:
+            params.append(f"%{t}%")
+            params.append(f"%{t}%")
 
     add_or_likes("mb.url", _split_terms(args.account))
 
@@ -138,14 +171,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         prog="mailsearch",
         description="Lazy email search via Mail.app's Envelope Index. "
                     "Hits get materialized as canonical yamls under "
-                    "var/spool/communication/email/.",
+                    "~/communication/email/.",
     )
     p.add_argument("--from", dest="from_addr",
-                   help="sender address contains (substring; `|` = OR, "
-                        "e.g. 'ups|fedex')")
+                   help="sender address OR display name contains (substring; "
+                        "`|` = OR, e.g. 'ups|fedex' or 'Curt Newton')")
     p.add_argument("--to", dest="to_addr",
-                   help="any recipient address contains, To/Cc/Bcc "
-                        "(substring; `|` = OR)")
+                   help="any recipient address OR display name contains, "
+                        "To/Cc/Bcc (substring; `|` = OR)")
     p.add_argument("--subject",
                    help="subject substring, ASCII case-insensitive; "
                         "`|` = OR (e.g. 'shipped|tracking|delivered'). "
@@ -230,7 +263,7 @@ def run_search(args: argparse.Namespace) -> int:
             continue
         ts = IN._mac_date_to_dt(int(row["date_received"] or 0))
         results.append({
-            "path": result["path"],
+            "path": _home_view(result["path"]),
             "date": ts.isoformat(timespec="seconds"),
             "account": result["account"],
             "from": result["from"],

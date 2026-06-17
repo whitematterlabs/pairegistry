@@ -6,6 +6,8 @@ deps:
   - tailer
 home:
   links:
+    - link: mail
+      target: var/spool/communication/email
     - link: communication/email
       target: var/spool/communication/email
     - link: drafts
