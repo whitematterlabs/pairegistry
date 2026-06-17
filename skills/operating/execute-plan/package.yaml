@@ -1,0 +1,6 @@
+name: execute-plan
+kind: skill
+topic: operating
+version: 0.1.0
+description: "Execute an approved plan at ~/workspace/plans/<slug>/. Refuse unless status.md is exactly \"approved\". Walk steps one at a time, verify each, append to log.md, halt on failure."
+entrypoint: SKILL.md
