@@ -1,0 +1,5 @@
+name: imessage-history
+kind: bin
+version: 0.1.0
+description: Read iMessage history from chat.db in a date window (read-only)
+entrypoint: imessage_history.py
