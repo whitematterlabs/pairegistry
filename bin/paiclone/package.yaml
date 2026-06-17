@@ -1,0 +1,5 @@
+name: paiclone
+kind: bin
+version: 0.1.0
+description: Fork an existing fleet entry as a new inert instance
+entrypoint: paiclone.py

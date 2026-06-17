@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import os
 import re
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -32,9 +34,23 @@ from pathlib import Path
 import yaml
 
 from boot import processes as P
+from boot import timers as T
 
 
 DATE_SUFFIX = re.compile(r"-\d{4}-\d{2}-\d{2}(?:T\d{2}-\d{2}-\d{2})?$")
+
+
+def _default_parent_pid() -> int:
+    """Owning PID for a new service. Inherits from the calling PAI's $PAI_PID
+    (kernel sets this on every PAI turn); falls back to 1 (kernel) when
+    invoked outside a PAI turn (manual shell, kernel itself)."""
+    raw = os.environ.get("PAI_PID")
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    return 1
 
 
 def _today_slug_suffix() -> str:
@@ -55,6 +71,18 @@ def _allocate_slug(base: str) -> str:
 
 def _base_from_slug(slug: str) -> str:
     return DATE_SUFFIX.sub("", slug)
+
+
+def _resolve_parent_slug(slug: str) -> int:
+    """Resolve a PAI slug to its pid by reading `/proc/<slug>/spec.yaml`."""
+    try:
+        spec = P.read_spec(slug)
+    except P.ProcessNotFound as e:
+        raise ValueError(f"--parent-slug {slug!r} not found in /proc/") from e
+    pid = spec.get("pid")
+    if not isinstance(pid, int):
+        raise ValueError(f"--parent-slug {slug!r}: spec has no integer pid")
+    return pid
 
 
 def _build_spec_from_args(args: argparse.Namespace) -> dict:
@@ -78,7 +106,10 @@ def _build_spec_from_args(args: argparse.Namespace) -> dict:
         spec["description"] = args.description
     if args.people:
         spec["people"] = [p.strip() for p in args.people.split(",") if p.strip()]
-    if args.parent is not None:
+    parent_slug = getattr(args, "parent_slug", None)
+    if parent_slug:
+        spec["parent"] = _resolve_parent_slug(parent_slug)
+    elif args.parent is not None:
         spec["parent"] = int(args.parent)
     return spec
 
@@ -104,6 +135,64 @@ def cmd_start(args: argparse.Namespace) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 1
     # Stdout is the full slug, nothing else — pipeable.
+    print(slug)
+    # For one-shot reminders (schedule:, no run:), echo the resolved local
+    # fire time so the caller can confirm the parser took the input as
+    # intended without re-reading the spec.
+    if "schedule" in spec and "run" not in spec:
+        try:
+            next_fire, recurring = T.parse_schedule(spec["schedule"], dt.datetime.now())
+        except Exception:
+            next_fire, recurring = None, True
+        if not recurring and next_fire is not None:
+            print(f"fires at {next_fire.isoformat(timespec='seconds')}")
+    return 0
+
+
+def cmd_ensure(args: argparse.Namespace) -> int:
+    """Idempotent stable-slug variant of `start`.
+
+    Intended for bundle `hooks.boot:` entries. Uses the slug literally
+    (no date suffix). If a proc with the slug already exists:
+      - same spec, status running/scheduled  -> no-op
+      - different spec, or terminal status   -> resolve cancelled, respawn
+    If it doesn't exist, spawn fresh."""
+    if not args.slug:
+        print("error: --slug is required", file=sys.stderr)
+        return 1
+    try:
+        spec = _build_spec_from_args(args)
+    except (OSError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    if "run" not in spec and "schedule" not in spec:
+        print("error: spec must have `run:` or `schedule:`", file=sys.stderr)
+        return 1
+
+    slug = args.slug
+    try:
+        existing = P.read_spec(slug)
+        status = P.read_status(slug)
+    except P.ProcessNotFound:
+        existing, status = None, None
+
+    if existing is not None:
+        # Drop runtime-managed fields before comparing.
+        existing_cmp = {k: v for k, v in existing.items() if k != "spawned"}
+        if existing_cmp == spec and status in ("running", "scheduled"):
+            print(f"{slug} (unchanged)")
+            return 0
+        try:
+            P.resolve(slug, "cancelled")
+        except P.ProcessNotFound:
+            pass
+        shutil.rmtree(P.PROC_DIR / slug, ignore_errors=True)
+
+    try:
+        P.spawn(slug, spec)
+    except P.ProcessExists as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
     print(slug)
     return 0
 
@@ -203,9 +292,26 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("--deadline", help="ISO datetime; kernel auto-expires if passed")
     sp.add_argument("--description", help="free-text description")
     sp.add_argument("--people", help="comma-separated list of related people")
-    sp.add_argument("--parent", type=int, default=1, help="PID of the owning PAI (default: 1)")
+    sp.add_argument("--parent", type=int, default=_default_parent_pid(), help="PID of the owning PAI (default: $PAI_PID, else 1)")
+    sp.add_argument("--parent-slug", help="resolve owning PAI by slug (overrides --parent)")
     sp.add_argument("--spec", help="YAML file with the spec body (mutually exclusive with per-field flags)")
     sp.set_defaults(func=cmd_start)
+
+    en = sub.add_parser(
+        "ensure",
+        help="idempotently spawn a service with a stable slug (for boot hooks)",
+    )
+    en.add_argument("--slug", help="exact slug (no date suffix)")
+    en.add_argument("--run", help="command to run (background service, or per-fire for cron)")
+    en.add_argument("--schedule", help="cron expression (recurring) or ISO datetime (one-shot)")
+    en.add_argument("--restart", choices=["never", "on-failure", "always"])
+    en.add_argument("--deadline", help="ISO datetime; kernel auto-expires if passed")
+    en.add_argument("--description", help="free-text description")
+    en.add_argument("--people", help="comma-separated list of related people")
+    en.add_argument("--parent", type=int, default=_default_parent_pid(), help="PID of the owning PAI (default: $PAI_PID, else 1)")
+    en.add_argument("--parent-slug", help="resolve owning PAI by slug (overrides --parent)")
+    en.add_argument("--spec", help="YAML file with the spec body")
+    en.set_defaults(func=cmd_ensure)
 
     st = sub.add_parser("stop", help="cancel a running service")
     st.add_argument("slug")

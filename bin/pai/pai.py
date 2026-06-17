@@ -12,7 +12,7 @@ import subprocess
 import sys
 
 from boot.init import check_layout
-from boot.paths import HOME_DIR, PAI_ROOT
+from boot.paths import PAI_ROOT
 
 
 def cmd_start(args: argparse.Namespace) -> int:
@@ -29,7 +29,7 @@ def cmd_start(args: argparse.Namespace) -> int:
         os.execvp(sys.executable, [sys.executable, "-u", "-m", "boot.entry"])
         raise AssertionError("execvp returned without replacing process")
 
-    log_path = HOME_DIR / "tmp" / "kernel.log"
+    log_path = PAI_ROOT / "var" / "log" / "kernel" / "kernel.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_fp = log_path.open("a", buffering=1, encoding="utf-8")
     kernel = subprocess.Popen(
@@ -40,15 +40,34 @@ def cmd_start(args: argparse.Namespace) -> int:
         stdin=subprocess.DEVNULL,
     )
     try:
-        from sbin.tui import main as tui_main
-        tui_main()
+        if args.web:
+            from usr.libexec.web.pai_web.server import run as web_run
+            web_run(port=args.port, open_browser=not args.no_open)
+        else:
+            from sbin.tui import main as tui_main
+            tui_main()
     finally:
         if kernel.poll() is None:
-            kernel.send_signal(signal.SIGTERM)
+            # Signal the kernel's whole process group, not just the leader —
+            # if the kernel itself is wedged, this still tears down its
+            # driver subprocesses (chromium, tmux, etc).
+            try:
+                pgid = os.getpgid(kernel.pid)
+            except ProcessLookupError:
+                pgid = None
+            if pgid is not None:
+                try:
+                    os.killpg(pgid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
             try:
                 kernel.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                kernel.kill()
+                if pgid is not None:
+                    try:
+                        os.killpg(pgid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
                 kernel.wait()
     return kernel.returncode or 0
 
@@ -57,11 +76,27 @@ def main() -> int:
     ap = argparse.ArgumentParser(prog="pai", description="PAI user entrypoint")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    start = sub.add_parser("start", help="start kernel and TUI together")
+    start = sub.add_parser("start", help="start kernel and an owner surface together")
     start.add_argument(
         "--headless",
         action="store_true",
-        help="run only the kernel (no TUI); equivalent to `init`",
+        help="run only the kernel (no UI); equivalent to `init`",
+    )
+    start.add_argument(
+        "--web",
+        action="store_true",
+        help="run the web surface instead of the terminal TUI",
+    )
+    start.add_argument(
+        "--port",
+        type=int,
+        default=8787,
+        help="web surface port (with --web; default 8787)",
+    )
+    start.add_argument(
+        "--no-open",
+        action="store_true",
+        help="don't auto-open a browser (with --web)",
     )
     start.set_defaults(func=cmd_start)
 

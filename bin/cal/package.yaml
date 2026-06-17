@@ -1,0 +1,5 @@
+name: cal
+kind: bin
+version: 0.1.0
+description: Print macOS Calendar events for a day via EventKit
+entrypoint: cal.py

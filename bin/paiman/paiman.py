@@ -19,8 +19,8 @@ Sources:
 The registry is `$PAIMAN_REGISTRY` (default
 `https://github.com/whitematterlabs/pairegistry`) — either a git URL of a
 flat-layout repo (`<name>/package.yaml`) or a local directory of the same
-shape. Pai bundles list their deps in `deps:` as bare names; missing deps
-are fetched from the registry recursively.
+shape. Composite bundles list their deps in `deps:`; deps are fetched from
+the registry recursively.
 
 Other commands:
 
@@ -134,11 +134,19 @@ SCAFFOLD_TYPES = {
 
 # ---------- install / remove ----------
 
-INSTALLABLE_KINDS = ("bin", "driver", "skill", "prompt", "pai", "lib")
+INSTALLABLE_KINDS = ("bin", "driver", "skill", "prompt", "pai", "lib", "subagent")
 PRIMITIVE_KINDS = ("bin", "driver", "skill", "prompt", "lib")
+DEPS_KINDS = ("pai", "driver", "subagent")
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 COPY_IGNORE = shutil.ignore_patterns(".git", "__pycache__", ".DS_Store", "*.pyc")
 DEFAULT_REGISTRY = "https://github.com/whitematterlabs/pairegistry"
+# Bare-name resolution precedence when the same name lives under multiple
+# topics. Bundles that pull deps (pais, drivers) outrank the leaf packages
+# they depend on (bins, libs), so `paiman install ax` lands drivers/ax — which
+# pulls in its bin/ax dep and builds the sidecar — not bin/ax on its own.
+_TOPIC_RANK = {t: i for i, t in enumerate(
+    ("pais", "drivers", "subagents", "skills", "prompts", "lib", "bin", "sbin")
+)}
 
 
 def _validate_name(name: str) -> None:
@@ -148,6 +156,27 @@ def _validate_name(name: str) -> None:
         raise SystemExit(f"paiman: invalid name {name!r}")
 
 
+def _opt_rel(kind: str, name: str, topic: str | None) -> str:
+    """Staging path under /opt/paiman/ for a bundle. Skills group by topic
+    (`<topic>/<name>`); most other kinds group by kind (`<kind>/<name>`).
+    Kind-grouping lets two different-kind bundles share a name without
+    clobbering each other's staging dir — e.g. the `ax` driver and the `ax`
+    bin client coexist at `driver/ax` and `bin/ax`. The scanners
+    (`_find_installed_bundle`, `_iter_installed_bundles`, boot hooks) already
+    walk one level deep, so this needs no reader changes.
+
+    Exception: `prompt` bundles stay flat at `opt/paiman/<name>`. Unlike
+    every other kind, a prompt's *bundle dir* (not just its activation slot)
+    is referenced externally — `config.yaml` points `prompt_dir` at
+    `opt/paiman/<name>` so bootstrap can glob its `*.md`. Grouping it by kind
+    would silently empty the PAI's role prompt."""
+    if topic:
+        return f"{topic}/{name}"
+    if kind == "prompt":
+        return name
+    return f"{kind}/{name}"
+
+
 def _activation_slot(
     kind: str,
     name: str,
@@ -155,7 +184,7 @@ def _activation_slot(
     topic: str | None = None,
 ) -> tuple[Path, Path]:
     """Return (slot_path, symlink_target) for the activation symlink."""
-    rel = f"{topic}/{name}" if topic else name
+    rel = _opt_rel(kind, name, topic)
     bundle_dir = paths.opt_paiman() / rel
     if kind == "bin":
         if not entrypoint:
@@ -173,6 +202,10 @@ def _activation_slot(
         return paths.usr_share_prompts() / f"{name}.md", bundle_dir / entrypoint
     if kind == "pai":
         return paths.usr_lib_pais() / name, bundle_dir
+    if kind == "subagent":
+        # Persistent subagents resolve from /usr/lib/subagents/<name>/ (see
+        # src/bin/subagent.py). Same bundle-dir symlink model as pai/driver.
+        return paths.usr_lib_subagents() / name, bundle_dir
     if kind == "lib":
         # Python package import: /usr/lib/ is on sys.path; the slot is the
         # package dir itself so `from <name> import ...` resolves into the
@@ -262,10 +295,17 @@ class _Registry:
         pkg_dir = self.root() / name
         if (pkg_dir / "package.yaml").is_file():
             return pkg_dir
-        # Topic-foldered: <root>/<topic>/<name>/package.yaml
-        for topic_dir in sorted(self.root().iterdir()):
-            if not topic_dir.is_dir() or topic_dir.name.startswith("."):
-                continue
+        # Topic-foldered: <root>/<topic>/<name>/package.yaml. A bare name can
+        # collide across topics — e.g. drivers/ax and the bin/ax client it
+        # depends on. Walk topics in precedence order so the umbrella bundle
+        # wins; plain alphabetical order would pick bin/ax (b < d) and never
+        # the driver that builds the sidecar.
+        topics = sorted(
+            (d for d in self.root().iterdir()
+             if d.is_dir() and not d.name.startswith(".")),
+            key=lambda d: (_TOPIC_RANK.get(d.name, len(_TOPIC_RANK)), d.name),
+        )
+        for topic_dir in topics:
             candidate = topic_dir / name
             if (candidate / "package.yaml").is_file():
                 return candidate
@@ -310,7 +350,7 @@ def _audit_log(line: str) -> None:
 def _install_from_source(src: Path, src_arg: str, registry: _Registry, work: Path,
                          seen: set[str], kinds_out: set[str] | None = None) -> str:
     """Install one bundle from a resolved source tree. Returns the bundle name.
-    Recursive for pai bundles via their `deps:` list. `kinds_out`, if given,
+    Recursive for composite bundles via their `deps:` list. `kinds_out`, if given,
     collects every kind installed during this call (including transitive deps)
     so the caller can decide whether to emit a kernel reload event."""
     manifest = _load_manifest(src)
@@ -326,9 +366,14 @@ def _install_from_source(src: Path, src_arg: str, registry: _Registry, work: Pat
             f"paiman: kind {kind!r} not installable "
             f"(known: {', '.join(INSTALLABLE_KINDS)})"
         )
-    if name in seen:
+    # Key cycle detection on the resolved source path, not the bundle name.
+    # Sibling bundles of different kinds may legitimately share a name
+    # (e.g. the `ax` driver depends on the `ax` bin client); only a true
+    # cycle revisits the same source tree.
+    src_key = str(src.resolve())
+    if src_key in seen:
         raise SystemExit(f"paiman: dependency cycle detected at {name!r}")
-    seen.add(name)
+    seen.add(src_key)
 
     if kind in ("bin", "prompt"):
         if not entrypoint:
@@ -336,10 +381,10 @@ def _install_from_source(src: Path, src_arg: str, registry: _Registry, work: Pat
         if not (src / entrypoint).is_file():
             raise SystemExit(f"paiman: entrypoint {entrypoint!r} not found in source")
 
-    # Resolve declared `deps:` for any bundle that has them. Drivers
-    # commonly depend on shared lib packages (e.g. tailer); pai bundles
-    # pull in their drivers/skills. Fail fast before touching disk.
-    if kind in ("pai", "driver"):
+    # Resolve declared `deps:` for composite bundles. Drivers commonly depend
+    # on shared lib/bin packages; pai bundles pull in their drivers/skills;
+    # subagents can now carry their own driver/bin surface too.
+    if kind in DEPS_KINDS:
         deps = manifest.get("deps") or []
         if not isinstance(deps, list):
             raise SystemExit(f"paiman: {kind} bundle 'deps' must be a list of names")
@@ -364,8 +409,8 @@ def _install_from_source(src: Path, src_arg: str, registry: _Registry, work: Pat
         elif old_link.is_dir():
             shutil.rmtree(old_link)
 
-    # Copy to /opt/paiman/[<topic>/]<name>/ (overwrite).
-    dest = paths.opt_paiman() / (f"{topic}/{name}" if topic else name)
+    # Copy to /opt/paiman/<topic-or-kind>/<name>/ (overwrite).
+    dest = paths.opt_paiman() / _opt_rel(kind, name, topic)
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists() or dest.is_symlink():
         shutil.rmtree(dest)
@@ -373,12 +418,19 @@ def _install_from_source(src: Path, src_arg: str, registry: _Registry, work: Pat
 
     # Activate.
     slot, target = _activation_slot(kind, name, entrypoint, topic=topic)
-    _atomic_symlink(target, slot)
     if kind == "bin":
-        try:
-            target.chmod(target.stat().st_mode | 0o111)
-        except OSError:
-            pass
+        # Write a shell shim that execs the entrypoint via the interpreter
+        # paiman itself runs under: the kernel venv python in dev, the embedded
+        # python in a bundled PAI.app. A bare symlink would fall back to the
+        # bin's own shebang (`#!/usr/bin/env python`), which can't portably
+        # reference either interpreter and breaks when no `python` is on PATH.
+        slot.parent.mkdir(parents=True, exist_ok=True)
+        if slot.is_symlink() or slot.exists():
+            slot.unlink()
+        slot.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{target}" "$@"\n')
+        slot.chmod(0o755)
+    else:
+        _atomic_symlink(target, slot)
 
     _audit_log(f"install {kind} {name} from {src_arg}")
     print(f"installed {kind} {name} -> {slot}")
@@ -424,11 +476,11 @@ def cmd_install(args: argparse.Namespace) -> int:
     # blocks without a reboot. Bin/lib are picked up via PATH/sys.path on the
     # PAI's next turn — no reload needed. Driver/pai installs are followed by
     # explicit paictl/paiadd which emit reload themselves.
-    if installed_kinds & {"skill", "prompt"}:
+    if installed_kinds & {"skill", "prompt"} and not getattr(args, "no_reload", False):
         try:
-            from boot.processes import emit_event
-            emit_event({"kind": "kernel:reload_config", "source": "paiman",
-                        "action": "install", "source_arg": src_arg})
+            from boot import processes as _processes
+            _processes.emit_event({"kind": "kernel:reload_config", "source": "paiman",
+                                   "action": "install", "source_arg": src_arg})
         except Exception as e:
             print(f"paiman: warning — could not emit kernel:reload_config: {e}",
                   file=sys.stderr)
@@ -727,6 +779,13 @@ def main(argv: list[str] | None = None) -> int:
 
     p_install = sub.add_parser("install", help="install a bundle (registry name, local path, or git URL)")
     p_install.add_argument("source", help="bundle name in the registry, local directory path, or git URL (optionally @ref)")
+    p_install.add_argument(
+        "--no-reload",
+        action="store_true",
+        help="skip the post-install kernel:reload_config emit; for batch "
+        "callers (paisetup) that emit a single reload after the whole batch "
+        "instead of one reconcile storm per package",
+    )
     p_install.set_defaults(func=cmd_install)
 
     p_remove = sub.add_parser("remove", help="remove an installed bundle")

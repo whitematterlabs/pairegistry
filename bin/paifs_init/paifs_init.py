@@ -8,16 +8,46 @@ first run, and provisions a self-contained Python venv at
 usr/lib/venv/ with runtime
 deps + console-script shims at usr/bin/ — so the FHS root is runnable
 without reaching back into the repo's own .venv.
+
+Two modes:
+  - **dev** (default): symlinks `REPO_ROOT/src/*` into the FHS and builds a
+    `uv` venv. Edits in the repo are live; assumes a checkout + `uv`.
+  - **bundle** (`--bundle-mode --seed <dir>`): used by PAI.app on first run.
+    There is no checkout and no `uv` — the embedded interpreter already has the
+    package, and content slots are *copied* from the bundled `<seed>` dir rather
+    than symlinked at a repo. Writes a `var/lib/.provisioned` schema marker so
+    the app can cheaply detect first-run and re-provision on a version bump.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 import tomllib
 from pathlib import Path
+
+
+def _ensure_uv() -> None:
+    """Hard-fail with install instructions if `uv` is missing.
+
+    The whole FHS provisioning chain (venv creation, pip installs, paiman
+    deps) goes through uv. We don't auto-install it — curl-pipe-sh feels
+    inappropriate for a tool that touches Python toolchain — but we do
+    surface a single clear message instead of an opaque FileNotFoundError
+    deep in subprocess.run.
+    """
+    if shutil.which("uv") is not None:
+        return
+    sys.exit(
+        "paifs-init: `uv` is required but not on PATH.\n"
+        "Install it first:\n"
+        "    brew install uv                                   # macOS\n"
+        "    curl -LsSf https://astral.sh/uv/install.sh | sh   # any unix\n"
+        "Then re-run paifs-init."
+    )
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -28,6 +58,7 @@ SKELETON: tuple[str, ...] = (
     "sbin",
     "dev",
     "etc/prompts",
+    "etc/boilerplate",
     "home",
     "root",
     "mnt",
@@ -39,6 +70,8 @@ SKELETON: tuple[str, ...] = (
     "usr/lib/drivers",
     "usr/lib/skills",
     "usr/lib/pais",
+    "usr/lib/subagents",
+    "usr/libexec",
     "usr/share/prompts",
     "usr/src",
     "var/lib/memory/people",
@@ -60,15 +93,72 @@ SKELETON: tuple[str, ...] = (
 SYMLINKS: tuple[tuple[str, Path], ...] = (
     ("boot", REPO_ROOT / "src" / "boot"),
     ("usr/src", REPO_ROOT / "src"),
-    ("usr/lib/drivers", REPO_ROOT / "src" / "drivers"),
-    ("usr/lib/skills", REPO_ROOT / "src" / "usr" / "lib" / "skills"),
-    ("usr/share/prompts", REPO_ROOT / "src" / "prompts"),
+    ("usr/libexec/web", REPO_ROOT / "src" / "usr" / "libexec" / "web"),
     ("usr/share/doc", REPO_ROOT / "src" / "usr" / "share" / "doc"),
+    ("etc/owner.md", REPO_ROOT / "src" / "etc" / "owner.md"),
+    ("etc/boilerplate/owner.md", REPO_ROOT / "src" / "etc" / "owner.md"),
+    ("etc/boilerplate/memory-usage.md", REPO_ROOT / "src" / "etc" / "boilerplate" / "memory-usage.md"),
+    ("etc/boilerplate/capability-escalation.md", REPO_ROOT / "src" / "etc" / "boilerplate" / "capability-escalation.md"),
 )
 
-# Default etc/config.yaml written on first install. Never overwritten —
-# once seeded this file is runtime state owned by the agent/user.
-DEFAULT_CONFIG_YAML = """\
+# Prompts paifs-init seeds via paiman so the kernel boots on first run.
+# Scope: only what the seed config.yaml references. App PAIs/drivers/skills
+# get installed later by the root user via `paiman install <name>`.
+ROOT_SEED_PROMPTS: tuple[str, ...] = (
+    "root",
+    "pai_default",
+    # Sysprompt fragments stitched in for spawned subagents so the child
+    # knows it IS the subagent and shouldn't recursively spawn another.
+    "subagent",
+    "subagent-persistent",
+)
+
+# Drivers the kernel imports as libraries during boot/runtime. A fresh
+# $PAI_ROOT must have these before `boot.entry` starts supervising; drivers
+# with runnable processes (imessage, macmail)
+# are NOT seeded — the root user installs them explicitly.
+KERNEL_SEED_DRIVERS: tuple[str, ...] = ("contacts", "messages")
+
+# Skills every PAI needs at first boot. Kept tight: only skills that
+# teach the use of a kernel-provided tool the PAI cannot reasonably
+# invent on its own.
+KERNEL_SEED_SKILLS: tuple[str, ...] = (
+    "schedule-reminder",
+    "grow-capability",
+)
+
+# Bins the kernel's memory contract refers to from the default prompts.
+# `memorize` and `remember` are invoked by every PAI via the memory-usage
+# boilerplate; without them installed the memory contract is inert.
+KERNEL_SEED_BINS: tuple[str, ...] = (
+    "memorize",
+    "remember",
+)
+
+# PAIs the kernel itself requires to close core loops. `librarian-pai`
+# is the sole writer to shared/private MEMORY indexes and the consumer
+# of `memorize`/`remember` requests; the default config below declares it as a
+# reserved fleet member so reconcile spawns it on first boot.
+KERNEL_SEED_PAIS: tuple[str, ...] = (
+    "librarian-pai",
+)
+
+# Provider/model the seed config.yaml uses when install.sh doesn't pass an
+# owner choice (non-interactive installs, re-runs). Mirrors llm.PROVIDERS.
+DEFAULT_SEED_PROVIDER = "deepseek"
+DEFAULT_SEED_MODEL = "deepseek-v4-pro"
+
+
+def default_config_yaml(provider: str = DEFAULT_SEED_PROVIDER,
+                        model: str = DEFAULT_SEED_MODEL) -> str:
+    """Render the etc/config.yaml seeded on first install.
+
+    `provider`/`model` default to deepseek (preserving prior behavior) but are
+    overridden by install.sh's interactive prompt so the whole fleet boots on
+    the model the owner picked — and so only that provider's API key is needed.
+    Written once and never overwritten; afterward it's owner-editable state.
+    """
+    return f"""\
 # PAI kernel control plane.
 #
 # Source of truth for which long-running PAIs exist. The kernel reconciles
@@ -79,7 +169,7 @@ DEFAULT_CONFIG_YAML = """\
 #   name         (required) stable proc-dir slug; unique
 #   pid          required for reserved entries (1 and 2); auto-allocated otherwise
 #   description  required
-#   package      (optional) pulls defaults from packages/{package}/package.yaml
+#   package      (optional) pulls defaults from packages/{{package}}/package.yaml
 #   prompt       per-PAI role file (resolved relative to repo root)
 #   provider     LLM provider key (anthropic | deepseek). Drives base_url + key.
 #   model        model id within the provider; defaults to provider's default
@@ -90,18 +180,24 @@ pais:
   - name: root
     pid: 1
     description: kernel-internal events + errored nudges
-    prompt: src/prompts/root.md
-    provider: deepseek
-    model: deepseek-v4-pro
+    prompt_dir: opt/paiman/root
+    boilerplate: [owner]
+    provider: {provider}
+    model: {model}
     wake_on: ['kernel:*']
 
   - name: pai
     pid: 2
     description: owner-facing PAI; catch-all for unclaimed events
-    prompt: src/prompts/pai_default.md
-    provider: deepseek
-    model: deepseek-v4-pro
+    prompt_dir: opt/paiman/pai_default
+    boilerplate: [owner, memory-usage, capability-escalation]
+    provider: {provider}
+    model: {model}
     fallback: true
+
+  - name: librarian-pai
+    package: librarian-pai
+    description: nightly + on-demand memory consolidator; sole writer of shared/private MEMORY
 
   # Example future entry (not seeded):
   # - name: msg-spec
@@ -113,18 +209,40 @@ pais:
 # symlink wins; ensure_symlink will remove an existing empty dir.
 SYMLINK_TARGETS = {p for p, _ in SYMLINKS}
 
+# Bundle-mode provisioning schema. Bumped when the on-disk layout this script
+# produces changes in a way that warrants re-provisioning an existing root.
+# Written to var/lib/.provisioned; PAI.app re-provisions when its current
+# schema exceeds the marker's.
+PROVISION_SCHEMA = 1
+
+# Content slots bundle mode COPIES (not symlinks) out of the bundled seed dir.
+# Each entry is (link_path_under_root, seed_relative_path). The app ships
+# `src/etc/` -> Resources/seed/etc and `src/usr/share/doc/` -> Resources/seed/doc
+# (see macos/bundle-runtime.sh); these mappings mirror the content entries in
+# SYMLINKS above, sourced from the seed instead of the repo.
+BUNDLE_SEED_CONTENT: tuple[tuple[str, str], ...] = (
+    ("usr/share/doc", "doc"),
+    ("etc/owner.md", "etc/owner.md"),
+    ("etc/boilerplate/owner.md", "etc/owner.md"),
+    ("etc/boilerplate/memory-usage.md", "etc/boilerplate/memory-usage.md"),
+    ("etc/boilerplate/capability-escalation.md", "etc/boilerplate/capability-escalation.md"),
+)
+
 # Scripts that get installed into /sbin/ instead of /usr/bin/. These are
 # privileged kernel/owner ops, not PAI-callable tools.
 SBIN_SCRIPTS: frozenset[str] = frozenset({
     "init",
+    "pai",
     "migrate",
     "reboot",
     "reset",
     "tui",
     "paiman",
     "paiadd",
+    "paiclone",
     "paidel",
     "paifs-init",
+    "paisetup",
 })
 
 
@@ -156,13 +274,28 @@ def ensure_symlink(link: Path, target: Path) -> None:
     link.symlink_to(target)
 
 
-def ensure_default_config(root: Path) -> None:
+def ensure_default_config(root: Path, *, provider: str = DEFAULT_SEED_PROVIDER,
+                          model: str = DEFAULT_SEED_MODEL) -> None:
     """Write a default etc/config.yaml on first install. Never overwrites."""
     dest = root / "etc" / "config.yaml"
     if dest.exists():
         return
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(DEFAULT_CONFIG_YAML)
+    dest.write_text(default_config_yaml(provider, model))
+
+
+SHARED_MEMORY_INDEX_HEADER = (
+    "<!-- Fleet-wide MEMORY index. Owned by the librarian PAI; fleet PAIs read but do not edit. -->\n"
+)
+
+
+def ensure_shared_memory_index(root: Path) -> None:
+    """Seed var/lib/memory/MEMORY.md so the boilerplate's claim of an index is true on disk."""
+    dest = root / "var" / "lib" / "memory" / "MEMORY.md"
+    if dest.exists():
+        return
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(SHARED_MEMORY_INDEX_HEADER)
 
 
 def _load_pyproject() -> dict:
@@ -205,23 +338,50 @@ def install_pth(venv_dir: Path, root: Path) -> None:
     )
     site = Path(out.stdout.strip())
     pth = site / "_pai_src.pth"
-    pth.write_text(f"{root / 'usr' / 'src'}\n")
+    pth.write_text(
+        f"{root / 'usr' / 'lib'}\n"
+        f"{root / 'usr' / 'src'}\n"
+    )
 
 
-def install_bin_shims(venv_dir: Path, root: Path) -> None:
-    """Generate shim files for each [project.scripts] entry.
+def _console_scripts(venv_dir: Path | None) -> dict[str, str]:
+    """Map console-script name -> 'module:attr'.
+
+    Dev mode (venv_dir set) reads pyproject.toml — the repo is on disk. Bundle
+    mode (venv_dir None) has no pyproject in the app, so it reads the installed
+    `pai` dist's entry points from the running interpreter's metadata."""
+    if venv_dir is not None:
+        return _load_pyproject().get("project", {}).get("scripts", {})
+    from importlib.metadata import entry_points
+
+    out: dict[str, str] = {}
+    for ep in entry_points(group="console_scripts"):
+        dist = getattr(ep, "dist", None)
+        name = getattr(dist, "name", None)
+        if name and name.replace("_", "-").lower() == "pai":
+            out[ep.name] = ep.value
+    return out
+
+
+def install_bin_shims(venv_dir: Path | None, root: Path, *, python: Path | None = None) -> None:
+    """Generate shim files for each console-script entry.
 
     Splits by privilege: SBIN_SCRIPTS go to sbin/, the rest to usr/bin/.
-    Each shim shebangs the FHS venv's python and import-calls the target.
-    Idempotent — overwritten on every run so the bin set tracks pyproject."""
+    Each shim shebangs `python` (the FHS venv python in dev mode, the embedded
+    interpreter in bundle mode) and import-calls the target. Idempotent —
+    overwritten on every run so the bin set tracks the package's entry points.
+
+    Dev mode passes `venv_dir` (scripts read from pyproject, python is the
+    venv's). Bundle mode passes `venv_dir=None` + an explicit `python` (scripts
+    read from installed metadata)."""
     bin_dir = root / "usr" / "bin"
     sbin_dir = root / "sbin"
     for d in (bin_dir, sbin_dir):
         if d.is_symlink():
             d.unlink()
         d.mkdir(parents=True, exist_ok=True)
-    py = venv_dir / "bin" / "python"
-    scripts = _load_pyproject().get("project", {}).get("scripts", {})
+    py = python if python is not None else venv_dir / "bin" / "python"
+    scripts = _console_scripts(venv_dir)
     for name, target in scripts.items():
         module, _, attr = target.partition(":")
         dest_dir = sbin_dir if name in SBIN_SCRIPTS else bin_dir
@@ -248,22 +408,209 @@ def install_bin_shims(venv_dir: Path, root: Path) -> None:
     py_shim.chmod(0o755)
 
 
-def lay_out(root: Path) -> None:
+def repoint_shims(root: Path, python_exe: Path) -> int:
+    """Rewrite every tool-shim shebang under usr/bin + sbin to `python_exe`
+    (and the usr/bin/python exec-shim's target). Returns the count changed.
+
+    Shims are generated at provision time pointing at whatever python ran
+    paifs-init — the dev venv. A standalone PAI.app must NOT depend on that
+    venv, so on launch it re-points the shims at its embedded interpreter.
+    Deliberately bundle-safe: touches only existing shim files, so it needs
+    no uv, no venv, and no pyproject.toml (none of which a shipped app has).
+    Idempotent — skips shims already pointing at `python_exe`."""
+    py = str(python_exe)
+    changed = 0
+    for d in (root / "usr" / "bin", root / "sbin"):
+        if not d.is_dir():
+            continue
+        for shim in d.iterdir():
+            if shim.is_symlink() or not shim.is_file():
+                continue
+            try:
+                text = shim.read_text()
+            except (OSError, UnicodeDecodeError):
+                continue
+            lines = text.split("\n")
+            if not lines or not lines[0].startswith("#!"):
+                continue
+            if shim.name == "python" and lines[0] == "#!/bin/sh":
+                # The exec-shim that exposes the interpreter at usr/bin/python.
+                new = f'#!/bin/sh\nexec "{py}" "$@"\n'
+            else:
+                # A console-script shim: `#!<py>` + import/call body.
+                new = f"#!{py}\n" + "\n".join(lines[1:])
+            if new == text:
+                continue
+            shim.write_text(new)
+            shim.chmod(0o755)
+            changed += 1
+    return changed
+
+
+def copy_seed_content(root: Path, seed: Path) -> None:
+    """Copy the seed content slots into the FHS (bundle mode).
+
+    Dev mode symlinks these at the live repo (see SYMLINKS); a shipped app has
+    no repo, so it copies the equivalents out of the bundled `<seed>` dir.
+    Overwrites on every run so the on-disk copy tracks the shipped seed."""
+    for link_rel, seed_rel in BUNDLE_SEED_CONTENT:
+        src = seed / seed_rel
+        if not src.exists():
+            sys.exit(f"paifs-init: seed content missing: {src}")
+        dest = root / link_rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if dest.is_symlink():
+            dest.unlink()
+        if src.is_dir():
+            if dest.exists():
+                shutil.rmtree(dest)
+            shutil.copytree(src, dest)
+        else:
+            if dest.exists():
+                dest.unlink()
+            shutil.copy2(src, dest)
+
+
+def write_provisioned_marker(root: Path) -> None:
+    """Stamp var/lib/.provisioned with the schema version (bundle mode).
+
+    Lets PAI.app cheaply detect an unprovisioned root (no marker) and
+    re-provision when its bundled schema exceeds the marker's."""
+    dest = root / "var" / "lib" / ".provisioned"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(f"{PROVISION_SCHEMA}\n")
+
+
+def lay_out(root: Path, *, bundle_mode: bool = False, seed: Path | None = None,
+            default_provider: str = DEFAULT_SEED_PROVIDER,
+            default_model: str = DEFAULT_SEED_MODEL) -> None:
     root.mkdir(parents=True, exist_ok=True)
     for rel in SKELETON:
         if rel in SYMLINK_TARGETS:
             continue
         ensure_dir(root / rel)
-    for rel, target in SYMLINKS:
-        ensure_symlink(root / rel, target)
+    if bundle_mode:
+        if seed is None:
+            sys.exit("paifs-init: --bundle-mode requires --seed <dir>")
+        # Code symlinks are skipped (code is in the bundle); content slots are
+        # copied from the seed instead of symlinked at a repo checkout.
+        copy_seed_content(root, seed)
+    else:
+        for rel, target in SYMLINKS:
+            ensure_symlink(root / rel, target)
     # /bin → usr/bin (relative). One bin for PAI-callable tools; /sbin
     # holds the kernel-only ones.
     ensure_symlink(root / "bin", Path("usr/bin"))
-    ensure_default_config(root)
-    venv_dir = ensure_venv(root)
-    install_pth(venv_dir, root)
-    install_bin_shims(venv_dir, root)
-    expose_pai_command(root)
+    ensure_default_config(root, provider=default_provider, model=default_model)
+    ensure_shared_memory_index(root)
+    if bundle_mode:
+        # No dev venv: the embedded interpreter already has the package, and the
+        # `drivers` namespace resolves via PYTHONPATH=usr/lib (set by
+        # KernelLauncher). System binaries come from the bundle (PATH), not brew.
+        install_bin_shims(None, root, python=Path(sys.executable))
+        seed_kernel_essentials(root)
+        write_provisioned_marker(root)
+    else:
+        ensure_system_deps()
+        venv_dir = ensure_venv(root)
+        install_pth(venv_dir, root)
+        install_bin_shims(venv_dir, root)
+        seed_kernel_essentials(root)
+
+
+# System-level binaries the kernel itself shells out to. Drivers may add
+# their own via libexec/install.sh — this is the floor. Each entry is
+# (brew_formula, binary_name); they differ for some formulas (e.g.
+# corelocationcli ships /opt/homebrew/bin/CoreLocationCLI).
+SYSTEM_DEPS: tuple[tuple[str, str], ...] = (
+    ("tmux", "tmux"),                          # shell_tool spawns a viewer tmux per PAI
+    ("corelocationcli", "CoreLocationCLI"),    # bootstrap.py reads location for the per-turn header
+)
+
+
+def ensure_system_deps() -> None:
+    """Install kernel-required system binaries via Homebrew (macOS only).
+
+    Idempotent: brew install no-ops when the package is already present.
+    """
+    import shutil
+    if sys.platform != "darwin":
+        return
+    brew = shutil.which("brew")
+    if not brew:
+        formulas = ", ".join(f for f, _ in SYSTEM_DEPS)
+        print("warning: brew not found; cannot install system deps "
+              f"({formulas}). Install Homebrew or these manually.")
+        return
+    for formula, binary in SYSTEM_DEPS:
+        if shutil.which(binary):
+            continue
+        print(f"installing system dep: {formula}")
+        subprocess.run([brew, "install", formula], check=True)
+
+
+def seed_kernel_essentials(root: Path) -> None:
+    """Install the prompts and drivers the kernel needs to boot.
+
+    Prompts: whatever the seed config.yaml references (root, pai_default).
+    Drivers: contacts + messages, imported at module-load by the kernel.
+
+    Idempotent: skips items already installed. Uses paiman's default registry."""
+    paiman = root / "sbin" / "paiman"
+    if not paiman.exists():
+        print(f"warning: {paiman} not found; skipping kernel essentials seed")
+        return
+    env = {**os.environ, "PAI_ROOT": str(root)}
+
+    prompts_dir = root / "usr" / "share" / "prompts"
+    needed_prompts = [
+        name for name in ROOT_SEED_PROMPTS
+        if not (prompts_dir / f"{name}.md").is_symlink()
+    ]
+    drivers_dir = root / "usr" / "lib" / "drivers"
+    needed_drivers = [
+        name for name in KERNEL_SEED_DRIVERS
+        if not (drivers_dir / name / "events.yaml").exists()
+        and not (drivers_dir / name / "package.yaml").exists()
+    ]
+    skills_dir = root / "usr" / "lib" / "skills"
+
+    def _skill_installed(name: str) -> bool:
+        if (skills_dir / name / "SKILL.md").exists():
+            return True
+        if not skills_dir.is_dir():
+            return False
+        for topic_dir in skills_dir.iterdir():
+            if not topic_dir.is_dir():
+                continue
+            if (topic_dir / name / "SKILL.md").exists():
+                return True
+        return False
+
+    needed_skills = [
+        name for name in KERNEL_SEED_SKILLS if not _skill_installed(name)
+    ]
+    bin_dir = root / "usr" / "bin"
+    needed_bins = [
+        name for name in KERNEL_SEED_BINS
+        if not (bin_dir / name).exists() and not (bin_dir / name).is_symlink()
+    ]
+    pais_dir = root / "usr" / "lib" / "pais"
+    needed_pais = [
+        name for name in KERNEL_SEED_PAIS
+        if not (pais_dir / name / "package.yaml").exists()
+    ]
+    # Use typed `<kind>/<name>` form so `subagent` resolves to the prompt
+    # rather than colliding with `bin/subagent`.
+    typed = (
+        [f"prompts/{n}" for n in needed_prompts]
+        + [f"drivers/{n}" for n in needed_drivers]
+        + [f"skills/{n}" for n in needed_skills]
+        + [f"bin/{n}" for n in needed_bins]
+        + [f"pais/{n}" for n in needed_pais]
+    )
+    for src in typed:
+        subprocess.run([str(paiman), "install", src], check=True, env=env)
 
 
 def expose_pai_command(root: Path) -> None:
@@ -272,7 +619,7 @@ def expose_pai_command(root: Path) -> None:
     Tries /usr/local/bin → /opt/homebrew/bin → ~/.local/bin (created if absent).
     Only `pai` is exposed; PAI itself doesn't need a launcher once running.
     """
-    target = root / "usr" / "bin" / "pai"
+    target = root / "sbin" / "pai"
     candidates = [
         Path("/usr/local/bin"),
         Path("/opt/homebrew/bin"),
@@ -295,6 +642,39 @@ def expose_pai_command(root: Path) -> None:
     print(f"note: no writable bin dir found; add {target.parent} to PATH manually")
 
 
+def _config_has_only_seeds(root: Path) -> bool:
+    """True if etc/config.yaml exists and lists only the reserved seed
+    PAIs (root + pai). Used to decide whether to chain into paisetup on
+    a fresh install."""
+    import yaml as _yaml
+
+    cfg = root / "etc" / "config.yaml"
+    if not cfg.exists():
+        return False
+    try:
+        data = _yaml.safe_load(cfg.read_text()) or {}
+    except _yaml.YAMLError:
+        return False
+    pais = data.get("pais") or []
+    names = {p.get("name") for p in pais if isinstance(p, dict)}
+    return names == {"root", "pai", *KERNEL_SEED_PAIS}
+
+
+def maybe_chain_paisetup(root: Path) -> None:
+    """On an interactive TTY against a fresh config, exec into paisetup
+    so the user gets a guided first-run. Non-TTY/scripted runs skip it."""
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        return
+    if not _config_has_only_seeds(root):
+        return
+    paisetup = root / "sbin" / "paisetup"
+    if not paisetup.exists():
+        return
+    print(f"\nLaunching paisetup to configure your first PAIs…")
+    env = {**os.environ, "PAI_ROOT": str(root)}
+    os.execvpe(str(paisetup), [str(paisetup)], env)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
@@ -303,9 +683,74 @@ def main() -> int:
         default=Path(os.environ.get("PAI_ROOT", str(Path.home() / ".pai"))),
         help="FHS root (default: $PAI_ROOT or ~/.pai)",
     )
+    ap.add_argument(
+        "--no-setup",
+        action="store_true",
+        help="skip auto-chaining into paisetup on a fresh install",
+    )
+    ap.add_argument(
+        "--bundle-mode",
+        action="store_true",
+        help="provision from a shipped app (no repo, no uv): copy seed content "
+             "instead of symlinking the repo, shim at the embedded interpreter, "
+             "and stamp the .provisioned marker. Requires --seed.",
+    )
+    ap.add_argument(
+        "--seed",
+        type=Path,
+        default=None,
+        help="bundled seed dir for --bundle-mode (Resources/seed; holds etc/ and doc/)",
+    )
+    ap.add_argument(
+        "--repoint-shims",
+        action="store_true",
+        help="rewrite existing tool-shim shebangs to --python and exit "
+             "(no provisioning). PAI.app uses this on launch to bind the "
+             "shims to its embedded interpreter, off the dev venv.",
+    )
+    ap.add_argument(
+        "--python",
+        type=Path,
+        default=None,
+        help="interpreter for --repoint-shims (default: the one running this)",
+    )
+    ap.add_argument(
+        "--default-provider",
+        default=DEFAULT_SEED_PROVIDER,
+        help="provider key the seed config.yaml boots the fleet on "
+             f"(default: {DEFAULT_SEED_PROVIDER}). Ignored if config.yaml exists.",
+    )
+    ap.add_argument(
+        "--default-model",
+        default=DEFAULT_SEED_MODEL,
+        help="model id the seed config.yaml boots the fleet on "
+             f"(default: {DEFAULT_SEED_MODEL}). Ignored if config.yaml exists.",
+    )
     args = ap.parse_args()
-    lay_out(args.root)
+    if args.repoint_shims:
+        py = args.python or Path(sys.executable)
+        n = repoint_shims(args.root, py)
+        print(f"repointed {n} shim(s) at {py}")
+        return 0
+    if args.bundle_mode:
+        # GUI launch: no uv, no TTY. Lay out, seed, mark — that's all the app
+        # needs. No expose_pai_command / paisetup chaining (no shell, no TTY).
+        # The .app's model-setup screen passes the owner's provider/model the
+        # same way install.sh does, so the seed config.yaml boots on the model
+        # they picked (and only that provider's key is needed). Ignored once
+        # config.yaml exists.
+        lay_out(args.root, bundle_mode=True, seed=args.seed,
+                default_provider=args.default_provider,
+                default_model=args.default_model)
+        print(f"FHS skeleton ready at {args.root} (bundle mode)")
+        return 0
+    _ensure_uv()
+    lay_out(args.root, default_provider=args.default_provider,
+            default_model=args.default_model)
+    expose_pai_command(args.root)
     print(f"FHS skeleton ready at {args.root}")
+    if not args.no_setup:
+        maybe_chain_paisetup(args.root)
     return 0
 
 
