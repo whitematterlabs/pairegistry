@@ -1,16 +1,18 @@
 name: ax
 kind: driver
-version: 0.2.0
+version: 0.3.0
 description: "Accessibility (macOS AX) driver: piloting surface for PAIs (scoped sessions, RPC via Swift sidecar)"
 min_macos: "13.0"
 # Pull in the shell-callable `ax` RPC client as a sibling bin package.
-# `paiman install ax` lands the driver, builds axd, and symlinks the bin
+# `paiman install ax` lands the driver, stages axd, and symlinks the bin
 # into /usr/bin/ax so PAI shells can call it directly.
 deps:
   - bin/ax
-# Sidecar build + install hook. Idempotent: build.sh skips swift build if
-# a recent binary already exists at sidecar/.build/release/axd, and always
-# stages the binary at $PAI_ROOT/usr/libexec/ax/axd for the driver to spawn.
+# Sidecar stage hook. End-user installs DO NOT compile: a prebuilt,
+# ad-hoc-signed binary ships at sidecar/prebuilt/axd (arm64, AXSwift statically
+# linked), so no Swift toolchain or network is needed. build.sh copies it to
+# $PAI_ROOT/usr/libexec/ax/axd; it only invokes `swift build` on a dev machine
+# whose Sources are newer than the committed binary (and then refreshes it).
 hooks:
   install:
     - "bash usr/lib/drivers/ax/sidecar/build.sh"
