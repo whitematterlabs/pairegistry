@@ -1,6 +1,6 @@
 ---
 name: using-whatsapp
-description: Read inbound WhatsApp threads, draft replies, handle send failures.
+description: Read inbound WhatsApp threads. Receive-only — there is no way to send.
 driver: whatsapp
 ---
 
@@ -31,16 +31,10 @@ is the phone number; the display name will be the number too.
 
 # How to do things
 
-**Reply to a thread.** Append a **bare line** — just the message
-text, no `[HH:MM] me:` prefix — to today's day-file. The driver
-picks up bare lines, sends via the Baileys bridge, then writes the
-canonical `[HH:MM] me: <text>` record itself. Bracketed lines are
-log entries only and never get sent. Create today's file if it
-doesn't exist.
-
-```
-echo "bakacam birazdan" >> ~/whatsapp-messages/<thread>/<today>.md
-```
+This driver is **receive-only**. There is no send path: writing to a
+day-file does nothing, and nothing you do here reaches WhatsApp. If
+the owner needs a reply sent, surface it to them so they can send it
+from their phone.
 
 **Read a thread.** Read today's day-file. For deeper history, read
 yesterday's, and so on. Don't grep all threads unless asked.
@@ -48,12 +42,9 @@ yesterday's, and so on. Don't grep all threads unless asked.
 # Events you wake on
 
 - **`whatsapp:new`** — one inbound message. Payload has `thread`,
-  `sender`, `text`, `day_file`. Read the day-file, then reply or
-  stay silent.
+  `sender`, `text`, `day_file`. Read the day-file, then surface
+  anything the owner needs to see. You can't reply.
 - **`whatsapp:backlog`** — kernel just booted with unread messages.
   Payload has `threads` with per-thread counts and `last_text`.
   Output a short recap as your turn output — one bullet per thread
-  that matters. Skip noise. Don't draft replies from backlog.
-- **`whatsapp:send_failed`** — your outbound didn't deliver. Payload
-  has `thread`, `text`, `reason`. Output it as your turn so the
-  owner can follow up. Don't retry the bare line.
+  that matters. Skip noise.

@@ -1,12 +1,9 @@
 driver: whatsapp
-description: Inbound and outbound WhatsApp messaging via Baileys bridge.
+description: Inbound (receive-only) WhatsApp messaging via Baileys bridge.
 
 processes:
   - slug: whatsapp-in
     module: drivers.whatsapp.inbound
-    entrypoint: run
-  - slug: whatsapp-out
-    module: drivers.whatsapp.outbound
     entrypoint: run
 
 events:
@@ -33,15 +30,4 @@ events:
           outbound: int
           last_text: string
       total: int
-
-  - kind: whatsapp:send_failed
-    description: An outbound message couldn't be delivered (bridge
-      error, recipient not on WhatsApp, etc.). The line is already
-      in the thread day-file but was never sent.
-    emitted_by: drivers/whatsapp/outbound.py
-    raw_kind: send_failed
-    payload:
-      thread: string
-      text: string
-      reason: string
 

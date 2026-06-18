@@ -1,12 +1,12 @@
 """WhatsApp inbound driver.
 
 Supervises a Node.js Baileys bridge as a subprocess. The bridge speaks
-JSON-per-line over stdout/stdin. Auth state persists under
+JSON-per-line over stdout. Auth state persists under
 /Users/arda/.pai/sys/drivers/whatsapp/auth/ — first run emits a QR code for pairing,
 subsequent runs reconnect with saved creds.
 
-Also watches the outbox directory for outbound send requests and
-forwards them to the bridge's stdin.
+This driver is receive-only: it records inbound messages and emits
+events. It has no send path.
 """
 
 from __future__ import annotations
@@ -20,10 +20,6 @@ import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
-
-from watchdog.events import FileSystemEventHandler
-from watchdog.observers import Observer
 
 from boot import processes as P
 from boot import paths
@@ -33,7 +29,6 @@ PAI_ROOT = Path(os.environ.get("PAI_ROOT", str(Path.home() / ".pai")))
 BRIDGE_JS = PAI_ROOT / "usr" / "libexec" / "whatsapp" / "bridge.js"
 MESSAGES_ROOT = paths.var_spool_communication() / "whatsapp"
 PEOPLE_ROOT = paths.var_lib_memory() / "people"
-OUTBOX_DIR = PAI_ROOT / "sys" / "drivers" / "whatsapp" / "outbox"
 AUTH_DIR = PAI_ROOT / "sys" / "drivers" / "whatsapp" / "auth"
 
 
@@ -58,9 +53,6 @@ def _resolve_lid_to_phone(local: str) -> str:
     except (OSError, json.JSONDecodeError, AttributeError):
         return local
     return phone if phone.isdigit() else local
-
-# ── bridge ref (set by _run_bridge, read by outbox handler) ────────
-_bridge_stdin: Optional[asyncio.StreamWriter] = None
 
 
 # ── phone number slug detection ────────────────────────────────────
@@ -113,48 +105,12 @@ def _write_message(thread_dir: Path, sender: str, text: str, ts_iso: str | None 
     day_file = thread_dir / f"{when.strftime('%Y-%m-%d')}.md"
     hm = when.strftime("%H:%M")
     # Prefix every line: day-files invariant is "every line starts with
-    # [HH:MM] sender:". Bare continuation lines would otherwise be picked
-    # up by the outbound tailer as send requests and echoed to the sender.
+    # [HH:MM] sender:", so multi-line messages stay parseable as a log.
     prefix = f"[{hm}] {sender}: "
     body = "".join(prefix + ln + "\n" for ln in text.splitlines() or [""])
     with day_file.open("a") as f:
         f.write(body)
     return day_file
-
-
-# ── outbox watcher ─────────────────────────────────────────────────
-class _OutboxHandler(FileSystemEventHandler):
-    def __init__(self, loop: asyncio.AbstractEventLoop, queue: asyncio.Queue):
-        self.loop = loop
-        self.queue = queue
-
-    def on_created(self, event):
-        if not event.is_directory and event.src_path.endswith(".json"):
-            self.loop.call_soon_threadsafe(self.queue.put_nowait, Path(event.src_path))
-
-
-async def _drain_outbox(queue: asyncio.Queue) -> None:
-    """Read outbox JSON files and forward them to the bridge's stdin."""
-    while True:
-        path = await queue.get()
-        try:
-            if not path.exists():
-                continue
-            payload = path.read_text()
-            data = json.loads(payload)
-            if _bridge_stdin is not None:
-                _bridge_stdin.write((json.dumps(data) + "\n").encode())
-                await _bridge_stdin.drain()
-                print(f"[whatsapp-in] forwarded outbox → bridge: {data.get('to')}", flush=True)
-            else:
-                print("[whatsapp-in] outbox entry but no bridge stdin yet", flush=True)
-        except Exception as e:
-            print(f"[whatsapp-in] outbox drain error: {e!r}", flush=True)
-        finally:
-            try:
-                path.unlink(missing_ok=True)
-            except Exception:
-                pass
 
 
 # ── bridge supervision ─────────────────────────────────────────────
@@ -207,12 +163,9 @@ def _reap_stale_bridges() -> None:
 
 
 async def _run_bridge() -> None:
-    global _bridge_stdin
-
     backoff = 1
     max_backoff = 60
 
-    OUTBOX_DIR.mkdir(parents=True, exist_ok=True)
     _reap_stale_bridges()
 
     while True:
@@ -227,15 +180,11 @@ async def _run_bridge() -> None:
         print(f"[whatsapp-in] starting bridge (backoff={backoff}s)", flush=True)
         proc = await asyncio.create_subprocess_exec(
             node_bin, str(BRIDGE_JS),
-            stdin=asyncio.subprocess.PIPE,
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env={**os.environ, "PAI_ROOT": str(PAI_ROOT)},
         )
-        _bridge_stdin = proc.stdin
-
-        # Drain any outbox files that accumulated while bridge was down
-        await _drain_pending_outbox()
 
         try:
             await _read_bridge_stdout(proc)
@@ -245,30 +194,13 @@ async def _run_bridge() -> None:
                 await asyncio.wait_for(proc.wait(), timeout=5)
             except asyncio.TimeoutError:
                 proc.kill()
-            _bridge_stdin = None
             raise
         except Exception as e:
             print(f"[whatsapp-in] bridge read error: {e!r}", flush=True)
 
-        _bridge_stdin = None
         print(f"[whatsapp-in] bridge exited (rc={proc.returncode}), restarting in {backoff}s", flush=True)
         await asyncio.sleep(backoff)
         backoff = min(backoff * 2, max_backoff)
-
-
-async def _drain_pending_outbox() -> None:
-    """Forward any outbox files that were written while the bridge was down."""
-    if not OUTBOX_DIR.exists():
-        return
-    for f in sorted(OUTBOX_DIR.glob("*.json")):
-        try:
-            data = json.loads(f.read_text())
-            if _bridge_stdin is not None:
-                _bridge_stdin.write((json.dumps(data) + "\n").encode())
-                await _bridge_stdin.drain()
-            f.unlink()
-        except Exception as e:
-            print(f"[whatsapp-in] pending outbox error: {e!r}", flush=True)
 
 
 HISTORY_QUIESCE_SECONDS = 3.0
@@ -359,16 +291,6 @@ async def _read_bridge_stdout(proc: asyncio.subprocess.Process) -> None:
         elif msg_type == "error":
             err = data.get("error", "unknown")
             print(f"[whatsapp-in] bridge error: {err}", flush=True)
-            # If the error is a send failure, emit send_failed
-            cmd = data.get("command")
-            if cmd and cmd.get("direction") == "out":
-                P.emit_event({
-                    "source": "whatsapp",
-                    "kind": "send_failed",
-                    "thread": cmd.get("thread", "unknown"),
-                    "text": cmd.get("body", ""),
-                    "reason": err,
-                })
 
     # EOF safety net: flush any pending backlog before returning.
     if backlog_flush_task and not backlog_flush_task.done():
@@ -402,26 +324,9 @@ def _emit_backlog(messages: list[dict]) -> None:
 async def run() -> None:
     print("[whatsapp-in] starting", flush=True)
 
-    # Start outbox watcher
-    loop = asyncio.get_running_loop()
-    outbox_queue: asyncio.Queue = asyncio.Queue()
-    observer = Observer()
-    OUTBOX_DIR.mkdir(parents=True, exist_ok=True)
-    observer.schedule(_OutboxHandler(loop, outbox_queue), str(OUTBOX_DIR), recursive=False)
-    observer.start()
-
-    outbox_task = asyncio.create_task(_drain_outbox(outbox_queue))
-
     try:
         await _run_bridge()
     except asyncio.CancelledError:
         raise
     finally:
-        outbox_task.cancel()
-        try:
-            await outbox_task
-        except asyncio.CancelledError:
-            pass
-        observer.stop()
-        observer.join(timeout=2)
         print("[whatsapp-in] stopped", flush=True)

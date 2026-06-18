@@ -1,25 +1,21 @@
 #!/Users/arda/.pai/usr/bin/env node
 
 /**
- * WhatsApp Baileys bridge — JSON-per-line protocol over stdin/stdout.
+ * WhatsApp Baileys bridge — receive-only, JSON-per-line over stdout.
  *
- * Reads JSON commands from stdin, writes JSON events to stdout.
- * Auth state persists under /Users/arda/.pai/sys/drivers/whatsapp/auth/.
+ * Writes JSON events to stdout. There is no send path: the bridge does
+ * not read commands from stdin. Auth state persists under
+ * /Users/arda/.pai/sys/drivers/whatsapp/auth/.
  *
  * Protocol (stdout → driver reads):
  *   {"type":"message","direction":"in","from":"+15551234567","body":"hey","timestamp":"..."}
- *   {"type":"message","direction":"out","to":"+15551234567","body":"ok","timestamp":"..."}
  *   {"type":"qr","qr":"BASE64-QR-STRING"}
  *   {"type":"status","state":"open"|"connecting"|"close"}
  *   {"type":"error","error":"..."}
- *
- * Protocol (stdin → bridge reads):
- *   {"type":"message","direction":"out","to":"+15551234567","body":"hey there"}
  */
 
 import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
-import readline from 'readline';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -44,8 +40,8 @@ function status(state) {
   emit({ type: 'status', state });
 }
 
-// Active socket — replaced on each (re)connect. stdin/SIGTERM handlers below
-// reference this via the module-level binding so they survive reconnects.
+// Active socket — replaced on each (re)connect. The SIGTERM handler below
+// references this via the module-level binding so it survives reconnects.
 let currentSock = null;
 
 async function connect() {
@@ -174,41 +170,8 @@ async function extractIn(sock, msg, { history = false } = {}) {
   };
 }
 
-// stdin readline + SIGTERM registered once; they reference currentSock so
-// they keep working across in-process reconnects.
-const rl = readline.createInterface({ input: process.stdin });
-rl.on('line', async (line) => {
-  try {
-    const cmd = JSON.parse(line);
-    if (cmd.type === 'message' && cmd.direction === 'out') {
-      if (!currentSock) {
-        emit({ type: 'error', error: 'no active socket', command: cmd });
-        return;
-      }
-      const toJid = cmd.to.includes('@') ? cmd.to : `${cmd.to}@s.whatsapp.net`;
-      try {
-        await currentSock.sendMessage(toJid, { text: cmd.body });
-        emit({
-          type: 'message',
-          direction: 'out',
-          to: cmd.to,
-          body: cmd.body,
-          timestamp: new Date().toISOString(),
-          sent: true,
-        });
-      } catch (err) {
-        emit({
-          type: 'error',
-          error: `send failed to ${cmd.to}: ${err.message}`,
-          command: cmd,
-        });
-      }
-    }
-  } catch (err) {
-    // Non-JSON input — ignore.
-  }
-});
-
+// SIGTERM references currentSock so it keeps working across in-process
+// reconnects.
 process.on('SIGTERM', () => {
   try { currentSock?.end(undefined); } catch (_) {}
   process.exit(0);
