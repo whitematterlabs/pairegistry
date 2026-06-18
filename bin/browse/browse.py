@@ -1,10 +1,12 @@
 #!/usr/bin/env python
-"""browse — thin CDP verbs against the owner's persistent Chrome.
+"""browse — thin CDP verbs against PAI's own persistent Chrome.
 
-Chrome is treated as a daemon: kept alive on 127.0.0.1:9222 against the
-owner's real profile. Each verb opens a short-lived WebSocket to the
-PAI's own tab, sends one or two CDP commands, prints a compact result,
-and exits. No nested LLM loop, no Playwright, no browser_use.
+Chrome is treated as a daemon: kept alive on a PAI-dedicated debug port
+(127.0.0.1:9333, deliberately not the conventional 9222) against PAI's own
+profile under PAI_ROOT, seeded once from the owner's real profile. PAI never
+attaches to the owner's everyday Chrome. Each verb opens a short-lived
+WebSocket to the PAI's own tab, sends one or two CDP commands, prints a
+compact result, and exits. No nested LLM loop, no Playwright, no browser_use.
 
 Verbs:
   browse goto <url>
@@ -47,7 +49,13 @@ from urllib.parse import urlparse
 import yaml
 
 PAI_ROOT = Path(os.environ.get("PAI_ROOT", str(Path.home() / ".pai")))
-CDP_PORT = 9222
+# PAI drives its OWN Chrome on a dedicated debug port — deliberately NOT the
+# conventional 9222. The owner's everyday Chrome (or an IDE, extension, or
+# login item) is most likely to expose 9222; if PAI shared it, browse would
+# attach to and drive the owner's real tabs instead of its isolated, seeded
+# profile. A PAI-specific port lets the two coexist. _cdp_owner_is_pai() is a
+# second guard for the rare case something squats this port too.
+CDP_PORT = 9333
 CDP_BASE = f"http://127.0.0.1:{CDP_PORT}"
 TAB_DIR = PAI_ROOT / "sys" / "drivers" / "browse" / "tabs"
 SNAP_DIR = PAI_ROOT / "sys" / "drivers" / "browse" / "snapshots"
@@ -80,6 +88,67 @@ def _cdp_alive() -> bool:
 
 
 CHROME_APP_BIN = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+
+
+def _port_listener_cmdline(port: int) -> str | None:
+    """Command line of the process listening on `port`, or None if unknown.
+
+    Used to tell PAI's own Chrome apart from a foreign one squatting the debug
+    port. Tries lsof for the listening PID first, then falls back to scanning
+    ps for a Chrome started with the matching --remote-debugging-port flag
+    (PAI's instance always carries it, so the fallback reliably finds us even
+    when lsof is unavailable)."""
+    pids: list[str] = []
+    try:
+        out = subprocess.run(
+            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+            capture_output=True, text=True, timeout=5,
+        ).stdout
+        pids = [p for p in out.split() if p.isdigit()]
+    except (OSError, subprocess.SubprocessError):
+        pass
+    for pid in pids:
+        try:
+            cmd = subprocess.run(
+                ["ps", "-p", pid, "-o", "command="],
+                capture_output=True, text=True, timeout=5,
+            ).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if cmd:
+            return cmd
+    # Fallback: lsof gave nothing usable — scan every process for the flag.
+    try:
+        out = subprocess.run(
+            ["ps", "-ax", "-o", "command="],
+            capture_output=True, text=True, timeout=5,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in out.splitlines():
+        if f"--remote-debugging-port={port}" in line:
+            return line.strip()
+    return None
+
+
+def _cmdline_is_pai_chrome(cmdline: str) -> bool:
+    """True if a Chrome command line is PAI's dedicated instance — i.e. it runs
+    against CHROME_PROFILE. Pure predicate (unit-tested)."""
+    return f"--user-data-dir={CHROME_PROFILE}" in cmdline
+
+
+def _cdp_owner_is_pai() -> bool:
+    """True iff the Chrome answering CDP on CDP_PORT is PAI's own instance.
+
+    Guards against attaching to the owner's everyday Chrome that happens to
+    expose the same debug port — which would make PAI drive the owner's real
+    tabs instead of its isolated profile. If the listener can't be introspected
+    we return False: refusing is safe; silently driving a foreign browser is
+    the bug we're fixing."""
+    cmdline = _port_listener_cmdline(CDP_PORT)
+    if cmdline is None:
+        return False
+    return _cmdline_is_pai_chrome(cmdline)
 
 
 def _seed_profile_if_needed() -> None:
@@ -135,21 +204,28 @@ def _seed_profile_if_needed() -> None:
 
 
 def _ensure_chrome() -> None:
-    """Ensure the owner's real Chrome is up with CDP on 9222.
+    """Ensure PAI's own Chrome is up with CDP on CDP_PORT — and that whatever
+    answers there is actually ours.
 
-    Three states:
-      - CDP alive → no-op.
-      - Chrome running without CDP → quit it (session-restore brings tabs
-        back on relaunch) and relaunch with --remote-debugging-port.
-      - Chrome not running → launch with CDP.
+      - CDP alive and it's PAI's instance (CHROME_PROFILE) → reuse it.
+      - CDP alive but it's a foreign Chrome (e.g. the owner's everyday browser
+        squatting the port) → refuse; never drive the owner's real tabs.
+      - CDP not alive → launch our dedicated-profile Chrome with CDP.
 
-    Launch path uses the Chrome binary directly (not `open -na`) because
+    Launch uses the Chrome binary directly (not `open -na`) because
     LaunchServices silently drops the --args when an instance is already
     registered, and `subprocess.Popen` with `start_new_session=True`
     gives us deterministic flag passing.
     """
     if _cdp_alive():
-        return
+        if _cdp_owner_is_pai():
+            return
+        sys.exit(
+            f"browse: CDP port {CDP_PORT} is held by a Chrome that is NOT "
+            f"PAI's dedicated profile ({CHROME_PROFILE}) — most likely the "
+            f"owner's everyday Chrome. Refusing to drive it. Quit that Chrome "
+            f"(or drop its --remote-debugging-port={CDP_PORT}) and re-run."
+        )
     if not Path(CHROME_APP_BIN).is_file():
         sys.exit(f"browse: Chrome not found at {CHROME_APP_BIN}")
     _seed_profile_if_needed()
