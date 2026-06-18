@@ -3,5 +3,8 @@ kind: bin
 version: 0.1.0
 description: One-time WhatsApp bridge pairing — prints QR to terminal, blocks until session is established
 entrypoint: whatsapp_pair.py
-deps:
-  - qrcode
+# This tool imports the `qrcode` Python lib to render the pairing QR. paiman
+# does not resolve a bin's deps or pip-install (deps are registry bundles, and
+# only pai/driver/subagent kinds resolve them), so qrcode is installed into the
+# venv by the whatsapp driver's hooks.install step (libexec/install.sh).
+# Install via `paiman install whatsapp`, not this bin on its own.

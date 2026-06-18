@@ -1,13 +1,16 @@
 name: whatsapp
 kind: driver
 version: 0.1.0
-description: "WhatsApp driver: Baileys-based bridge for inbound/outbound WhatsApp messaging"
+description: "WhatsApp driver: Baileys-based bridge for inbound (receive-only) WhatsApp messaging"
 deps:
   - whatsapp_pair
-libexec:
-  install: ["pnpm", "install", "--prod"]
-post_install:
-  - whatsapp_pair
+# Stage the Node bridge into usr/libexec/whatsapp/, run `pnpm install`, and
+# install the qrcode Python lib into the venv. paiman runs hooks.install with
+# cwd=$PAI_ROOT. Pairing is not auto-run (interactive); the script prints the
+# `whatsapp_pair` instruction at the end.
+hooks:
+  install:
+    - "bash usr/lib/drivers/whatsapp/libexec/install.sh"
 home:
   links:
     - link: whatsapp-messages
