@@ -14,7 +14,9 @@
 #      whatsapp_pair imports it to render the pairing QR in the terminal.
 #
 # Pairing is NOT run here — it is interactive (renders a QR, blocks on a phone
-# scan) and install may run non-interactively. Run `whatsapp_pair` afterwards.
+# scan) and install may run non-interactively. It is the driver's `hooks.setup`
+# step, which paiman offers (default-yes, skippable) right after this hook when
+# installing in a terminal. Run `whatsapp_pair` manually to (re)link later.
 
 set -euo pipefail
 
@@ -63,4 +65,4 @@ echo "whatsapp/install.sh: uv pip install qrcode -> $VENV_PY"
 uv pip install --python "$VENV_PY" qrcode
 
 echo "whatsapp/install.sh: staged → $DEST_DIR"
-echo "whatsapp/install.sh: WhatsApp bridge ready. Run 'whatsapp_pair' to link your phone (shows a QR)."
+echo "whatsapp/install.sh: WhatsApp bridge ready — paiman will offer to link your phone (QR) next, or run 'whatsapp_pair' anytime."
