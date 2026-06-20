@@ -73,3 +73,44 @@ def test_owner_is_pai_is_conservative_when_listener_unknown(monkeypatch):
     browse.CHROME_PROFILE = "/p/profile"
     monkeypatch.setattr(browse, "_port_listener_cmdline", lambda port: None)
     assert browse._cdp_owner_is_pai() is False
+
+
+def test_host_process_tool_prefers_existing_absolute_path(monkeypatch):
+    monkeypatch.setattr(
+        browse.Path,
+        "exists",
+        lambda self: str(self) == "/host/bin/tool",
+    )
+
+    assert (
+        browse._host_process_tool("/missing/tool", "/host/bin/tool", fallback="tool")
+        == "/host/bin/tool"
+    )
+
+
+def test_port_listener_uses_host_process_tools(monkeypatch):
+    # PAI installs its own `ps` shim on PATH. The CDP ownership check must use
+    # host process tools by absolute path, or it cannot read Chrome's cmdline.
+    calls = []
+
+    class Result:
+        def __init__(self, stdout: str):
+            self.stdout = stdout
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[0] == "/usr/sbin/lsof":
+            return Result("123\n")
+        if cmd[0] == "/bin/ps":
+            return Result("chrome --user-data-dir=/p/profile")
+        return Result("")
+
+    monkeypatch.setattr(browse, "LSOF_BIN", "/usr/sbin/lsof")
+    monkeypatch.setattr(browse, "PS_BIN", "/bin/ps")
+    monkeypatch.setattr(browse.subprocess, "run", fake_run)
+
+    assert browse._port_listener_cmdline(9333) == "chrome --user-data-dir=/p/profile"
+    assert calls[:2] == [
+        ["/usr/sbin/lsof", "-nP", "-iTCP:9333", "-sTCP:LISTEN", "-t"],
+        ["/bin/ps", "-p", "123", "-o", "command="],
+    ]

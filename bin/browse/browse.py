@@ -88,6 +88,21 @@ def _cdp_alive() -> bool:
 
 
 CHROME_APP_BIN = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+HOST_PROCESS_ENV = {
+    **os.environ,
+    "PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
+}
+
+
+def _host_process_tool(*candidates: str, fallback: str) -> str:
+    for candidate in candidates:
+        if Path(candidate).exists():
+            return candidate
+    return fallback
+
+
+LSOF_BIN = _host_process_tool("/usr/sbin/lsof", "/usr/bin/lsof", fallback="lsof")
+PS_BIN = _host_process_tool("/bin/ps", "/usr/bin/ps", fallback="ps")
 
 
 def _port_listener_cmdline(port: int) -> str | None:
@@ -101,8 +116,8 @@ def _port_listener_cmdline(port: int) -> str | None:
     pids: list[str] = []
     try:
         out = subprocess.run(
-            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
-            capture_output=True, text=True, timeout=5,
+            [LSOF_BIN, "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+            capture_output=True, text=True, timeout=5, env=HOST_PROCESS_ENV,
         ).stdout
         pids = [p for p in out.split() if p.isdigit()]
     except (OSError, subprocess.SubprocessError):
@@ -110,8 +125,8 @@ def _port_listener_cmdline(port: int) -> str | None:
     for pid in pids:
         try:
             cmd = subprocess.run(
-                ["ps", "-p", pid, "-o", "command="],
-                capture_output=True, text=True, timeout=5,
+                [PS_BIN, "-p", pid, "-o", "command="],
+                capture_output=True, text=True, timeout=5, env=HOST_PROCESS_ENV,
             ).stdout.strip()
         except (OSError, subprocess.SubprocessError):
             continue
@@ -120,8 +135,8 @@ def _port_listener_cmdline(port: int) -> str | None:
     # Fallback: lsof gave nothing usable — scan every process for the flag.
     try:
         out = subprocess.run(
-            ["ps", "-ax", "-o", "command="],
-            capture_output=True, text=True, timeout=5,
+            [PS_BIN, "-ax", "-o", "command="],
+            capture_output=True, text=True, timeout=5, env=HOST_PROCESS_ENV,
         ).stdout
     except (OSError, subprocess.SubprocessError):
         return None
