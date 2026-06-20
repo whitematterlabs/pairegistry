@@ -12,12 +12,20 @@ FORCE=0
 [[ "${1:-}" == "--force" ]] && FORCE=1
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="$HERE/whisper-cli"
-MODEL="$HERE/ggml-base.en.bin"
-SRC="$HERE/whisper.cpp"
-
 PAI_ROOT="${PAI_ROOT:-$HOME/.pai}"
 VENV_PY="$PAI_ROOT/usr/lib/venv/bin/python"
+
+# Runtime artifacts live in the FHS libexec slot, NOT inside the bundle source.
+# stt.py reads them from exactly here. Keeping the 148MB model out of the bundle
+# also means paiman doesn't re-copy it on every install. Build scratch (the
+# whisper.cpp clone) goes in a cache dir so it survives reinstalls and isn't
+# re-cloned each time.
+DEST="$PAI_ROOT/usr/libexec/voice"
+mkdir -p "$DEST"
+BIN="$DEST/whisper-cli"
+MODEL="$DEST/ggml-base.en.bin"
+SRC="$PAI_ROOT/var/cache/voice/whisper.cpp"
+mkdir -p "$(dirname "$SRC")"
 
 # ── system deps via brew ──────────────────────────────────────────────
 brew_install() {

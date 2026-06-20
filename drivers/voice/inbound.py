@@ -19,37 +19,15 @@ from pathlib import Path
 
 from boot import processes as P
 
-# Heavy, optional native deps (numpy, sounddevice, openwakeword/onnxruntime,
-# whisper.cpp) are provisioned by libexec/install.sh, NOT by the kernel's base
-# venv. If voice was never provisioned (or the venv was rebuilt), these imports
-# fail — degrade gracefully in run() with an actionable message instead of
-# crashing the module load with a raw traceback.
-try:
-    import importlib.util as _ilu
+# Heavy native deps (numpy, sounddevice, openwakeword/onnxruntime, whisper.cpp)
+# are provisioned by libexec/install.sh, NOT the kernel's base venv. If a dep is
+# missing, let the ImportError propagate: the proc goes `failed` and routes to
+# root, which is the actual escalation path. Don't swallow it into a soft
+# "unprovisioned" event — that hides a real error from root.
+import numpy as np
 
-    import numpy as np
-
-    from . import stt
-    from .wake import SAMPLE_RATE, WAKE_BLOCK, VAD_FRAME, WakeDetector, SilenceDetector
-
-    # sounddevice, openwakeword, and webrtcvad are imported lazily deeper in
-    # (inside _audio_loop / the detector classes), so a venv that has numpy but
-    # is missing one of *those* would slip past this guard and only blow up once
-    # run() reaches the audio loop — crashing the proc into `failed` and nudging
-    # root every boot instead of degrading. Probe them here so any missing dep
-    # takes the same graceful path. find_spec avoids the heavy import side
-    # effects (portaudio init, onnxruntime load) at module-load time.
-    _missing = next(
-        (m for m in ("sounddevice", "openwakeword", "webrtcvad") if _ilu.find_spec(m) is None),
-        None,
-    )
-    if _missing is not None:
-        raise ImportError(f"No module named '{_missing}'")
-
-    _MISSING_DEP: str | None = None
-except ImportError as _import_err:
-    np = None  # type: ignore[assignment]
-    _MISSING_DEP = str(_import_err)
+from . import stt
+from .wake import SAMPLE_RATE, WAKE_BLOCK, VAD_FRAME, WakeDetector, SilenceDetector
 
 PAI_ROOT = Path(os.environ.get("PAI_ROOT", str(Path.home() / ".pai")))
 CAPTURES_DIR = PAI_ROOT / "sys" / "drivers" / "voice" / "captures"
@@ -208,17 +186,6 @@ async def _audio_loop() -> None:
 
 async def run() -> None:
     print("[voice-in] starting", flush=True)
-    if _MISSING_DEP is not None:
-        # Return (not raise): an unprovisioned optional driver is not a crash.
-        # Raising would mark the proc `failed` and nudge root every restart.
-        msg = (
-            f"voice driver not provisioned — missing Python dep ({_MISSING_DEP}). "
-            "Run drivers/voice/libexec/install.sh to install "
-            "numpy/sounddevice/openwakeword and build whisper.cpp, then re-enable."
-        )
-        print(f"[voice-in] {msg}", flush=True)
-        P.emit_event({"source": "voice", "kind": "unprovisioned", "reason": _MISSING_DEP})
-        return
     CAPTURES_DIR.mkdir(parents=True, exist_ok=True)
     try:
         await _audio_loop()

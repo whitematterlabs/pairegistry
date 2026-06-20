@@ -2,5 +2,9 @@ name: voice
 kind: driver
 version: 0.1.0
 description: "Voice inbound driver: openWakeWord + whisper.cpp STT. PAIs reply via `say` directly. Fully local, no cloud."
-libexec:
-  install: ["bash", "install.sh"]
+# install: provision /usr/libexec/voice/ (whisper.cpp binary + ggml model),
+# install the native Python deps into the FHS venv, and download the
+# openWakeWord ONNX models. paiman runs hooks with cwd=$PAI_ROOT. Idempotent.
+hooks:
+  install:
+    - "bash usr/lib/drivers/voice/libexec/install.sh"
