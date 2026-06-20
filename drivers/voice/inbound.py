@@ -25,10 +25,26 @@ from boot import processes as P
 # fail — degrade gracefully in run() with an actionable message instead of
 # crashing the module load with a raw traceback.
 try:
+    import importlib.util as _ilu
+
     import numpy as np
 
     from . import stt
     from .wake import SAMPLE_RATE, WAKE_BLOCK, VAD_FRAME, WakeDetector, SilenceDetector
+
+    # sounddevice, openwakeword, and webrtcvad are imported lazily deeper in
+    # (inside _audio_loop / the detector classes), so a venv that has numpy but
+    # is missing one of *those* would slip past this guard and only blow up once
+    # run() reaches the audio loop — crashing the proc into `failed` and nudging
+    # root every boot instead of degrading. Probe them here so any missing dep
+    # takes the same graceful path. find_spec avoids the heavy import side
+    # effects (portaudio init, onnxruntime load) at module-load time.
+    _missing = next(
+        (m for m in ("sounddevice", "openwakeword", "webrtcvad") if _ilu.find_spec(m) is None),
+        None,
+    )
+    if _missing is not None:
+        raise ImportError(f"No module named '{_missing}'")
 
     _MISSING_DEP: str | None = None
 except ImportError as _import_err:
