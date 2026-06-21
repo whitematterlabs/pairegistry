@@ -22,12 +22,13 @@ SMS fallback requires Text Message Forwarding from your iPhone.
 
 Permanent failures (both services error) are surfaced to PAI via a
 `kernel: send failed` note in the thread day-file and a `send_failed`
-event. The tailer cursor advances on failure so we don't retry forever.
+event. The tailer cursor advances on failure or freeze so we don't retry forever.
 """
 
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 from datetime import datetime
 from pathlib import Path
@@ -48,6 +49,9 @@ from tailer import Tailer
 # driver is system-shared, not per-PAI.
 MESSAGES_ROOT = paths.var_spool_messages()
 PEOPLE_ROOT = paths.var_lib_memory() / "people"
+STATE_DIR = paths.PAI_ROOT / "sys" / "drivers" / "imessage"
+FREEZE_PATH = STATE_DIR / "outbound.freeze"
+FREEZE_ENV = "PAI_IMESSAGE_SENDS_FROZEN"
 
 # Bracketed prefix — log entries (inbound, canonical me:, kernel notes).
 # Never treated as send requests; only bare lines are.
@@ -55,6 +59,33 @@ BRACKET_LINE = re.compile(r"^\[")
 # Phone slug = all digits (after earlier `h`-prefix removal); email slug
 # contains `@` (unusual but handled).
 _PHONE_SLUG = re.compile(r"^\d{7,}$")
+
+
+def _truthy(value: str) -> bool:
+    return value.strip().lower() not in {"", "0", "false", "no", "off"}
+
+
+def _sends_frozen() -> bool:
+    env = os.environ.get(FREEZE_ENV)
+    if env is not None:
+        return _truthy(env)
+    return FREEZE_PATH.exists()
+
+
+def _freeze_reason() -> str:
+    env = os.environ.get(FREEZE_ENV)
+    if env is not None:
+        source = f"${FREEZE_ENV}"
+        detail = env.strip()
+    else:
+        source = str(FREEZE_PATH)
+        try:
+            detail = FREEZE_PATH.read_text(encoding="utf-8").strip().splitlines()[0]
+        except (FileNotFoundError, IndexError, OSError):
+            detail = ""
+    if detail:
+        return f"iMessage sends frozen by {source}: {detail}"
+    return f"iMessage sends frozen by {source}"
 
 
 def _load_meta(day_file: Path) -> Optional[dict]:
@@ -175,6 +206,15 @@ async def _process_send(path: Path, text: str) -> bool:
     if not meta or meta.get("channel") != "imessage":
         return False
     thread = path.parent.name
+    if _sends_frozen():
+        reason = _freeze_reason()
+        print(f"[imessage-out] send frozen for {thread}: {text[:80]}", flush=True)
+        try:
+            _append_kernel_note(path, f"send frozen — not sent — {reason}")
+        except Exception as note_err:
+            print(f"[imessage-out] could not append kernel note: {note_err}", flush=True)
+        _emit_send_failed(thread, text, reason)
+        return False
     try:
         service = await _send(meta, text)
     except Exception as e:

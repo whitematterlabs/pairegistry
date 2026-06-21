@@ -78,8 +78,9 @@ events:
 
   - kind: imessage:send_failed
     description: An outbound message couldn't be delivered (recipient
-      not on iMessage, SMS relay unavailable, etc.). The line is
-      already in the thread day-file but was never sent.
+      not on iMessage, SMS relay unavailable, outbound sends frozen,
+      etc.). The line is already in the thread day-file but was never
+      sent.
     emitted_by: src/drivers/imessage/outbound.py
     raw_kind: send_failed
     payload:

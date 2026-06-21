@@ -1,6 +1,6 @@
 ---
 name: using-email
-description: Triage inbound email, draft replies, handle draft failures.
+description: Triage inbound email, draft replies only, handle draft failures.
 driver: email
 ---
 
@@ -16,7 +16,7 @@ Everything is under `~/communication/`.
 
 `~/drafts/` is a shortcut to `~/communication/email/drafts/` — **one
 shared dir, not per-account**. The `from:` field on the yaml picks
-which Mail.app account sends it.
+which Mail.app account owns the saved draft.
 
 A message yaml looks like:
 
@@ -46,6 +46,11 @@ content: |
   `draft_state`/`draft_error`. Anything else → surface to the owner.
 
 # Drafting
+
+Your job is drafting only. Write draft YAMLs for Mail.app to save in
+Drafts; the owner reviews and sends manually. Do not send email, click
+Send, invoke AppleScript `send`, use SMTP/API sending paths, or treat
+delivery as your responsibility.
 
 Write the draft to `~/drafts/<name>.yaml`. Pick a descriptive
 `<name>` like `re-bob-q3-budget` — it's just a filename, not exposed
