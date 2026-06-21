@@ -1,0 +1,4 @@
+name: notification
+kind: driver
+version: 0.1.0
+description: "macOS Notification Center awareness: watches usernoted and emits batched notification:new events"

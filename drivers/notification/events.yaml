@@ -1,0 +1,51 @@
+# Event spec for the macOS Notification Center driver.
+#
+# Watches the per-user usernoted SQLite store at known macOS paths such as:
+#   ~/Library/Group Containers/group.com.apple.usernoted/db2/db
+#
+# The live store is protected by macOS privacy controls. The kernel process
+# needs Full Disk Access; without it the driver emits notification:watch_failed
+# and exits instead of crash-looping.
+#
+# First run cursors at the current high-water mark and emits nothing historical.
+# Each SQLite drain emits one batched notification:new event with a list payload,
+# so a burst of notifications costs the kernel one nudge, not N.
+
+driver: notification
+description: macOS Notification Center / usernoted awareness.
+
+processes:
+  - slug: notification-in
+    module: drivers.notification.inbound
+    entrypoint: run
+
+events:
+  - kind: notification:new
+    description: One drain of newly delivered notifications from usernoted.
+    emitted_by: drivers/notification/inbound.py
+    raw_kind: new
+    payload:
+      notifications: list[item]
+      db_path: string
+    item_shape:
+      id: string
+      cursor_id: int
+      delivered_at: string|null
+      bundle_id: string|null
+      app_name: string|null
+      title: string|null
+      subtitle: string|null
+      body: string|null
+      text: string|null
+      thread_id: string|null
+      category_id: string|null
+
+  - kind: notification:watch_failed
+    description: The driver could not access or understand the usernoted store.
+      Usually means the kernel process needs Full Disk Access.
+    emitted_by: drivers/notification/inbound.py
+    raw_kind: watch_failed
+    payload:
+      reason: string
+      detail: string
+      db_path: string|null
