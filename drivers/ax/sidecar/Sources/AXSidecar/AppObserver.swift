@@ -27,6 +27,24 @@ enum AXHelpers {
         "AXDisclosureTriangle",
     ]
 
+    /// Containers that are worth exposing when they carry a useful label or
+    /// when their subtree is otherwise opaque. These refs are not directly
+    /// actionable, but they let callers expand and diagnose custom-drawn or
+    /// CEF/Electron-style panes instead of seeing only window chrome.
+    static let structuralRoles: Set<String> = [
+        "AXGroup", "AXScrollArea", "AXWebArea", "AXTable", "AXOutline",
+        "AXList", "AXRow", "AXColumn", "AXSplitGroup", "AXTabGroup",
+        "AXToolbar", "AXSheet", "AXPopover",
+    ]
+
+    /// Standard macOS window controls are technically AXButtons, but they are
+    /// rarely useful task controls. Count them separately so opaque windows
+    /// can be diagnosed as "only close/minimize/full-screen exposed".
+    static let standardWindowButtonSubroles: Set<String> = [
+        "AXCloseButton", "AXMinimizeButton", "AXZoomButton",
+        "AXFullScreenButton",
+    ]
+
     /// Roles kept only when they appear as labels next to interactive
     /// elements. TreeExtractor decides per-context.
     static let labelRoles: Set<String> = [
@@ -57,6 +75,10 @@ enum AXHelpers {
 
     static func stringAttr(_ element: UIElement, _ attr: Attribute) -> String? {
         return rawStringAttr(element, attr.rawValue)
+    }
+
+    static func rawStringAttr(_ element: UIElement, _ key: CFString) -> String? {
+        return rawStringAttr(element, key as String)
     }
 
     static func boolAttr(_ element: UIElement, _ attr: Attribute) -> Bool? {
@@ -132,8 +154,21 @@ enum AXHelpers {
     static func elementText(_ element: UIElement) -> String {
         if let v = stringAttr(element, .value), !v.isEmpty { return truncated(v) }
         if let t = stringAttr(element, .title), !t.isEmpty { return truncated(t) }
-        if let d = stringAttr(element, .description), !d.isEmpty { return truncated(d) }
+        if let d = rawStringAttr(element, kAXDescriptionAttribute), !d.isEmpty { return truncated(d) }
         return ""
+    }
+
+    static func role(_ element: UIElement) -> String {
+        return rawStringAttr(element, kAXRoleAttribute) ?? ""
+    }
+
+    static func subrole(_ element: UIElement) -> String {
+        return rawStringAttr(element, kAXSubroleAttribute) ?? ""
+    }
+
+    static func isStandardWindowButton(_ element: UIElement) -> Bool {
+        guard role(element) == "AXButton" else { return false }
+        return standardWindowButtonSubroles.contains(subrole(element))
     }
 
     static func truncated(_ s: String, max: Int = 200) -> String {

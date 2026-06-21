@@ -1,6 +1,6 @@
 name: ax
 kind: driver
-version: 0.3.0
+version: 0.3.1
 description: "Accessibility (macOS AX) driver: piloting surface for PAIs (scoped sessions, RPC via Swift sidecar)"
 min_macos: "13.0"
 # Pull in the shell-callable `ax` RPC client as a sibling bin package.

@@ -164,13 +164,14 @@ final class RPCServer {
                 // Coarse: re-walk and report as a single "changed" set. A
                 // smarter delta would diff against last walk; sufficient
                 // for v1.
-                let tree = TreeExtractor.dump(session: session)
+                let snapshot = TreeExtractor.snapshot(session: session)
                 NDJSONEmitter.shared.emit(
                     kind: "ax:tree_changed",
                     targetPID: session.targetPID,
                     extra: [
                         "session_id": session.id,
-                        "delta": ["added": [], "removed": [], "changed": tree],
+                        "delta": ["added": [], "removed": [], "changed": snapshot.tree],
+                        "diagnostics": snapshot.diagnostics,
                     ]
                 )
             },
@@ -193,7 +194,7 @@ final class RPCServer {
                       message: "attach \(bundleID)")
         case .success(let session):
             ForegroundWatcher.shared.registerSession(session, application: resolved.application)
-            let tree = TreeExtractor.dump(session: session)
+            let snapshot = TreeExtractor.snapshot(session: session)
             // Emit the scope_attached event on the bus (owning PAI gets it
             // via target_pid routing) and also return the tree inline in
             // the RPC response so the caller has it without waiting on the
@@ -203,7 +204,8 @@ final class RPCServer {
                 "pid": Int(session.pid),
                 "bundle_id": session.bundleID,
                 "window_id": session.windowID,
-                "tree": tree,
+                "tree": snapshot.tree,
+                "diagnostics": snapshot.diagnostics,
             ]
             NDJSONEmitter.shared.emit(
                 kind: "ax:scope_attached",
@@ -296,9 +298,13 @@ final class RPCServer {
         // Re-walk session.window from scratch. Picks up sheets/popovers that
         // appeared since attach. allocRef is monotonic, so this mints fresh
         // refs for the current elements; older refs keep resolving.
-        let tree = TreeExtractor.dump(session: session)
+        let snapshot = TreeExtractor.snapshot(session: session)
         sendOK(fd, requestID: requestID,
-               result: ["session_id": sid, "tree": tree])
+               result: [
+                   "session_id": sid,
+                   "tree": snapshot.tree,
+                   "diagnostics": snapshot.diagnostics,
+               ])
     }
 
     private func handleListSessions(_ params: [String: Any], requestID: String, fd: Int32) {

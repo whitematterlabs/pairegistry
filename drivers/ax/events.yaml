@@ -16,7 +16,8 @@ events:
       pid: int
       bundle_id: string
       window_id: string
-      tree: list             # compressed actionable surface — [{ref, role, label, value, enabled}, ...]
+      tree: list             # compressed surface — actionable controls plus opaque structural refs
+      diagnostics: dict      # role counts + warnings when AX sees only window chrome/opaque panes
 
   - kind: ax:tree_changed
     description: Refs were added, removed, or changed inside an attached session. Delta only.
@@ -28,6 +29,7 @@ events:
         added: list           # [{ref, role, label, value, enabled}]
         removed: list         # [ref, ...]
         changed: list         # [{ref, label?, value?, enabled?}]
+      diagnostics: dict       # same shape as scope_attached diagnostics
 
   - kind: ax:action_result
     description: Result of a previously issued act/expand. request_id correlates with the RPC call. Inbound forwards failures; successful action confirmations stay private because act returns inline.

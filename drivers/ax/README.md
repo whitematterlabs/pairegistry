@@ -65,16 +65,33 @@ private because the CLI already returned success inline.
 
 ## The tree
 
-`attach` returns a **compressed actionable surface**, not the raw AX
-tree. Non-interactive containers are folded out; only interactive roles
-survive (`Button`, `TextField`, `Link`, `MenuItem`, `Checkbox`,
-`RadioButton`, `ComboBox`, `Slider`, plus `StaticText` when it labels a
-control). Each entry is `{ref, role, label, value, enabled}`. Refs are
-sequential integers allocated per-session and tracked in the session's
-ref table.
+`attach` returns a **compressed piloting surface**, not the raw AX tree.
+Interactive roles survive (`Button`, `TextField`, `Link`, `MenuItem`,
+`Checkbox`, `RadioButton`, `ComboBox`, `Slider`, etc.). Non-interactive
+containers are normally folded out, but meaningful or opaque structural
+containers (`AXGroup`, `AXScrollArea`, `AXWebArea`, lists/tables/sheets,
+and similar) are kept as refs with `actionable: false`, `children`, and
+`opaque` metadata. This is deliberate: apps built on CEF/Electron or
+custom drawing can expose only a chain of groups. Keeping those refs lets
+PAI expand and diagnose the blind spot instead of seeing only close /
+minimize / full-screen buttons.
+
+Each entry is `{ref, role, label, value, enabled}` with optional fields
+such as `subrole`, `children`, `actionable`, `opaque`, and
+`window_chrome`. Refs are sequential integers allocated per-session and
+tracked in the session's ref table.
 
 Use `expand(ref)` to drill into a node's children. Use `act(ref, ...)`
 to fire `press`, `set_value`, `show_menu`, or `pick_menu_item`.
+
+`attach` and `redump` also return `diagnostics`: role counts plus warning
+strings. The important warning is `opaque_ax_tree`, which means the app's
+content is not exposed through normal `AXChildren`; if
+`useful_actionable_count` is `0` and `standard_window_button_count` is
+non-zero, the visible controls are just standard window chrome. In that
+case do not keep pressing blank button refs; switch to another verified
+route such as an app dictionary, URL scheme, keyboard fallback, screenshot
+readback, or a purpose-built driver.
 
 After an action changes the UI (a sheet opens, a value updates), call
 `redump(session_id)` to get the fresh tree — re-`attach` is refused with
