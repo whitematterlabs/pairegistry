@@ -29,5 +29,6 @@ events:
           inbound: int
           outbound: int
           last_text: string
+          day_files:
+            - string
       total: int
-

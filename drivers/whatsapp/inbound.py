@@ -254,6 +254,7 @@ async def _read_bridge_stdout(proc: asyncio.subprocess.Process) -> None:
                     "slug": slug,
                     "sender": sender,
                     "text": body,
+                    "day_file": str(day_file.relative_to(PAI_ROOT)),
                 })
                 if backlog_flush_task and not backlog_flush_task.done():
                     backlog_flush_task.cancel()
@@ -302,7 +303,9 @@ async def _read_bridge_stdout(proc: asyncio.subprocess.Process) -> None:
 
 def _emit_backlog(messages: list[dict]) -> None:
     threads_map: dict[str, dict] = {}
+    day_files_by_thread: dict[str, set[str]] = {}
     for m in messages:
+        slug = m["slug"]
         t = threads_map.setdefault(m["slug"], {
             "thread": m["slug"],
             "inbound": 0,
@@ -310,12 +313,20 @@ def _emit_backlog(messages: list[dict]) -> None:
         })
         t["inbound"] += 1
         t["last_text"] = m["text"]
+        if day_file := m.get("day_file"):
+            day_files_by_thread.setdefault(slug, set()).add(day_file)
+
+    threads = list(threads_map.values())
+    for t in threads:
+        day_files = day_files_by_thread.get(t["thread"])
+        if day_files:
+            t["day_files"] = sorted(day_files)
 
     P.emit_event({
         "source": "whatsapp",
         "kind": "backlog",
         "since": datetime.now(timezone.utc).isoformat(),
-        "threads": list(threads_map.values()),
+        "threads": threads,
         "total": len(messages),
     })
     print(f"[whatsapp-in] emitted backlog ({len(messages)} messages across {len(threads_map)} threads)", flush=True)

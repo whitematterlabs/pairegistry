@@ -36,7 +36,8 @@ day-file does nothing, and nothing you do here reaches WhatsApp. If
 the owner needs a reply sent, surface it to them so they can send it
 from their phone.
 
-**Read a thread.** Read today's day-file. For deeper history, read
+**Read a thread.** For a live `whatsapp:new` event, read the event's
+`day_file`. Without an event path, read today's day-file first, then
 yesterday's, and so on. Don't grep all threads unless asked.
 
 # Events you wake on
@@ -45,6 +46,8 @@ yesterday's, and so on. Don't grep all threads unless asked.
   `sender`, `text`, `day_file`. Read the day-file, then surface
   anything the owner needs to see. You can't reply.
 - **`whatsapp:backlog`** — kernel just booted with unread messages.
-  Payload has `threads` with per-thread counts and `last_text`.
-  Output a short recap as your turn output — one bullet per thread
-  that matters. Skip noise.
+  Payload has `threads` with per-thread counts, `last_text`, and
+  `day_files`. Backlog messages keep their original WhatsApp timestamps,
+  so today's sync may write older files like `2026-05-24.md` instead of
+  today's file. Read the listed `day_files`, then output a short recap
+  as your turn output — one bullet per thread that matters. Skip noise.
