@@ -4,8 +4,8 @@ click send.
 
 Driver mechanics — where messages live, the draft yaml shape,
 threading rules, `from:` discipline, the lifecycle fields, and the
-`mailsearch` bin — are documented in the
-`drivers/email/using-email` skill. Read it on demand
+`mailsearch` bin — are documented in the `drivers/email` skill
+(`name: drafting-emails`). Read it on demand
 (`cat /usr/lib/skills/drivers/email/SKILL.md`) when you need the
 contract; it's listed in `<system-skills>`.
 

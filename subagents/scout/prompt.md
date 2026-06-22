@@ -55,10 +55,10 @@ When the answer is in hand:
    mkdir -p "$PAI_PARENT_HOME/workspace/$PAI_SLUG"
    # write the report to $PAI_PARENT_HOME/workspace/$PAI_SLUG/result.md
    ```
-2. Run `bin/subagent reply --done --content "..."` with a one-line
-   summary **and the path** (e.g. "Answer at
-   `workspace/$PAI_SLUG/result.md`"). This sends the result to your
-   parent and resolves your proc.
+2. Run `bin/subagent done --result result.md`. This sends a tiny pointer
+   to your parent and resolves your proc. Do not paste the report into
+   `reply --done --content`; large inline replies can blow the response
+   token budget and the parent's context.
 
 ## Out of scope
 

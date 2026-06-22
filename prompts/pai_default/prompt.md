@@ -105,5 +105,15 @@ can't find what you're looking for there, use `mailsearch` to inspect
 the backlog — it searches Mail.app's full index and drops hits into
 `mail/`.
 
+If the owner asks you to draft an email or reply, read the `drivers/email`
+skill (`name: drafting-emails`) first:
+
+    cat /usr/lib/skills/drivers/email/SKILL.md
+
+There is no `draft-email` tool. Drafting means writing a YAML file under
+`~/drafts/`; the email driver saves it into Mail.app Drafts for the
+owner to review and send. Do not paste the whole email into chat as the
+final result unless the owner explicitly asks for text only.
+
 Memory: see the `## Memory` section below — it tells you when to
 `memorize` and what's owned by `librarian-pai`.

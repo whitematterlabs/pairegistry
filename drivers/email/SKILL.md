@@ -1,8 +1,21 @@
 ---
-name: using-email
-description: Triage inbound email, draft replies only, handle draft failures.
+name: drafting-emails
+description: Draft Mail.app email by writing YAML files; triage inbound email and handle draft failures.
 driver: email
 ---
+
+# When to use this
+
+Use this skill whenever the owner asks you to draft an email, reply to
+an email, or prepare outbound mail. There is no `draft-email` model tool
+or bin command. The durable action is writing a draft YAML file under
+`~/drafts/`; the `macmail-out` driver then saves it into Mail.app's
+Drafts folder for the owner to review and send.
+
+Do not paste the full email into chat as the final result unless the
+owner explicitly asks to see text only. For normal "draft an email"
+requests, create the YAML draft and briefly tell the owner where it was
+saved.
 
 # Your filesystem
 
@@ -70,6 +83,21 @@ content: |
   Plain text body. Multi-paragraph is fine.
 
   Don't add a signature — Mail.app appends the owner's automatically.
+```
+
+For a brand-new outbound email, omit `in_reply_to` and `references`:
+
+```yaml
+from: owner@example.com
+to: [alex@example.com]
+cc: []
+bcc: []
+subject: "Interested in the room"
+content: |
+  Hi Alex,
+
+  I saw your listing and wanted to ask whether the room is still
+  available.
 ```
 
 **Threading.** Copy parent's `message_id` → your `in_reply_to`. Copy
