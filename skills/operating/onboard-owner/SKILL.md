@@ -32,7 +32,7 @@ TODAY=$(date +%F)
 ## 3. Mail — `mailsearch`
 
 ```sh
-mailsearch --since "$SINCE" --limit 200
+bin/mailsearch --since "$SINCE" --limit 200
 ```
 
 Hits are materialized as canonical yamls under `~/communication/email/<account>/<date>/...`;
@@ -48,7 +48,7 @@ under `~/communication/messages/` are empty for older messages. Read chat.db
 directly (read-only):
 
 ```sh
-imessage-history --since "$SINCE"
+bin/imessage-history --since "$SINCE"
 ```
 
 It prints a YAML list of `{date, thread, sender, text}`. Skim for the people the
@@ -60,7 +60,7 @@ Materialize stubs from the macOS address book (first-write-wins, best-effort —
 a no-op without Contacts access), then read them:
 
 ```sh
-python -c "from boot import processes as P; from drivers.messages import MESSAGES_DIR; from drivers.contacts import sync; print(sync(P.HOME_DIR/'memory'/'people', MESSAGES_DIR))"
+bin/python -c "from boot import processes as P; from drivers.messages import MESSAGES_DIR; from drivers.contacts import sync; print(sync(P.HOME_DIR/'memory'/'people', MESSAGES_DIR))"
 ls memory/people/ 2>/dev/null
 ```
 
@@ -74,8 +74,8 @@ surfaced in mail and messages.
 read every one of 30 days blindly — sample recent days and any that recur:
 
 ```sh
-cal --date "$TODAY"
-cal --date <other days across the window>
+bin/cal --date "$TODAY"
+bin/cal --date <other days across the window>
 ```
 
 Look for routines (standups, recurring meetings), the owner's working hours, and
@@ -88,8 +88,10 @@ there's usually no local history (no bridge sync yet) — skip silently if empty
 
 ## 8. Synthesize and write the profile
 
-Write `/var/lib/owner/profile.md` (the shell rewrites the leading slash to the
-real PAI root; this is the one canonical file every PAI's prompt reads):
+Write `/var/lib/owner/profile.md` (absolute FHS path). Do not write
+`var/lib/owner/profile.md` relative to your home directory; that creates a
+home-local file the kernel will not inject. The shell rewrites the leading slash
+to the real PAI root; this is the one canonical file every PAI's prompt reads:
 
 ```sh
 mkdir -p /var/lib/owner
