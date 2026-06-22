@@ -61,8 +61,8 @@ events:
       total: int
 
   - kind: imessage:multiple_messages
-    description: A live burst — more than one row appeared in a single
-      drain (the kernel woke, queried chat.db, got >1 new row). Emitted
+    description: A live burst — more than one row appeared during the
+      short live quiet window before the driver drained chat.db. Emitted
       instead of N separate `imessage:new` events so PAI gets one nudge.
       Distinct from `imessage:backlog`, which is boot-time catchup.
     emitted_by: src/drivers/imessage/inbound.py

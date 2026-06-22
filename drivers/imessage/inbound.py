@@ -2,7 +2,7 @@
 
 Watches ~/Library/Messages/chat.db{,-wal,-shm} via kqueue. On each
 VNODE event, runs a bounded ROWID-delta query against chat.db and
-emits one `new_message` event per new inbound row into home/events/.
+emits live message events into home/events/.
 
 kqueue (not watchdog/FSEvents) because SQLite modifies the WAL in place
 via mmap, which FSEvents coalesces aggressively — you get one event and
@@ -36,6 +36,12 @@ from boot import processes as P
 CHAT_DB = Path.home() / "Library" / "Messages" / "chat.db"
 CURSOR_DIR = P.HOME_DIR / "tmp" / "drivers" / "imessage_in"
 CURSOR_PATH = CURSOR_DIR / "cursor.yaml"
+
+# Live iMessage rows often arrive one-at-a-time during an active chat. Without
+# a short quiet window, each row becomes its own PAI turn. Wait until the WAL is
+# quiet briefly, but cap the wait so a long conversation still surfaces.
+LIVE_QUIET_WINDOW_S = 5.0
+LIVE_MAX_DEBOUNCE_S = 20.0
 
 MAC_EPOCH = datetime(2001, 1, 1, tzinfo=timezone.utc)
 
@@ -241,6 +247,38 @@ def _drain_live(last_rowid: int) -> int:
     return new_last
 
 
+async def _wait_for_live_quiet(
+    queue: asyncio.Queue,
+    *,
+    quiet_s: float = LIVE_QUIET_WINDOW_S,
+    max_s: float = LIVE_MAX_DEBOUNCE_S,
+) -> None:
+    """Drain queued WAL wakeups until the stream goes quiet or max_s elapses.
+
+    The caller has already consumed the first wakeup. This function only
+    coalesces notifications; the actual SQLite drain happens afterwards, so no
+    rows are lost while waiting.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max_s
+    while True:
+        # Collapse any already-queued wakeups first.
+        while not queue.empty():
+            try:
+                queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return
+
+        try:
+            await asyncio.wait_for(queue.get(), timeout=min(quiet_s, remaining))
+        except TimeoutError:
+            return
+
+
 def _drain_catchup(last_rowid: int) -> int:
     """Boot-time pass: coalesce all missed rows into ONE backlog event so
     PAI gets a single nudge instead of N. Includes is_from_me rows (Arda
@@ -439,12 +477,7 @@ async def run() -> None:
     try:
         while True:
             await queue.get()
-            # Coalesce bursts of WAL writes into a single SQL pass.
-            while not queue.empty():
-                try:
-                    queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    break
+            await _wait_for_live_quiet(queue)
             last_rowid = await asyncio.to_thread(_drain_live, last_rowid)
     except asyncio.CancelledError:
         raise

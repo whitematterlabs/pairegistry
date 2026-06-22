@@ -69,8 +69,9 @@ first-last if needed for disambiguation.
   = "me"`). Treat it as a conversation with them.
 - **`imessage:backlog`** — kernel just booted with unread messages.
   Write an offline report to the owner thread.
-- **`imessage:multiple_messages`** — a live burst (>1 row in a single
-  drain). `context.messages` is the full ordered list with `thread`,
+- **`imessage:multiple_messages`** — a live burst (>1 row collected
+  during the short live quiet window). `context.messages` is the full
+  ordered list with `thread`,
   `sender`, `text`, `day_file` per message. Day-files are already
   written; decide whether to reply, surface, or stay silent — same
   rules as `imessage:new`, just batched.
