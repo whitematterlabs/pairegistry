@@ -1,0 +1,5 @@
+name: draft-email
+kind: bin
+version: 0.1.0
+description: Create a Mail.app email draft by writing the email driver's draft YAML.
+entrypoint: draft_email.py

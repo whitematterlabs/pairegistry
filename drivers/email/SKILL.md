@@ -7,10 +7,9 @@ driver: email
 # When to use this
 
 Use this skill whenever the owner asks you to draft an email, reply to
-an email, or prepare outbound mail. There is no `draft-email` model tool
-or bin command. The durable action is writing a draft YAML file under
-`~/drafts/`; the `macmail-out` driver then saves it into Mail.app's
-Drafts folder for the owner to review and send.
+an email, or prepare outbound mail. Use `bin/draft-email`; it writes a
+draft YAML file under `~/drafts/`, and the `macmail-out` driver then
+saves it into Mail.app's Drafts folder for the owner to review and send.
 
 Do not paste the full email into chat as the final result unless the
 owner explicitly asks to see text only. For normal "draft an email"
@@ -65,9 +64,43 @@ Drafts; the owner reviews and sends manually. Do not send email, click
 Send, invoke AppleScript `send`, use SMTP/API sending paths, or treat
 delivery as your responsibility.
 
-Write the draft to `~/drafts/<name>.yaml`. Pick a descriptive
-`<name>` like `re-bob-q3-budget` — it's just a filename, not exposed
-anywhere. Same name twice overwrites; be specific.
+Prefer the CLI:
+
+```sh
+printf '%s\n' "Hi Alex,
+
+I saw your listing and wanted to ask whether the room is still available." \
+  | bin/draft-email \
+      --from owner@example.com \
+      --to alex@example.com \
+      --subject "Interested in the room" \
+      --wait
+```
+
+The command prints a small YAML result:
+
+```yaml
+path: drafts/interested-in-the-room-alex.yaml
+spool_path: var/spool/communication/email/drafts/interested-in-the-room-alex.yaml
+draft_state: drafted
+```
+
+For reply-shaped drafts, pass the parent's Message-ID:
+
+```sh
+printf '%s\n' "Thanks, Friday works for me." \
+  | bin/draft-email \
+      --from owner@example.com \
+      --subject "Re: Q3 budget" \
+      --in-reply-to "<message-id-of-parent>" \
+      --reference "<root@example.com>" \
+      --reference "<message-id-of-parent>" \
+      --wait
+```
+
+If `bin/draft-email` is unavailable, write the draft manually to
+`~/drafts/<name>.yaml`. Pick a descriptive `<name>` like
+`re-bob-q3-budget` — it's just a filename, not exposed anywhere.
 
 ```yaml
 from: owner@example.com               # must match a Mail.app account
