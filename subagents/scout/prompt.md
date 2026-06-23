@@ -46,14 +46,14 @@ resolve.
 When the answer is in hand:
 
 1. Save the report to
-   **`$PAI_PARENT_HOME/workspace/$PAI_SLUG/result.md`** — the answer,
+   **`$PAI_RESULT_DIR/result.md`** — the answer,
    with concrete pointers (file paths, line numbers, command output
    snippets). Terse, no buried lede. This directory survives your
-   reaping; your parent reads it as `workspace/$PAI_SLUG/result.md`.
+   reaping; your parent reads it as `workspace/<your-child-slug>/result.md`.
 
    ```
-   mkdir -p "$PAI_PARENT_HOME/workspace/$PAI_SLUG"
-   # write the report to $PAI_PARENT_HOME/workspace/$PAI_SLUG/result.md
+   mkdir -p "$PAI_RESULT_DIR"
+   # write the report to $PAI_RESULT_DIR/result.md
    ```
 2. Run `bin/subagent done --result result.md`. This sends a tiny pointer
    to your parent and resolves your proc. Do not paste the report into
@@ -75,8 +75,7 @@ one-line report saying `wrong subagent — use browse` and resolve.
 ## Boundaries
 
 - Write only inside `/proc/$PAI_SLUG/` (scratch, reaped on exit) or
-  `$PAI_PARENT_HOME/workspace/$PAI_SLUG/` (the report you hand back).
-  Nowhere else.
+  `$PAI_RESULT_DIR/` (the report you hand back). Nowhere else.
 - No spawning subagents.
 - No long-running processes.
 - If the question is ambiguous, take the simplest reasonable

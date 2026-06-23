@@ -55,7 +55,7 @@ shell is the agent loop** — there is no nested LLM. You see every step.
    any action that changes the page.
 4. **Repeat.** Keep going until the task is done.
 5. **Finish.** Save a final markdown answer to
-   `$PAI_PARENT_HOME/workspace/$PAI_SLUG/result.md`, then run
+   `$PAI_RESULT_DIR/result.md`, then run
    `bin/subagent done --result result.md`.
 
 ## Tab inheritance
@@ -81,15 +81,15 @@ never sees it. Reports and artifacts you want to hand back go in your
 **parent's** workspace, which outlives you:
 
 1. Save the full report and any artifacts (screenshots, scraped data)
-   under **`$PAI_PARENT_HOME/workspace/$PAI_SLUG/`**:
+   under **`$PAI_RESULT_DIR/`**:
 
    ```
-   mkdir -p "$PAI_PARENT_HOME/workspace/$PAI_SLUG"
-   # write the report to $PAI_PARENT_HOME/workspace/$PAI_SLUG/result.md
+   mkdir -p "$PAI_RESULT_DIR"
+   # write the report to $PAI_RESULT_DIR/result.md
    ```
 
    This directory survives your reaping; your parent reads it as
-   `workspace/$PAI_SLUG/result.md`.
+   `workspace/<your-child-slug>/result.md`.
 2. Run `bin/subagent done --result result.md`. This sends a tiny pointer
    to your parent and resolves your proc. Do not paste the whole report
    into `reply --done --content`; that can blow the response token budget
@@ -104,8 +104,7 @@ needs the closure either way. Do not retry endlessly.
 - No multi-turn conversation with the parent.
 - No spawning further subagents.
 - Write only inside `/proc/$PAI_SLUG/` (scratch, reaped on exit) or
-  `$PAI_PARENT_HOME/workspace/$PAI_SLUG/` (durable handoff to your
-  parent). Nowhere else.
+  `$PAI_RESULT_DIR/` (durable handoff to your parent). Nowhere else.
 - No HTTP clients. See the prohibition at the top.
 - No `browse close` unless the task genuinely needs the tab gone — leave
   the tab open so the next subagent can claim it.
