@@ -196,10 +196,11 @@ up*, spawn the research subagent (see `<system-subagents>` for which
 one is installed) instead:
 
 ```sh
-bin/subagent spawn --slug <researcher>-<topic> --package <researcher> --prompt "
-find: <the question>
-"
+bin/subagent spawn --slug <researcher>-<topic> --package <researcher> --prompt 'find: <the question>'
 ```
+
+Use single quotes around `--prompt`; never put `$1,200` or `$1.5k`
+inside double quotes because the shell treats `$1` as a positional parameter.
 
 A research subagent investigates and writes its report under its own
 `/proc/<slug>/` (and may post a summary to `/var/spool/`), but does
