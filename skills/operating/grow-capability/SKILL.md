@@ -1,7 +1,7 @@
 ---
 name: grow-capability
 visible_to: [root]
-description: Classify a build request (own initiative or a child PAI's `request-capability:` send_message), pick the right bundle kind, hand off to claudecode, and notify the requester. Single source of truth for the bin / driver / skill / subagent / pai-bundle / prompt taxonomy.
+description: Classify a capability request (own initiative or a child PAI's `request-capability:` send_message), pick the right bundle kind, install existing registry bundles when available, and notify the requester. Single source of truth for the bin / driver / skill / subagent / pai / prompt taxonomy.
 ---
 
 # Growing a capability
@@ -9,9 +9,9 @@ description: Classify a build request (own initiative or a child PAI's `request-
 Two entry points:
 
 1. **A child PAI messaged you `request-capability: <need>` / `why: <ask>`.** Save the sender pid; you `send-message` them back at the end. Don't message the owner; don't invoke the new capability yourself. If the request is unintelligible, `send-message` the requester for refinement — never the owner.
-2. **You decided to build something.** Skip the notify step at the bottom.
+2. **You decided a capability is missing.** Skip the notify step at the bottom.
 
-This skill is **Step 2** of root's build flow. Root's prompt already specifies the claudecode handoff, the ≤80-word brief, and the post-build help page — don't re-derive any of that here. Use it verbatim.
+This skill is root's capability-gap flow. It does not invoke Claude Code or any other code-generation subprocess. Root can discover and install existing registry bundles; source authoring belongs in the canonical repositories outside the runtime.
 
 ## Step 1 — does it already exist?
 
@@ -36,7 +36,7 @@ Installable bundle kinds (from `paiman.py`): **bin, sbin, driver, skill, prompt,
 Answer this first. A reactive capability ("notify me when X changes", "remind me before Y", "wake on Z") needs a driver emitting events. An imperative capability ("run X", "fetch Y", "post Z") doesn't.
 
 - **Reactive + driver already exists** (check `ls /usr/lib/drivers/` and its `events.yaml`) → wire `wake_on:` to its events. No new bundle needed, or a thin skill.
-- **Reactive + no driver for the surface** → **build a driver**. Stop. Don't build a bin that polls. A bin that polls is the wrong scope, not a faster path.
+- **Reactive + no driver for the surface** → the gap requires a driver bundle/source change. Stop. Don't install a bin that polls. A bin that polls is the wrong scope, not a faster path.
 - **Imperative** → continue to Gate 2.
 
 An existing **bin** for the surface does not count — bins don't emit events. Only a driver does.
@@ -54,7 +54,7 @@ For imperative work, default to `bin`. Pick from the table below only if `bin` c
 | `prompt` | A new role/system prompt — only when adding or replacing a PAI's identity. |
 | `lib` | Importable Python shared by ≥2 bins/drivers. Don't reach for this until the duplication actually exists. |
 | `driver` | A new **primitive surface**: app ABI (Mail, Messages), system framework (AddressBook), I/O channel (audio), or a shared long-lived session (headless browser). Two conditions, **both** required: (a) genuinely primitive, not a task; (b) collapsing into an existing driver would lose native event hooks or cost too much ceremony. See `memory/doc/KERNEL.md` for the driver contract. |
-| `subagent` | A reusable research/specialist role spawned ephemerally by other PAIs via `bin/subagent spawn --package <name>` (e.g. `scout`). See `memory/doc/SUBAGENT_BUNDLES.md`. Rare — usually only when a new specialist persona is needed. Note: coding handoffs go through skill `execute-claudecode`, not a subagent bundle. |
+| `subagent` | A reusable research/specialist role spawned ephemerally by other PAIs via `bin/subagent spawn --package <name>` (e.g. `scout`). See `memory/doc/SUBAGENT_BUNDLES.md`. Rare — usually only when a new specialist persona is needed. |
 | `pai` | A dedicated fleet member with its own identity, prompt, and event subscriptions. Pair with a driver when long-horizon turn-taking on that surface is wanted ("a calendar PAI", "an autonomous scheduler"). |
 | `sbin` | Owner/root-only fleet-mutation tool. Almost never the answer to a capability request. |
 
@@ -63,33 +63,43 @@ For imperative work, default to `bin`. Pick from the table below only if `bin` c
 - **Splitter** — promoting a *task* ("reservations driver", "ordering driver") into a driver when it collapses to an existing primitive + a bin. Almost always wrong.
 - **Lumper** — collapsing a high-frequency reactive surface (mail, messages) into a generic bin when doing so loses native event hooks. Wrong when both frequency and reactivity are high.
 
-If the brief reads "book / send / post / buy / search / run / fetch" — that's a **bin**. Stop.
+If the request reads "book / send / post / buy / search / run / fetch" — that's a **bin**. Stop.
 
-## Step 3 — fire claudecode
+## Step 3 — install or report the gap
 
-Use skill `execute-claudecode` to fire the brief. The brief shape (≤80 words, type/name/need/why/shape) is specified in root's prompt and in `execute-claudecode`; don't re-derive. Two kind-specific notes that don't belong in the prompt:
+Search the registry for an existing bundle before declaring new source work is needed:
 
-- **driver**: before firing, settle five questions and put them in the brief: top-level dir, partition key, one entity-file shape, event kinds (`<surface>:new|changed|removed`), external source (sqlite path / API / AX). After claudecode lands it, `paiman install` → `paictl start <name>-in` → `reboot`. Background: `memory/doc/KERNEL.md`.
-- **pai bundle**: do the driver first if one is missing. Bundle brief must name `wake_on:` globs and a one-sentence role. After it lands, follow the ship flow in skill `author-pai-bundle` (don't re-derive install/instantiate steps here).
+```sh
+paiman search <keyword>
+paiman show <candidate>
+```
 
-For `bin` / `skill` / `prompt` / `lib` / `subagent`: just the standard brief. No pre-design.
+If an existing bundle matches the need:
 
-## The shape contract
+- `bin` / `skill` / `prompt` / `lib` / `subagent`: `paiman install <candidate>`.
+- `driver`: `paiman install <candidate>` → `paictl start <name>-in` if it has a runnable process → `reboot`.
+- `pai`: follow skill `kernel-tools`: `paiman install <candidate>` → `paiadd <candidate>` → `paictl start <instance>` → `reboot`.
 
-`shape:` in the brief is *what proves it works*, not *how it's built*.
+If no existing bundle matches, do **not** invoke Claude Code, create files in `/usr/lib/`, or hand-author source inside the runtime. Report that the capability requires a source change in `/Users/arda/Projects/pai` or `/Users/arda/Projects/pairegistry`.
+
+## The acceptance shape
+
+Use this to decide whether an existing bundle satisfies the request. It is *what proves it works*, not *how it is built*.
 
 - bin: one CLI invocation line that, when run, demonstrates the tool. `cal --today` not "uses EventKit".
 - skill: one-line acceptance criterion ("a PAI reading this can author a driver end-to-end").
-- driver: the event-kind line the coder must emit on the first real change.
+- driver: the event-kind line the driver must emit on the first real change.
 
 If the line names a library, a path under `/usr/lib/`, async vs sync, or an error-handling rule — delete it. That's HOW.
 
 ## Step 4 — verify, then notify
 
-Spot-check the artifact yourself (run the `shape:` line, `ls` the new files) before sending the reply. Claudecode's own verify isn't enough — re-run it.
+Spot-check the installed bundle yourself (run the acceptance line, `ls` the installed files, or check `/proc/` for drivers/PAIs) before sending the reply.
 
 ```sh
 bin/send-message --to <requester pid> --content 'capability-ready: <name> — usage: <cli or one-line>'
+# or
+bin/send-message --to <requester pid> --content 'capability-needs-source-change: <name> — reason: <one line>'
 # or
 bin/send-message --to <requester pid> --content 'capability-failed: <name> — reason: <one line>'
 ```
@@ -98,11 +108,11 @@ New `bin/` tools appear in the requester's next turn automatically. New drivers 
 
 ## Boundaries
 
-- Build and notify. Don't invoke the new capability yourself.
+- Install or report the gap, then notify. Don't invoke the new capability yourself.
 - Don't message the owner. The requester handles user-facing follow-through.
 - For refinement, ask the **requester**, never the owner.
 - Data is a file, tools are binaries, long-horizon work is a new PAI.
 
 ## Logging
 
-One line to `/proc/root/log.md` per phase: received, scoped (kind chosen), spawned, delivered (or failed).
+One line to `/proc/root/log.md` per phase: received, scoped (kind chosen), installed or needs-source-change, delivered (or failed).

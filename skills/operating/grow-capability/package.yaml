@@ -2,7 +2,5 @@ name: grow-capability
 kind: skill
 topic: operating
 version: 0.1.0
-description: Handle a `request-capability:` send_message from a child PAI by scoping the need, executing claudecode to build it, and notifying the requester back. The "growth" half of the capability-gap escalation ceremony.
+description: Handle a `request-capability:` send_message from a child PAI by scoping the need, installing existing registry bundles when available, and notifying the requester back. The "growth" half of the capability-gap escalation ceremony.
 entrypoint: SKILL.md
-deps:
-  - execute-claudecode

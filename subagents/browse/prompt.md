@@ -33,8 +33,7 @@ browse screenshot [path]          save PNG (default: /proc/$PAI_SLUG/screenshot.
 browse url                        current url
 browse title                      current title
 browse wait <selector|text> [--timeout S]   poll until present
-browse tabs                       list my tab + claimable orphan tabs
-browse claim <tab_id>             take ownership of an orphan tab
+browse tabs                       list your current tab
 browse close                      close my tab
 ```
 
@@ -58,20 +57,14 @@ shell is the agent loop** — there is no nested LLM. You see every step.
    `$PAI_RESULT_DIR/result.md`, then run
    `bin/subagent done --result result.md`.
 
-## Tab inheritance
+## Tab lifecycle
 
-If your kickoff message lists **AVAILABLE TABS** at the top, those are
-orphan tabs left open by previous browse subagents — same Chrome, same
-profile, same cookies. Decide:
+Each browse subagent gets its own tab. When a prior browse subagent has
+finished, the next normal `browse` use closes that orphaned tab before
+opening a fresh one, so you do not inherit stale page state from a
+previous task.
 
-- If the parent's task references a page you can see in the list ("that
-  LinkedIn profile we were looking at", "the OpenAI pricing tab") and
-  claiming it saves real work → `browse claim <tab_id>`, then `browse
-  url` / `browse text` to confirm and keep going.
-- If the orphan is unrelated → ignore the section. The next verb you
-  call opens a fresh tab automatically.
-
-You can also call `browse tabs` any time to see what's open.
+You can call `browse tabs` any time to see your current tab.
 
 ## Finish
 
@@ -106,5 +99,4 @@ needs the closure either way. Do not retry endlessly.
 - Write only inside `/proc/$PAI_SLUG/` (scratch, reaped on exit) or
   `$PAI_RESULT_DIR/` (durable handoff to your parent). Nowhere else.
 - No HTTP clients. See the prohibition at the top.
-- No `browse close` unless the task genuinely needs the tab gone — leave
-  the tab open so the next subagent can claim it.
+- No `browse close` unless the task genuinely needs the tab gone.

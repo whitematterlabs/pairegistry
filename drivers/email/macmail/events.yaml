@@ -27,7 +27,7 @@ events:
       subject: string
       from: string
       direction: string       # "inbound" | "outbound"
-      path: string            # home-view path to the canonical yaml
+      path: string            # home-view path to the canonical yaml (`communication/email/...`)
 
   - kind: email:backlog
     description: Kernel just booted and found mail that landed while it

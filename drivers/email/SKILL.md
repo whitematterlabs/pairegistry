@@ -50,7 +50,11 @@ content: |
 # Events you wake on
 
 - **`email:new`** — read the yaml at `payload.path`, decide whether
-  to stay silent, draft a reply, or surface to the owner.
+  to stay silent, draft a reply, or surface to the owner. Event paths should
+  be home-view paths (`communication/email/...`). If an older/stale runtime
+  emits `var/spool/communication/email/...`, read it as
+  `/var/spool/communication/email/...` or rewrite it to
+  `communication/email/...` before treating it as missing.
 - **`email:backlog`** — brief recap to the owner thread, grouped by
   account. Don't draft from backlog.
 - **`email:draft_failed`** — read `draft_error` on the yaml at

@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -114,3 +116,93 @@ def test_port_listener_uses_host_process_tools(monkeypatch):
         ["/usr/sbin/lsof", "-nP", "-iTCP:9333", "-sTCP:LISTEN", "-t"],
         ["/bin/ps", "-p", "123", "-o", "command="],
     ]
+
+
+def test_ensure_tab_closes_orphan_tabs_before_opening_fresh_tab(
+    tmp_path, monkeypatch
+):
+    tabs = tmp_path / "tabs"
+    snaps = tmp_path / "snapshots"
+    tabs.mkdir()
+    snaps.mkdir()
+    orphan = tabs / "old-browse.yaml"
+    orphan.write_text(
+        yaml.safe_dump(
+            {
+                "tab_id": "old-tab",
+                "owner_slug": "old-browse",
+                "owner_status": "orphan",
+            }
+        )
+    )
+    (snaps / "old-browse.json").write_text("{}")
+    closed = []
+
+    monkeypatch.setattr(browse, "TAB_DIR", tabs)
+    monkeypatch.setattr(browse, "SNAP_DIR", snaps)
+    monkeypatch.setattr(browse, "_ensure_chrome", lambda: None)
+    monkeypatch.setattr(
+        browse, "_list_targets", lambda: [{"id": "old-tab", "type": "page"}]
+    )
+    monkeypatch.setattr(browse, "_close_target", lambda tab_id: closed.append(tab_id))
+    monkeypatch.setattr(
+        browse,
+        "_new_target",
+        lambda: {
+            "id": "new-tab",
+            "url": "about:blank",
+            "title": "",
+            "webSocketDebuggerUrl": "ws://new-tab",
+        },
+    )
+
+    tab, ws_url = browse._ensure_tab("new-browse")
+
+    assert closed == ["old-tab"]
+    assert not orphan.exists()
+    assert not (snaps / "old-browse.json").exists()
+    assert tab["tab_id"] == "new-tab"
+    assert tab["owner_slug"] == "new-browse"
+    assert tab["owner_status"] == "running"
+    assert ws_url == "ws://new-tab"
+
+
+def test_ensure_tab_does_not_reuse_same_slug_orphan(tmp_path, monkeypatch):
+    tabs = tmp_path / "tabs"
+    tabs.mkdir()
+    (tmp_path / "snapshots").mkdir()
+    (tabs / "browse.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "tab_id": "old-tab",
+                "owner_slug": "browse",
+                "owner_status": "orphan",
+            }
+        )
+    )
+    closed = []
+
+    monkeypatch.setattr(browse, "TAB_DIR", tabs)
+    monkeypatch.setattr(browse, "SNAP_DIR", tmp_path / "snapshots")
+    monkeypatch.setattr(browse, "_ensure_chrome", lambda: None)
+    monkeypatch.setattr(
+        browse, "_list_targets", lambda: [{"id": "old-tab", "type": "page"}]
+    )
+    monkeypatch.setattr(browse, "_ws_for_tab", lambda tab_id: "ws://old-tab")
+    monkeypatch.setattr(browse, "_close_target", lambda tab_id: closed.append(tab_id))
+    monkeypatch.setattr(
+        browse,
+        "_new_target",
+        lambda: {
+            "id": "new-tab",
+            "url": "about:blank",
+            "title": "",
+            "webSocketDebuggerUrl": "ws://new-tab",
+        },
+    )
+
+    tab, ws_url = browse._ensure_tab("browse")
+
+    assert closed == ["old-tab"]
+    assert tab["tab_id"] == "new-tab"
+    assert ws_url == "ws://new-tab"

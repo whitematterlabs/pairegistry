@@ -26,6 +26,15 @@ def test_email_draft_spool_paths_are_reported_in_home_view() -> None:
     )
 
 
+def test_email_absolute_fhs_paths_are_reported_in_home_view() -> None:
+    assert (
+        shared.home_view_path(
+            "/var/spool/communication/email/owner@example.com/2026-06-23/msg.yaml"
+        )
+        == "communication/email/owner@example.com/2026-06-23/msg.yaml"
+    )
+
+
 def test_email_home_view_paths_are_left_alone() -> None:
     assert (
         shared.home_view_path("communication/email/owner@example.com/2026-06-23/msg.yaml")

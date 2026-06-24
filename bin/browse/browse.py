@@ -21,7 +21,6 @@ Verbs:
   browse title
   browse wait <selector|text> [--timeout SECONDS]
   browse tabs
-  browse claim <tab_id>
   browse close
 
 Tab map at /sys/drivers/browse/tabs/<slug>.yaml. Snapshot at
@@ -459,15 +458,48 @@ def _new_target() -> dict:
     return _http_json("/json/new?about:blank", method="PUT")
 
 
+def _close_target(tab_id: str) -> None:
+    try:
+        _http_json(f"/json/close/{tab_id}")
+    except Exception:
+        pass
+
+
+def _close_orphan_tabs() -> None:
+    """Dispose tabs from resolved browse subagents before a fresh session starts."""
+    if not TAB_DIR.is_dir():
+        return
+    try:
+        live = {t["id"] for t in _list_targets() if t.get("type") == "page"}
+    except Exception:
+        live = set()
+    for tf in sorted(TAB_DIR.glob("*.yaml")):
+        try:
+            data = yaml.safe_load(tf.read_text()) or {}
+        except Exception:
+            continue
+        if data.get("owner_status") != "orphan":
+            continue
+        tab_id = data.get("tab_id")
+        if tab_id and tab_id in live:
+            _close_target(str(tab_id))
+        try:
+            tf.unlink()
+        except OSError:
+            pass
+        _drop_snapshot(tf.stem)
+
+
 def _ensure_tab(slug: str) -> tuple[dict, str]:
     """Return (tab_record, ws_url). Lazily launches Chrome + creates a tab."""
     _ensure_chrome()
     tab = _load_tab(slug)
-    if tab and tab.get("tab_id"):
+    if tab and tab.get("tab_id") and tab.get("owner_status") != "orphan":
         ws_url = _ws_for_tab(tab["tab_id"])
         if ws_url:
             return tab, ws_url
         # tab vanished — fall through to recreate
+    _close_orphan_tabs()
     t = _new_target()
     tab = {
         "tab_id": t["id"],
@@ -850,6 +882,7 @@ def _human_age(iso: str) -> str:
 def cmd_tabs(args: argparse.Namespace) -> int:
     slug = _slug()
     _ensure_chrome()
+    _close_orphan_tabs()
     # Build map: tab_id -> live target
     live = {t["id"]: t for t in _list_targets() if t.get("type") == "page"}
     rows: list[tuple[str, str, str, str]] = []  # (status, tab_id, title, age)
@@ -917,9 +950,8 @@ def cmd_claim(args: argparse.Namespace) -> int:
         "last_url": live.get("url", (source_data or {}).get("last_url", "")),
         "last_title": live.get("title", (source_data or {}).get("last_title", "")),
     }
-    # If we currently own a different tab, that becomes orphan-eligible
-    # but per design we just overwrite our own tab file: the previous
-    # tab keeps living in Chrome until the owner closes it manually.
+    # Claim is a compatibility escape hatch. If we currently own a different
+    # tab, overwriting our tab file leaves that previous tab untracked.
     _save_tab(slug, new)
     if source_file and source_file != _tab_path(slug):
         try:
@@ -1005,10 +1037,10 @@ def main(argv: list[str] | None = None) -> int:
     sw.add_argument("--timeout", type=float, default=15.0)
     sw.set_defaults(func=cmd_wait)
 
-    sb = sub.add_parser("tabs", help="list my tab + claimable orphan tabs")
+    sb = sub.add_parser("tabs", help="list my current tab")
     sb.set_defaults(func=cmd_tabs)
 
-    sa = sub.add_parser("claim", help="take ownership of an orphan tab")
+    sa = sub.add_parser("claim", help=argparse.SUPPRESS)
     sa.add_argument("tab_id")
     sa.set_defaults(func=cmd_claim)
 

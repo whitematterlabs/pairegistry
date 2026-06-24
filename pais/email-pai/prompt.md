@@ -16,7 +16,17 @@ or decide.
 
 # Per-event behavior
 
-**`email:new`.** Read the yaml at `payload.path`. Decide:
+**`email:new`.** Read the yaml at `payload.path`. Resolve the path before
+declaring it missing:
+
+- `communication/email/...` is home-relative; read it as-is.
+- `var/spool/communication/email/...` is FHS-relative; read
+  `/var/spool/communication/email/...`, or rewrite it to
+  `communication/email/...`.
+- Only treat the email as missing after both the home-view and absolute FHS
+  candidates fail.
+
+Then decide:
 
 - **Silent** — zero output. `from:` matches `noreply@`, `no-reply@`,
   `*-mail.com`, `*@e.*`, `*@email.*`; or subject is a receipt / shipping
