@@ -30,6 +30,24 @@ yaml.SafeDumper.add_multi_representer(str, _str_subclass_repr)
 
 _RE_PREFIX = re.compile(r"^\s*(re|fw|fwd|aw)\s*[:\-]\s*", re.IGNORECASE)
 _RE_NONALNUM = re.compile(r"[^a-z0-9]+")
+_EMAIL_SPOOL_PREFIX = "var/spool/communication/email"
+
+
+def home_view_path(rel_path: str) -> str:
+    """Return the PAI-home spelling for an email spool path.
+
+    Drivers write canonical files under `var/spool/communication/email`, but
+    event consumers run with CWD at their stitched home. A relative
+    `var/spool/...` path is therefore misleading; `communication/email/...`
+    is the readable home view documented in the email skill.
+    """
+    rel = rel_path.strip("/")
+    if rel == _EMAIL_SPOOL_PREFIX:
+        return "communication/email"
+    prefix = _EMAIL_SPOOL_PREFIX + "/"
+    if rel.startswith(prefix):
+        return "communication/email/" + rel[len(prefix):]
+    return rel_path
 
 
 def _strip_subject_prefixes(subject: str) -> str:

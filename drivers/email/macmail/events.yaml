@@ -27,7 +27,7 @@ events:
       subject: string
       from: string
       direction: string       # "inbound" | "outbound"
-      path: string            # relative path to the canonical yaml
+      path: string            # home-view path to the canonical yaml
 
   - kind: email:backlog
     description: Kernel just booted and found mail that landed while it
@@ -49,5 +49,5 @@ events:
     raw_kind: draft_failed
     payload:
       account: string
-      path: string
+      path: string            # home-view path to the draft yaml
       reason: string

@@ -36,6 +36,7 @@ from watchdog.observers import Observer
 from boot import paths
 from boot import processes as P
 
+from .. import shared
 from . import accounts as A
 
 
@@ -187,11 +188,12 @@ _accounts_cfg: Optional["A.AccountsConfig"] = None
 # ---------- driver core ----------------------------------------------------
 
 def _emit_failed(account: str, path: Path, reason: str) -> None:
+    rel_path = str(path.relative_to(paths.PAI_ROOT)) if path.is_absolute() else str(path)
     P.emit_event({
         "source": "macmail-out",
         "kind": "draft_failed",
         "account": account,
-        "path": str(path.relative_to(paths.PAI_ROOT)) if path.is_absolute() else str(path),
+        "path": shared.home_view_path(rel_path),
         "reason": reason,
     })
 

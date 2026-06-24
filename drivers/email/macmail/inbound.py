@@ -373,7 +373,7 @@ def ingest_row(row, cfg: A.AccountsConfig) -> Optional[dict]:
         "subject": msg_dict["subject"],
         "from": msg_dict["from"],
         "direction": direction,
-        "path": str(msg_path.relative_to(paths.PAI_ROOT)),
+        "path": shared.home_view_path(str(msg_path.relative_to(paths.PAI_ROOT))),
         "_created": created,
     }
 

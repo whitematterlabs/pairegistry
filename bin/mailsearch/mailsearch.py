@@ -36,24 +36,13 @@ from typing import Any, Optional
 
 import yaml
 
+from drivers.email import shared
 from drivers.email.macmail import accounts as A
 from drivers.email.macmail import inbound as IN
 
 
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 200
-
-
-def _home_view(rel_path: str) -> str:
-    """Rewrite a PAI_ROOT-relative spool path into the home-view path a PAI
-    actually uses. `ingest_row` returns `var/spool/communication/email/...`
-    (FHS), but every email-capable PAI sees that tree through its home link
-    `communication/email -> var/spool/communication/email`, which the email
-    SKILL teaches as `~/communication/email/<account>/...`. Stripping the
-    `var/spool/` prefix yields exactly that home-relative path. Paths that
-    don't start with the prefix are returned unchanged."""
-    prefix = "var/spool/"
-    return rel_path[len(prefix):] if rel_path.startswith(prefix) else rel_path
 
 
 def _split_terms(value: Optional[str]) -> list[str]:
@@ -263,7 +252,7 @@ def run_search(args: argparse.Namespace) -> int:
             continue
         ts = IN._mac_date_to_dt(int(row["date_received"] or 0))
         results.append({
-            "path": _home_view(result["path"]),
+            "path": shared.home_view_path(result["path"]),
             "date": ts.isoformat(timespec="seconds"),
             "account": result["account"],
             "from": result["from"],
