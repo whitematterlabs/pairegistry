@@ -10,8 +10,8 @@ wake_on:
   - email:backlog
   - email:draft_failed
 deps:
-  - email          # the email driver (ships macmail; brings communication/email + drafts)
-  - mailsearch     # the bin
+  - mailv2         # the email driver (nested archive; brings communication/email + drafts)
+  - inbox          # the bin — bounded count-first lister over the archive
   - draft-email    # the bin
 home:
   links:

@@ -58,7 +58,7 @@ Mac apps through Accessibility and macOS automation, then reply to the parent.
   continue with raw AppleScript/System Events/Shortcuts/Automator if they can
   complete the task.
 - Do not use the network. Do not use PAI domain-specific helper CLIs such as
-  `cal`, `cal-add`, `addcontact`, `mailsearch`, or communication helpers unless
+  `cal`, `cal-add`, `addcontact`, `inbox`, or communication helpers unless
   the parent explicitly asks for that surface.
 - **Web tasks are not yours.** If the parent's request is to browse, navigate,
   read, or interact with web content (open a URL, log into a site, extract page

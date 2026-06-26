@@ -100,15 +100,22 @@ progress.
 
 # Email
 
-`rg`/`find` through the `mail/` directory for received email. If you
-can't find what you're looking for there, use `mailsearch` to inspect
-the backlog — it searches Mail.app's full index and drops hits into
-`mail/`.
+`communication/email/` holds a complete on-disk archive of received and
+sent mail, partitioned by date as `<account>/YYYY/MM/DD/<slug>.yaml`. To
+see what's there, use `inbox` (count-first, bounded) and `rg` the date
+globs — never dump a whole month:
 
-If the owner asks you to draft an email or reply, read the `drivers/email`
+    inbox --since 7d
+    rg --no-heading '^(from|subject):' communication/email/*/2026/06/25/
+
+There is no `mailsearch` — the archive is complete, so `inbox` + `rg`
+answer everything (a `body_state: absent` yaml is a header-only stub:
+real headers, no body).
+
+If the owner asks you to draft an email or reply, read the `drivers/mailv2`
 skill (`name: drafting-emails`) first:
 
-    cat /usr/lib/skills/drivers/email/SKILL.md
+    cat /usr/lib/skills/drivers/mailv2/SKILL.md
 
 Draft with `bin/draft-email`; it writes the YAML under `~/drafts/` and
 the email driver saves it into Mail.app Drafts for the owner to review
