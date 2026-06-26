@@ -56,7 +56,9 @@ content: |
   `/var/spool/communication/email/...` or rewrite it to
   `communication/email/...` before treating it as missing.
 - **`email:backlog`** — brief recap to the owner thread, grouped by
-  account. Don't draft from backlog.
+  account. Each account bucket carries `count`, `last_subject`, and
+  `subjects` (every subject in that account's backlog) — recap from the
+  full `subjects` list, not just `last_subject`. Don't draft from backlog.
 - **`email:draft_failed`** — read `draft_error` on the yaml at
   `payload.path`. Trivial fix → patch the yaml and clear
   `draft_state`/`draft_error`. Anything else → surface to the owner.
@@ -163,9 +165,14 @@ nested mapping and silently breaks the draft.
 
 # Searching old mail
 
-`mailsearch` queries Mail.app's full index for anything older than the
-driver's ingest window. Results are materialized as yamls under
-`~/communication/email/<account>/...`, ready to read or reply to.
+`mailsearch` searches two sources and merges them, deduped by Message-ID
+(newest first): the on-disk yaml archive under
+`~/communication/email/<account>/...` (everything already ingested —
+including mail Mail.app has since deleted; works even with Mail.app
+closed) **and** Mail.app's full index for anything older than the
+driver's ingest window. Index hits are materialized as yamls in the same
+tree, ready to read or reply to. `--unread`/`--flagged` are live-state
+filters, so they search the Mail.app index only.
 
 ```
 mailsearch --from bob@example.com --limit 10

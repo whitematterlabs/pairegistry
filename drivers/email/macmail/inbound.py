@@ -374,6 +374,9 @@ def ingest_row(row, cfg: A.AccountsConfig) -> Optional[dict]:
         "from": msg_dict["from"],
         "direction": direction,
         "path": shared.home_view_path(str(msg_path.relative_to(paths.PAI_ROOT))),
+        # Underscore-prefixed → stripped from emitted event payloads; mailsearch
+        # uses it to dedupe sqlite hits against on-disk archive hits.
+        "_message_id": msg_dict["message_id"],
         "_created": created,
     }
 
@@ -418,14 +421,25 @@ def _is_stale(ts: datetime) -> bool:
     return ts < (_kernel_started_at - STALE_GRACE)
 
 
+def _new_bucket(account: str) -> dict:
+    """A fresh per-account backlog bucket. `subjects` accumulates EVERY
+    subject in the backlog (not just the most recent) so the coalesced
+    nudge can recap the whole batch; `last_subject` is kept for back-compat
+    and is just `subjects[-1]`."""
+    return {"account": account, "count": 0, "last_subject": "", "subjects": []}
+
+
+def _fold_into_bucket(bucket: dict, subject: str) -> None:
+    bucket["count"] += 1
+    bucket["last_subject"] = subject
+    bucket.setdefault("subjects", []).append(subject)
+
+
 def _bucket_stale(result: dict, ts: datetime) -> None:
     global _stale_earliest, _stale_last_add
     acc = result["account"]
-    bucket = _stale_buffer.setdefault(
-        acc, {"account": acc, "count": 0, "last_subject": ""}
-    )
-    bucket["count"] += 1
-    bucket["last_subject"] = result["subject"]
+    bucket = _stale_buffer.setdefault(acc, _new_bucket(acc))
+    _fold_into_bucket(bucket, result["subject"])
     if _stale_earliest is None or ts < _stale_earliest:
         _stale_earliest = ts
     _stale_last_add = time.monotonic()
@@ -619,9 +633,8 @@ def _drain_catchup(last_rowid: int, cfg: A.AccountsConfig, last_announced: int) 
         if rowid <= last_announced:
             return  # already announced in a prior boot
         acc = result["account"]
-        bucket = summaries.setdefault(acc, {"account": acc, "count": 0, "last_subject": ""})
-        bucket["count"] += 1
-        bucket["last_subject"] = result["subject"]
+        bucket = summaries.setdefault(acc, _new_bucket(acc))
+        _fold_into_bucket(bucket, result["subject"])
         ts = _mac_date_to_dt(int(row["date_received"] or 0))
         if earliest is None or ts < earliest:
             earliest = ts

@@ -39,7 +39,8 @@ events:
       accounts:
         - account: string
           count: int
-          last_subject: string
+          last_subject: string        # == subjects[-1]; kept for back-compat
+          subjects: [string]          # EVERY subject in this account's backlog
       total: int
 
   - kind: email:draft_failed
