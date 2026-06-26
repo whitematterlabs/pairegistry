@@ -1,0 +1,60 @@
+# Event spec for the mailv2 driver (parallel fork of macmail).
+#
+# `kind` is the routing key — match against `wake_on:` in etc/config.yaml.
+# `raw_kind` is what `_handle_event_file` switches on in src/boot/main.py.
+#
+# mailv2 deliberately REUSES the `email:*` kinds / `new_email` etc. raw_kinds
+# so the kernel's hardcoded handler routes them with no change. Only one of
+# `macmail` / `mailv2` may be active at a time.
+
+driver: mailv2
+description: Inbound and outbound email via the macOS Mail.app — complete on-disk archive.
+
+processes:
+  - slug: mailv2-in
+    module: drivers.mailv2.macmail.inbound
+    entrypoint: run
+  - slug: mailv2-out
+    module: drivers.mailv2.macmail.outbound
+    entrypoint: run
+
+events:
+  - kind: email:new
+    description: A new email landed in INBOX, or an outbound message
+      appeared in the Sent folder (the owner sent from Mail.app, or Mail.app
+      flushed a draft PAI saved earlier).
+    emitted_by: usr/lib/drivers/mailv2/macmail/inbound.py
+    raw_kind: new_email
+    payload:
+      account: string         # email address that owns the account
+      thread_slug: string
+      subject: string
+      from: string
+      direction: string       # "inbound" | "outbound"
+      path: string            # home-view path to the canonical yaml (`communication/email/...`)
+
+  - kind: email:backlog
+    description: Kernel just booted and found mail that landed while it
+      was offline. Coalesced into a single nudge instead of N. Each account
+      bucket carries a capped sample_subjects; rg the date dirs for the rest.
+    emitted_by: usr/lib/drivers/mailv2/macmail/inbound.py
+    raw_kind: email_backlog
+    payload:
+      since: string           # ISO datetime of earliest backlog message
+      accounts:
+        - account: string
+          count: int
+          last_subject: string
+          sample_subjects: [string]   # capped (<=5) recent subjects
+          since: string               # ISO datetime of this account's earliest
+      total: int
+
+  - kind: email:draft_failed
+    description: PAI wrote a draft yaml but Mail.app couldn't materialize
+      it into the Drafts folder (bad recipient, AppleScript error, etc.).
+    emitted_by: usr/lib/drivers/mailv2/macmail/outbound.py
+    raw_kind: draft_failed
+    payload:
+      account: string
+      path: string            # home-view path to the draft yaml
+      reason: string
