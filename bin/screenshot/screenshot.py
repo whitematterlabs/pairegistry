@@ -13,6 +13,10 @@ Output path resolution:
   -o is a dir       → <dir>/<slug>-<ts>.png
   -o is a file path → used as-is
 
+On success prints a markdown image ref `![screenshot](<abs path>)`. The kernel's
+expand_image_refs() turns that into a base64 Anthropic image block, so the model
+sees the screenshot in the same turn. Save inside PAI_ROOT for it to expand.
+
 Exit codes:
   0  ok
   1  no window matches the title
@@ -80,7 +84,11 @@ def capture(window_id: int | None, out_path: Path) -> int:
     if not out_path.exists():
         sys.stderr.write(f"screencapture exited 0 but {out_path} does not exist\n")
         return 3
-    print(out_path)
+    # Emit a markdown image ref so the kernel's expand_image_refs() base64-encodes
+    # the PNG and sends it to the model as a real image block in the same turn.
+    # The path must resolve inside PAI_ROOT to expand; otherwise it passes through
+    # as literal text (which still tells the caller where the file landed).
+    print(f"![screenshot]({out_path.resolve()})")
     return 0
 
 
