@@ -1,0 +1,5 @@
+name: setup-watcher
+kind: skill
+topic: operating
+version: 0.1.0
+description: "Wire up a website watcher — a cheap cron-fired poller that fetches a URL, diffs against last-seen, and wakes the owner only when a condition fires (new listing, price drop, page change). Root-only."
