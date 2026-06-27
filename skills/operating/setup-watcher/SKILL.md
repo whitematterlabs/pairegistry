@@ -16,6 +16,22 @@ You wire each watcher by hand, once, tailored to the site. This skill is
 the pattern, not an engine. There is nothing to install — every piece
 already exists (`paicron`, the event bus, `/var/lib`).
 
+You usually arrive here from `grow-capability`: a child PAI escalated
+`request-capability: watch …` on the owner's behalf. You (root) do the
+privileged setup, but the watcher **serves the requester, not you**.
+
+## Who the watcher wakes
+
+Capture the **requester pid** — the sender of the `request-capability:`
+message. The watcher wakes *the requester* when it fires (they own the owner
+relationship and relay the news); only the self-heal `broken` event wakes
+you (root, pid 1), because fixing a stale recipe is your job, not theirs.
+When you finish, you `send-message` the requester that the watcher is live —
+you never message the owner.
+
+If the owner asked *you* directly, you are the requester: wake pid 1 and skip
+the report-back (just tell the owner yourself).
+
 ## How it works
 
 ```
@@ -77,6 +93,8 @@ must never see a half-written file).
 # poll.sh — <slug>: <one line of what it watches>
 set -eu
 SLUG=sf-craigslist-bikes
+REQUESTER=2          # pid that asked (the escalating PAI). HITs wake them;
+                    # 'broken' events below stay addressed to root (1).
 STATE="$PAI_ROOT/var/lib/$SLUG"
 EVENTS="$PAI_ROOT/run/pai/events"
 mkdir -p "$STATE"
@@ -108,9 +126,9 @@ printf '%s' "$new" > "$SEEN"          # always update baseline
 # --- predicate: new-item ---------------------------------------------
 [ "$new" = "$old" ] && exit 0          # nothing new
 
-# --- HIT → wake root -------------------------------------------------
+# --- HIT → wake the requester ---------------------------------------
 ts=$(date +%Y%m%dT%H%M%S%N)
-printf 'source: %s\nkind: new_listing\ntarget_pid: 1\nurl: %s\n' "$SLUG" "$new" \
+printf 'source: %s\nkind: new_listing\ntarget_pid: %s\nurl: %s\n' "$SLUG" "$REQUESTER" "$new" \
   > "$EVENTS/.$ts.tmp"
 mv "$EVENTS/.$ts.tmp" "$EVENTS/$ts-$SLUG.yaml"
 ```
@@ -145,19 +163,27 @@ Choose the cadence by how fast the owner needs to know vs. politeness to
 the site: listings `*/15`, a fast-moving price `*/2`–`*/5`, a restock check
 `*/10`. Don't poll faster than the signal actually changes.
 
-### 4. Subscribe + verify
+### 4. Verify, then report back to the requester
 
-- **You receive it automatically:** `target_pid: 1` delivers straight to
-  root, so no `wake_on` edit is needed. (If you want a *non-root* PAI to
-  handle it instead, drop `target_pid` and add a `wake_on: ["<slug>:*"]`
-  glob to that PAI via `paiadd`/config.)
+- **The requester is woken automatically:** `target_pid: <requester>` in the
+  HIT drop delivers straight to them — no `wake_on` edit needed. pid 2 is
+  permanent; an added PAI's pid is persisted in its spec and stable too, so
+  baking it into `poll.sh` is safe for that PAI's lifetime. (For a durable,
+  pid-independent subscription — e.g. one PAI funneling many watchers — drop
+  `target_pid` and add `wake_on: ["<slug>:*"]` to that PAI via `paiadd`/config
+  instead.)
 - **Dry-run once:** `sh $PAI_ROOT/var/lib/<slug>/poll.sh` — confirm it exits
   0 and wrote `var/lib/<slug>/last-seen`. Run it a second time to confirm it
   stays silent (no event file appears in `run/pai/events/`).
 - **Confirm the job armed:** `sbin/paicron status <slug>` shows `scheduled`.
-- **Tell the owner** what's now watched, the cadence, and that they'll hear
-  from you only on a hit: *"Watching SF Craigslist bikes every 15 min —
-  I'll ping you when a new listing appears."*
+- **Report back to the requester** — never the owner; relaying to the owner is
+  the requester's job (per `grow-capability`):
+  ```sh
+  bin/send-message --to <requester pid> --content \
+    'capability-ready: <slug> — watching every 15m; on a hit you get a <slug>:new_listing nudge with the url'
+  ```
+  If *you* are the requester (owner asked root directly), tell the owner
+  yourself instead.
 
 ## When the source CAN push — skip polling
 

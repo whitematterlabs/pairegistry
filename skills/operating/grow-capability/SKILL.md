@@ -36,10 +36,11 @@ Installable bundle kinds (from `paiman.py`): **bin, sbin, driver, skill, prompt,
 Answer this first. A reactive capability ("notify me when X changes", "remind me before Y", "wake on Z") needs a driver emitting events. An imperative capability ("run X", "fetch Y", "post Z") doesn't.
 
 - **Reactive + driver already exists** (check `ls /usr/lib/drivers/` and its `events.yaml`) → wire `wake_on:` to its events. No new bundle needed, or a thin skill.
-- **Reactive + no driver for the surface** → the gap requires a driver bundle/source change. Stop. Don't install a bin that polls. A bin that polls is the wrong scope, not a faster path.
+- **Reactive + the surface is a web page or HTTP/RSS feed with no driver** ("watch this listing / stock / page, tell me when it changes") → follow skill `setup-watcher`. That is the sanctioned cheap-poll path: a cron-fired subprocess that diffs the page and wakes the requester *only* when a condition fires. This is **not** "a bin that polls" below — it adds no hot loop and never wakes anyone on a quiet tick.
+- **Reactive + a genuine new primitive surface** (app ABI, system framework, push-capable channel) and no driver → the gap requires a driver bundle/source change. Stop. Don't install a bin that polls a primitive — that's the wrong scope, not a faster path.
 - **Imperative** → continue to Gate 2.
 
-An existing **bin** for the surface does not count — bins don't emit events. Only a driver does.
+An existing **bin** for the surface does not count — bins don't emit events. Only a driver, or the `setup-watcher` cheap-poll path for web pages/feeds, does.
 
 ### Gate 2 — bin or something heavier?
 
