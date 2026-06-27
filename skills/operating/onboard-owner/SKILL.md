@@ -103,13 +103,21 @@ metadata** (the owner's correction is the safety net). Suggested sections:
 
 - **Identity** — name, timezone, how they communicate (terse/chatty, channels).
 - **Work** — role, employer/projects, the cadence their calendar shows.
-- **Key people / social graph** — who matters and the relationship. Facts about
-  *other people around the owner* are more sensitive than facts about the owner;
-  state them more carefully and keep them minimal.
+- **Key people / social graph** — who matters, the relationship, and the handle
+  to reach them. Facts about *other people around the owner* are more sensitive
+  than facts about the owner; state them more carefully and keep them minimal.
 - **Recurring patterns** — standing meetings, habits, regular correspondents.
 - **Preferences** — anything the sources make explicit (tools, likes, asks).
 
-Keep it tight and skimmable — this gets injected into every prompt wholesale.
+**Write for durability, not a diary.** This file is injected into every PAI's
+prompt wholesale, so every line is permanent context-window overhead. Keep only
+facts that stay true and help a future PAI route, address, or decide — identity,
+timezone, comm style, the people graph with handles, stable preferences. Leave
+out episodic, time-boxed detail (specific trip dates, a one-off accident, a
+breakup timeline, who was sick last week, per-person trivia) — that belongs in
+`memorize`, not the profile. Soft cap: **~750 tokens / ~40 lines.** Terse
+bullets, no narrative. If you find yourself writing a "current situation" or
+recent-events section, stop — that's the diary, drop it.
 
 ## 9. If the sources are nearly empty
 
