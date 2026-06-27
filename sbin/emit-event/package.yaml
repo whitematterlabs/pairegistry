@@ -1,0 +1,5 @@
+name: emit-event
+kind: sbin
+version: 0.1.0
+description: Safely emit a kernel-bus event from a shell subprocess (no $PAI_PID needed)
+entrypoint: emit_event.py

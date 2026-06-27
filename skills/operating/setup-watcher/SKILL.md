@@ -50,7 +50,8 @@ when its condition is met.
 
 The poll subprocess inherits the kernel's environment: `$PAI_ROOT` is set,
 but `$PAI_PID` is **not** — so `poll.sh` cannot use `send-message`. It
-wakes you by writing an event file directly (shown below).
+wakes you by emitting an event with `"$PAI_ROOT/sbin/emit-event"`, which
+needs no `$PAI_PID` (shown below).
 
 ## Recipe
 
@@ -82,11 +83,16 @@ extracts, compares against `last-seen`, and on a hit drops an event. It
 **skips the first run** (establishes a baseline silently) so you aren't
 woken just for turning it on.
 
-The event drop is the whole wake mechanism — an atomic write into the bus
-directory. `source:` must be your slug (not `kernel`), `kind:` a bare word;
-`target_pid: 1` addresses root directly. Atomicity = write a dotfile in the
-same dir, then `mv` (same-filesystem rename is atomic; the kernel's watcher
-must never see a half-written file).
+The event drop is the whole wake mechanism. Emit it with
+`"$PAI_ROOT/sbin/emit-event"` — it serializes the payload safely (scraped
+values with `:`, quotes, or newlines are a non-issue) and writes it
+atomically into the bus. **Never hand-build event YAML** — that is the bug
+class this tool exists to kill. `--source` is your slug (not `kernel`),
+`--kind` a bare word; `--target 1` addresses root directly, and `--set
+key=value` carries arbitrary scraped fields. Use the explicit
+`"$PAI_ROOT/sbin/emit-event"` path (not bare `emit-event`) — the cron poll
+subprocess's PATH is not guaranteed to include `sbin`, same as the
+`sbin/paicron` call below.
 
 ```sh
 #!/bin/sh
@@ -96,25 +102,18 @@ SLUG=sf-craigslist-bikes
 REQUESTER=2          # pid that asked (the escalating PAI). HITs wake them;
                     # 'broken' events below stay addressed to root (1).
 STATE="$PAI_ROOT/var/lib/$SLUG"
-EVENTS="$PAI_ROOT/run/pai/events"
 mkdir -p "$STATE"
 SEEN="$STATE/last-seen"
 
 URL='https://sfbay.craigslist.org/search/bik?format=rss'
 
 # --- extract: the newest item link from the RSS feed -----------------
-new=$(curl -fsSL "$URL" | grep -o '<link>[^<]*</link>' | sed -n '2p') || {
-  # extraction failed → structure changed. Wake yourself to re-author.
-  emit() { :; }   # fall through to the broken-event drop below
-  new=''
-}
+new=$(curl -fsSL "$URL" | grep -o '<link>[^<]*</link>' | sed -n '2p') || new=''
 
 # --- broken: feed/selector returned nothing --------------------------
 if [ -z "$new" ]; then
-  ts=$(date +%Y%m%dT%H%M%S%N)
-  printf 'source: %s\nkind: broken\ntarget_pid: 1\nnote: extraction returned empty; re-author poll.sh\n' "$SLUG" \
-    > "$EVENTS/.$ts.tmp"
-  mv "$EVENTS/.$ts.tmp" "$EVENTS/$ts-$SLUG.yaml"
+  "$PAI_ROOT/sbin/emit-event" --source "$SLUG" --kind broken --target 1 \
+    --note "extraction returned empty; re-author poll.sh"
   exit 0
 fi
 
@@ -127,19 +126,10 @@ printf '%s' "$new" > "$SEEN"          # always update baseline
 [ "$new" = "$old" ] && exit 0          # nothing new
 
 # --- HIT → wake the requester ---------------------------------------
-# Any scraped/untrusted value (a link, a title, a price string) MUST go
-# into the event as a YAML literal block scalar — `key: |` then every line
-# indented two spaces — never `key: %s` inline. A scraped string routinely
-# contains `:`, quotes, or newlines; interpolated inline it produces invalid
-# YAML, and a malformed event used to wedge the bus. The kernel now
-# quarantines bad events instead of crashing, but don't emit them: keep
-# fixed keys (source/kind/target_pid) inline, untrusted values block-scalared.
-ts=$(date +%Y%m%dT%H%M%S%N)
-{
-  printf 'source: %s\nkind: new_listing\ntarget_pid: %s\nurl: |\n' "$SLUG" "$REQUESTER"
-  printf '%s\n' "$new" | sed 's/^/  /'
-} > "$EVENTS/.$ts.tmp"
-mv "$EVENTS/.$ts.tmp" "$EVENTS/$ts-$SLUG.yaml"
+# emit-event serializes safely — the scraped url can contain `:`, quotes,
+# or newlines and it still produces valid YAML, atomically written.
+"$PAI_ROOT/sbin/emit-event" --source "$SLUG" --kind new_listing \
+  --target "$REQUESTER" --set url="$new"
 ```
 
 `chmod +x` it. For a *threshold* predicate, swap the predicate block, e.g.
@@ -219,7 +209,9 @@ no push path — which is most consumer sites (Craigslist, Yahoo Finance, …).
 - Don't poll faster than the signal changes, or hammer a site — be a polite
   client; set a real `User-Agent` if a site blocks default curl.
 - Don't scrape HTML when a feed/JSON endpoint exists.
-- Don't write event files anywhere but `run/pai/events/`, and always via the
-  dotfile-then-`mv` rename — a partial file read by the kernel is a bug.
+- Don't hand-build event YAML with `printf`/`mv` — always emit via
+  `"$PAI_ROOT/sbin/emit-event"`, which serializes safely and writes
+  atomically. Interpolating a scraped value inline is the bug class this
+  tool retired.
 - Don't put state in `/tmp` or `/proc/<slug>/` — both are wiped. Persistent
   watcher state lives in `/var/lib/<slug>/`.
