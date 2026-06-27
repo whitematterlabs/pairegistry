@@ -127,9 +127,18 @@ printf '%s' "$new" > "$SEEN"          # always update baseline
 [ "$new" = "$old" ] && exit 0          # nothing new
 
 # --- HIT → wake the requester ---------------------------------------
+# Any scraped/untrusted value (a link, a title, a price string) MUST go
+# into the event as a YAML literal block scalar — `key: |` then every line
+# indented two spaces — never `key: %s` inline. A scraped string routinely
+# contains `:`, quotes, or newlines; interpolated inline it produces invalid
+# YAML, and a malformed event used to wedge the bus. The kernel now
+# quarantines bad events instead of crashing, but don't emit them: keep
+# fixed keys (source/kind/target_pid) inline, untrusted values block-scalared.
 ts=$(date +%Y%m%dT%H%M%S%N)
-printf 'source: %s\nkind: new_listing\ntarget_pid: %s\nurl: %s\n' "$SLUG" "$REQUESTER" "$new" \
-  > "$EVENTS/.$ts.tmp"
+{
+  printf 'source: %s\nkind: new_listing\ntarget_pid: %s\nurl: |\n' "$SLUG" "$REQUESTER"
+  printf '%s\n' "$new" | sed 's/^/  /'
+} > "$EVENTS/.$ts.tmp"
 mv "$EVENTS/.$ts.tmp" "$EVENTS/$ts-$SLUG.yaml"
 ```
 
