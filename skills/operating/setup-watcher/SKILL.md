@@ -171,9 +171,33 @@ YAML
 sbin/paicron ensure --slug "$SLUG" --spec "$PAI_ROOT/var/lib/$SLUG/spec.yaml"
 ```
 
-Choose the cadence by how fast the owner needs to know vs. politeness to
-the site: listings `*/15`, a fast-moving price `*/2`–`*/5`, a restock check
-`*/10`. Don't poll faster than the signal actually changes.
+**Cadence is set by the urgency the owner asked for — not by the kind of
+thing being watched.** Read their words first and match them:
+
+- *"ASAP" / "the moment it happens" / "right away" / "immediately"* → poll at
+  **seconds** granularity. `schedule:` accepts a **6-field** cron whose **last
+  field is seconds**: `"* * * * * */30"` = every 30s, `"* * * * * */10"` =
+  every 10s, `"* * * * * *"` = every second. (5 fields floor at one minute.)
+- *"every minute" / "quickly" / "as soon as you can"* → `"* * * * *"` (minutely).
+- *"keep an eye on" / "let me know when" / no urgency stated* → relaxed:
+  `"*/15 * * * *"` for listings, `"*/10 * * * *"` for a restock, etc.
+
+`*/15`-for-listings is the **fallback when they didn't specify**, never an
+override of an explicit "ASAP." If they asked for ASAP, give them seconds.
+
+Then sanity-check that floor against two ceilings — without quietly slowing
+past what they asked for:
+- **Politeness / rate-limits.** Hammering invites a block, which makes the
+  watcher *slower*, not faster. Set a real `User-Agent`; if the source is
+  aggressive about blocking, that caps how fast you can safely go — tell the
+  owner the real floor rather than silently picking `*/15`.
+- **Source refresh lag.** Polling faster than the source itself updates
+  (e.g. a feed that recomputes once a minute) just burns requests against the
+  same staleness. Match the source's real update rate when it's the binding
+  constraint.
+
+If a ceiling forces you slower than the owner asked, **say so when you report
+back** — don't silently downgrade "ASAP" to `*/15`.
 
 ### 4. Verify, then report back to the requester
 
