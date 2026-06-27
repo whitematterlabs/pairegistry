@@ -1,7 +1,7 @@
 ---
 name: setup-watcher
 visible_to: [root]
-description: Wire up a website watcher — a cheap cron-fired poller that fetches a URL, diffs against last-seen, and wakes the owner only when a condition fires (new listing, price drop, page change). Use when the owner asks to "watch", "notify me when", "let me know if", or "keep an eye on" some web page or feed.
+description: Wire up a website watcher — a cheap cron-fired poller that fetches a URL, diffs against last-seen, and wakes the owner only when an EXTERNAL web change fires (new listing, price drop, back-in-stock, page edit). Use ONLY for watching a web page or feed for an unpredictable change that has no push and no known time. NOT for time- or calendar-based reminders ("remind me about X", "ping me at 3pm", "don't let me miss the founders circle") — those have a known fire time and are a plain paicron reminder (a `schedule:`-only cron, no `run:`/poll), not a watcher.
 ---
 
 # Setting up a watcher
@@ -15,6 +15,27 @@ you.** You wake only when the condition actually fires.
 You wire each watcher by hand, once, tailored to the site. This skill is
 the pattern, not an engine. There is nothing to install — every piece
 already exists (`paicron`, the event bus, `/var/lib`).
+
+## First: is this a watch, or just a reminder?
+
+A watcher exists because the fire time is **unknown** — you don't know *if* or
+*when* a new listing posts, so a subprocess has to keep *checking*. If the time
+is already known, **stop — you don't need a poller.** A known-time nudge is a
+plain **reminder**: a `schedule:`-only cron (no `run:`), which the kernel fires
+at that time to wake the owner. No fetch, no diff, no `poll.sh`.
+
+- *"remind me about the founders circle" / "don't let me miss X" / "ping me at
+  3pm Friday"* → the time is on the calendar or stated outright. Look it up
+  (calendar event → its start time), then arm a one-shot reminder — **not** a
+  watcher:
+  ```sh
+  bin/paicron start --slug founders-circle-reminder \
+    --schedule '2026-07-03T16:45:00'      # ISO datetime = fires once; cron expr = recurring
+  ```
+  A `schedule:` with no `run:` nudges at that time (it does *not* poll). For
+  "30 min before", subtract from the event start when you set the datetime.
+- Only continue with the rest of this skill when there is **no known time** and
+  **no push path** — a web page or feed you must poll to notice a change.
 
 You usually arrive here from `grow-capability`: a child PAI escalated
 `request-capability: watch …` on the owner's behalf. You (root) do the
