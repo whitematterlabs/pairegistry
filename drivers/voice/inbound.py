@@ -32,7 +32,7 @@ from .wake import SAMPLE_RATE, WAKE_BLOCK, VAD_FRAME, WakeDetector, SilenceDetec
 PAI_ROOT = Path(os.environ.get("PAI_ROOT", str(Path.home() / ".pai")))
 CAPTURES_DIR = PAI_ROOT / "sys" / "drivers" / "voice" / "captures"
 
-WAKE_MODEL = "hey_jarvis"
+WAKE_MODEL = "alexa"
 WAKE_THRESHOLD = 0.7        # default 0.5 false-fires on ambient noise
 WAKE_COOLDOWN_S = 1.5       # ignore new wake hits for this long after one fires
 MIN_UTTERANCE_S = 0.5       # drop captures shorter than this (likely false trigger)
@@ -140,6 +140,15 @@ async def _audio_loop() -> None:
                 captured = [frame]
                 capture_started_at = now
                 capture_iso = datetime.now().isoformat(timespec="seconds")
+                # Fire the instant the wake word lands, before any capture/STT —
+                # the web surface lights up "Speaking: …" off this. Carries no
+                # text (none transcribed yet); `voice:utterance` follows later.
+                P.emit_event({
+                    "source": "voice",
+                    "kind": "listening",
+                    "wake_word": hit.model,
+                    "captured_at": capture_iso,
+                })
                 silence.reset()
                 continue
 

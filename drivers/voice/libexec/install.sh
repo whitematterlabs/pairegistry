@@ -42,6 +42,7 @@ brew_install() {
 }
 
 brew_install portaudio   # sounddevice runtime dep
+brew_install ffmpeg      # transcode browser webm/opus → 16kHz WAV for local PTT
 
 # ── Python deps into FHS venv ────────────────────────────────────────
 PY_DEPS=(openwakeword onnxruntime sounddevice webrtcvad "setuptools<81" numpy soundfile)

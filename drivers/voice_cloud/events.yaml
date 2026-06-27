@@ -1,0 +1,8 @@
+driver: voice_cloud
+description: >
+  Cloud voice provider (OpenAI STT + ElevenLabs TTS). Provider-only: there is no
+  always-on host listener, so this driver declares no processes and emits no
+  events. The web dispatcher imports `drivers.voice_cloud.provider` directly.
+
+# No `processes:` — nothing for the kernel to supervise.
+# No `events:` — this driver never emits.

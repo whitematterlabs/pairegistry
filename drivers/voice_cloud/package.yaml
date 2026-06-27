@@ -1,0 +1,14 @@
+name: voice_cloud
+kind: driver
+version: 0.1.0
+description: "Cloud voice provider: OpenAI STT + ElevenLabs TTS. Provider-only — no always-on host listener (cloud has no host mic)."
+# Engine-blind capabilities the web voice dispatcher resolves against (see
+# pai_web/voice.py). Cloud is the fallback when the local `voice` driver is
+# absent or its native deps don't import.
+provides: [stt, tts]
+voice_mode: cloud
+# install: ensure requests + python-dotenv are in the FHS venv. No native build,
+# no model download — just two pure-Python deps. Idempotent.
+hooks:
+  install:
+    - "bash usr/lib/drivers/voice_cloud/libexec/install.sh"

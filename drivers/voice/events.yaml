@@ -7,6 +7,14 @@ processes:
     entrypoint: run
 
 events:
+  - kind: voice:listening
+    description: Wake word fired; capture is about to start (pre-transcription).
+    emitted_by: drivers/voice/inbound.py
+    raw_kind: listening
+    payload:
+      wake_word: string
+      captured_at: string
+
   - kind: voice:utterance
     description: Wake word fired and an utterance was transcribed.
     emitted_by: drivers/voice/inbound.py
