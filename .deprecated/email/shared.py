@@ -1,17 +1,12 @@
-"""Shared on-disk helpers for the mailv2 email driver.
+"""Shared on-disk helpers for email drivers.
 
-mailv2 partitions messages into a nested `YYYY/MM/DD` tree so date-scoped
-`rg`/glob queries are trivial (`communication/email/*/2026/06/25/`). This
-is the deliberate divergence from the flat `email/shared.py` (which keeps
-`{YYYY-MM-DD}/` single-level dirs); the two trees are NOT interchangeable.
-
-Shape:
+Per `src/usr/share/doc/EMAILS.md`, every provider produces the same shape:
     home/communication/email/{account}/
-        {YYYY}/{MM}/{DD}/{subject-slug}.yaml         # canonical
-        {YYYY}/{MM}/{DD}/{subject-slug}.prev -> ...  # one-hop walkback
-        threads/{thread-slug}/...yaml -> ...         # chronological index
+        {YYYY-MM-DD}/{subject-slug}.yaml         # canonical
+        {YYYY-MM-DD}/{subject-slug}.prev -> ...  # one-hop walkback
+        threads/{thread-slug}/...yaml -> ...     # chronological index
 
-Pure functions, provider-agnostic.
+Pure functions, provider-agnostic. Outlook will reuse this module.
 """
 
 from __future__ import annotations
@@ -93,17 +88,13 @@ def _atomic_write(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
-def write_message_yaml(account_dir: Path, msg: dict, dedup: bool = True) -> tuple[Path, bool]:
-    """Write per-message yaml under {account_dir}/{YYYY}/{MM}/{DD}/{subject-slug}.yaml.
+def write_message_yaml(account_dir: Path, msg: dict) -> tuple[Path, bool]:
+    """Write per-message yaml under {account_dir}/{date}/{subject-slug}.yaml.
 
     Returns (path, created). `created=False` when an existing yaml with the
     same Message-ID was found — caller can use that to skip duplicate event
     emission when the cursor is parked behind a `.partial.emlx` row and a
     later, already-ingested row is being re-scanned.
-
-    `dedup=False` skips the by-Message-ID `find_message_by_id` scan. The
-    backfill passes this after a caller-side in-memory dedup so the bulk
-    rebuild stays O(n) instead of O(n²) (one full-tree scan per insert).
 
     Uses `received_at` for inbound, falls back to `sent_at` for outbound.
     Appends `-{HH-MM}` on same-day slug collision.
@@ -114,12 +105,12 @@ def write_message_yaml(account_dir: Path, msg: dict, dedup: bool = True) -> tupl
     dt = ts if isinstance(ts, datetime) else datetime.fromisoformat(ts)
 
     message_id = (msg.get("message_id") or "").strip()
-    if dedup and message_id:
+    if message_id:
         existing = find_message_by_id(account_dir, message_id)
         if existing is not None:
             return existing, False
 
-    date_dir = account_dir / f"{dt:%Y}" / f"{dt:%m}" / f"{dt:%d}"
+    date_dir = account_dir / dt.date().isoformat()
     slug = subject_slug(msg.get("subject", ""))
 
     path = date_dir / f"{slug}.yaml"
@@ -160,28 +151,25 @@ def link_prev(msg_path: Path, parent_msg_path: Optional[Path]) -> Optional[Path]
 
 
 def find_message_by_id(account_dir: Path, message_id: str) -> Optional[Path]:
-    """Linear scan of the nested {YYYY}/{MM}/{DD} tree for a yaml containing
-    this Message-ID. Walks newest-first (replies usually point to recent
-    parents)."""
+    """Linear scan of date dirs for a yaml containing this Message-ID."""
     if not message_id or not account_dir.exists():
         return None
     needle = f"message_id: {message_id}"
     needle_quoted = f"message_id: '{message_id}'"
     needle_dquoted = f'message_id: "{message_id}"'
-    # The glob path encodes YYYY/MM/DD, so reverse-sorting the matched paths
-    # orders them newest date first. The digit character classes exclude the
-    # `threads/` index and `meta.yaml` from the walk.
-    yamls = sorted(
-        account_dir.glob("[0-9][0-9][0-9][0-9]/[0-9][0-9]/[0-9][0-9]/*.yaml"),
+    # Iterate newest first — replies usually point to recent parents.
+    date_dirs = sorted(
+        (p for p in account_dir.iterdir() if p.is_dir() and re.fullmatch(r"\d{4}-\d{2}-\d{2}", p.name)),
         reverse=True,
     )
-    for yml in yamls:
-        try:
-            head = yml.read_text(errors="replace")
-        except OSError:
-            continue
-        if needle in head or needle_quoted in head or needle_dquoted in head:
-            return yml
+    for d in date_dirs:
+        for yml in d.glob("*.yaml"):
+            try:
+                head = yml.read_text(errors="replace")
+            except OSError:
+                continue
+            if needle in head or needle_quoted in head or needle_dquoted in head:
+                return yml
     return None
 
 

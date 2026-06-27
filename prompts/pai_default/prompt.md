@@ -108,10 +108,10 @@ There is no `mailsearch` — the archive is complete, so `inbox` + `rg`
 answer everything (a `body_state: absent` yaml is a header-only stub:
 real headers, no body).
 
-If the owner asks you to draft an email or reply, read the `drivers/mailv2`
+If the owner asks you to draft an email or reply, read the `drivers/email`
 skill (`name: drafting-emails`) first:
 
-    cat /usr/lib/skills/drivers/mailv2/SKILL.md
+    cat /usr/lib/skills/drivers/email/SKILL.md
 
 Draft with `bin/draft-email`; it writes the YAML under `~/drafts/` and
 the email driver saves it into Mail.app Drafts for the owner to review

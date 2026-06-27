@@ -190,7 +190,7 @@ _accounts_cfg: Optional["A.AccountsConfig"] = None
 def _emit_failed(account: str, path: Path, reason: str) -> None:
     rel_path = str(path.relative_to(paths.PAI_ROOT)) if path.is_absolute() else str(path)
     P.emit_event({
-        "source": "mailv2-out",
+        "source": "macmail-out",
         "kind": "draft_failed",
         "account": account,
         "path": shared.home_view_path(rel_path),
@@ -204,7 +204,7 @@ def _mark_failed(path: Path, draft: dict, account: str, reason: str) -> None:
     draft["drafted_at"] = datetime.now().isoformat(timespec="seconds")
     _atomic_dump(path, draft)
     _emit_failed(account, path, reason)
-    print(f"[mailv2-out] draft failed ({account or '?'}/{path.name}): {reason}", flush=True)
+    print(f"[macmail-out] draft failed ({account or '?'}/{path.name}): {reason}", flush=True)
 
 
 async def _process(path: Path) -> None:
@@ -220,7 +220,7 @@ async def _process(path: Path) -> None:
         # (we'd clobber the user's content), but log + emit so this never
         # silently no-ops again.
         reason = str(e)
-        print(f"[mailv2-out] draft unreadable ({path.name}): {reason}", flush=True)
+        print(f"[macmail-out] draft unreadable ({path.name}): {reason}", flush=True)
         _emit_failed("", path, reason)
         return
     if draft is None:
@@ -269,7 +269,7 @@ async def _process(path: Path) -> None:
                 draft["draft_error"] = reason
                 _atomic_dump(path, draft)
                 print(
-                    f"[mailv2-out] reply parent not found; retry {retries + 1}/"
+                    f"[macmail-out] reply parent not found; retry {retries + 1}/"
                     f"{len(REPLY_RETRY_DELAYS)} in {delay}s ({account}/{path.name})",
                     flush=True,
                 )
@@ -283,7 +283,7 @@ async def _process(path: Path) -> None:
     draft.pop("draft_retries", None)
     draft["drafted_at"] = datetime.now().isoformat(timespec="seconds")
     _atomic_dump(path, draft)
-    print(f"[mailv2-out] drafted to Mail.app: {account}/{path.name}", flush=True)
+    print(f"[macmail-out] drafted to Mail.app: {account}/{path.name}", flush=True)
 
 
 # ---------- retry scheduling ----------------------------------------------
@@ -345,9 +345,9 @@ async def run() -> None:
 
     _accounts_cfg = await A.refresh()
     if not _accounts_cfg.is_empty():
-        print(f"[mailv2-out] known Mail.app accounts: {_accounts_cfg.all_addresses()}", flush=True)
+        print(f"[macmail-out] known Mail.app accounts: {_accounts_cfg.all_addresses()}", flush=True)
     else:
-        print("[mailv2-out] no Mail.app accounts enumerated; from: validation disabled", flush=True)
+        print("[macmail-out] no Mail.app accounts enumerated; from: validation disabled", flush=True)
 
     async def _refresh_accounts() -> None:
         global _accounts_cfg
@@ -355,7 +355,7 @@ async def run() -> None:
             await asyncio.sleep(ACCOUNTS_REFRESH_INTERVAL)
             fresh = await A.refresh()
             if not fresh.is_empty() and fresh.accounts != _accounts_cfg.accounts:
-                print(f"[mailv2-out] account list changed: {fresh.all_addresses()}", flush=True)
+                print(f"[macmail-out] account list changed: {fresh.all_addresses()}", flush=True)
                 _accounts_cfg = fresh
 
     refresh_task = asyncio.create_task(_refresh_accounts())
@@ -363,7 +363,7 @@ async def run() -> None:
     observer = Observer()
     observer.schedule(_Handler(loop, queue), str(DRAFTS_DIR), recursive=False)
     observer.start()
-    print(f"[mailv2-out] watching {DRAFTS_DIR}", flush=True)
+    print(f"[macmail-out] watching {DRAFTS_DIR}", flush=True)
 
     # Boot scan: any drafts already sitting around get re-evaluated.
     # Idempotent — terminal-state drafts get skipped on the marker check.
@@ -390,4 +390,4 @@ async def run() -> None:
         observer.join(timeout=2)
         _loop = None
         _queue = None
-        print("[mailv2-out] stopped", flush=True)
+        print("[macmail-out] stopped", flush=True)

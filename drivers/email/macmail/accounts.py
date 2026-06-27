@@ -1,4 +1,4 @@
-"""macOS Mail.app account discovery — shared by macmail-in, macmail-out, and mailsearch.
+"""macOS Mail.app account discovery — shared by email-in and email-out.
 
 Mail.app's Envelope Index sqlite stores mailboxes by their *localized*
 display name (`Gelen Kutusu`, `Gönderilmiş Öğeler`, …) and tags inbound
@@ -6,10 +6,10 @@ mail with whatever `To:` header arrived (which on iCloud is often a
 Hide-My-Email relay alias rather than the canonical account address).
 
 To get the truth we ask Mail.app itself via AppleScript and persist the
-result. Both drivers and the mailsearch tool read this file instead of
+result. The inbound and outbound drivers read this file instead of
 guessing from header sniffing or English mailbox-name suffixes.
 
-Schema (`{HOME}/tmp/drivers/macmail/accounts.yaml`):
+Schema (`{HOME}/tmp/drivers/email/accounts.yaml`):
 
     accounts:
       0A836680-...:
@@ -38,7 +38,7 @@ import yaml
 from boot import processes as P
 
 
-ACCOUNTS_PATH = P.HOME_DIR / "tmp" / "drivers" / "macmail" / "accounts.yaml"
+ACCOUNTS_PATH = P.HOME_DIR / "tmp" / "drivers" / "email" / "accounts.yaml"
 
 
 # Mail.app reports mailbox names in NFC; the Envelope Index URL stores
@@ -61,7 +61,7 @@ class Account:
 class AccountsConfig:
     accounts: dict[str, Account] = field(default_factory=dict)
 
-    # ---- public lookups (used by the drivers and mailsearch) -------------
+    # ---- public lookups (used by the inbound/outbound drivers) -----------
 
     def address_for_uuid(self, uuid: str) -> Optional[str]:
         a = self.accounts.get(uuid)
@@ -332,16 +332,16 @@ async def refresh() -> AccountsConfig:
     """
     code, stdout, stderr = await _run_osascript(_DISCOVERY_SCRIPT)
     if code != 0:
-        print(f"[macmail-accounts] discovery failed: {stderr}", flush=True)
+        print(f"[email-accounts] discovery failed: {stderr}", flush=True)
         return load()
     cfg = parse_discovery_output(stdout)
     if cfg.is_empty():
-        print(f"[macmail-accounts] discovery returned no accounts (stderr={stderr!r})", flush=True)
+        print(f"[email-accounts] discovery returned no accounts (stderr={stderr!r})", flush=True)
         return load()
     try:
         _atomic_dump(ACCOUNTS_PATH, _to_yaml(cfg))
     except OSError as e:
-        print(f"[macmail-accounts] could not write {ACCOUNTS_PATH}: {e}", flush=True)
+        print(f"[email-accounts] could not write {ACCOUNTS_PATH}: {e}", flush=True)
     return cfg
 
 

@@ -23,7 +23,7 @@ name: email-pai
 kind: pai
 deps:
   - email          # registry bundle → drivers/email/
-  - mailsearch     # registry bundle → bin/mailsearch/
+  - inbox          # registry bundle → bin/inbox/
   - draft-email    # registry bundle → bin/draft-email/
 ```
 
@@ -46,7 +46,7 @@ For each entry in `deps:`:
    pip deps are batch-installed into the kernel venv at
    `/usr/lib/venv/` via `uv pip install --python <venv-python>`.
 
-So `sbin/paiman install email-pai` pulls `email` (driver), `mailsearch`
+So `sbin/paiman install email-pai` pulls `email` (driver), `inbox`
 (bin), and `draft-email` (bin), then `email` pulls `tailer`, then any
 unresolved names get pip-installed in one shot.
 

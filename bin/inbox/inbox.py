@@ -1,7 +1,7 @@
 #!/usr/bin/env python
-"""inbox — bounded, count-first lister over the nested mailv2 email archive.
+"""inbox — bounded, count-first lister over the nested email archive.
 
-mailv2 keeps a complete on-disk archive at
+email keeps a complete on-disk archive at
     communication/email/<account>/YYYY/MM/DD/<subject-slug>.yaml
 so date-scoped queries are a glob away. `inbox` answers "what landed?" without
 dumping hundreds of rows: it COUNTS everything in the date window first, prints
@@ -165,7 +165,7 @@ def run(args: argparse.Namespace) -> int:
 def parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="inbox",
-        description="Bounded, count-first lister over the nested mailv2 archive.",
+        description="Bounded, count-first lister over the nested email archive.",
     )
     p.add_argument("--since", help="lower bound: today | Nd | YYYY-MM-DD (default: today)")
     p.add_argument("--day", help="restrict to a single day YYYY-MM-DD")

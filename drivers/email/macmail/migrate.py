@@ -1,7 +1,7 @@
 #!/usr/bin/env python
-"""mailv2 migration — flat `<account>/YYYY-MM-DD/` → nested `<account>/YYYY/MM/DD/`.
+"""email migration — flat `<account>/YYYY-MM-DD/` → nested `<account>/YYYY/MM/DD/`.
 
-The old email/macmail driver wrote a flat per-day tree; mailv2 uses a nested
+The old email/macmail driver wrote a flat per-day tree; email uses a nested
 `YYYY/MM/DD` partition. This is a one-time, in-place migration of an existing
 archive, run as the first step of cutover (before `backfill`). It:
 
@@ -20,7 +20,7 @@ Snapshot + move + rebuild only — it never touches Mail.app or the cursor; run
 `backfill` afterwards to fill history gaps.
 
 Run from the FHS root with the PAI venv:
-    cd ~/.pai && usr/bin/python -m drivers.mailv2.macmail.migrate [--dry-run]
+    cd ~/.pai && usr/bin/python -m drivers.email.macmail.migrate [--dry-run]
 """
 
 from __future__ import annotations
@@ -172,14 +172,14 @@ def run_migrate(args: argparse.Namespace) -> int:
           flush=True)
     if not args.dry_run:
         print("[migrate] next: run the backfill to fill history gaps "
-              "(python -m drivers.mailv2.macmail.backfill)", flush=True)
+              "(python -m drivers.email.macmail.backfill)", flush=True)
     return 0
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        prog="mailv2-migrate",
-        description="Migrate the flat email tree to mailv2's nested YYYY/MM/DD "
+        prog="email-migrate",
+        description="Migrate the flat email tree to email's nested YYYY/MM/DD "
                     "partition (snapshot + move + rebuild links).",
     )
     p.add_argument("--dry-run", action="store_true",

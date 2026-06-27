@@ -1,13 +1,14 @@
-"""Unit tests for the mailv2 email driver.
+"""Unit tests for the email driver.
 
-Covers the two behaviors mailv2 adds on top of the macmail driver:
+Covers the two behaviors the nested-archive email driver adds on top of the
+legacy macmail driver:
   1. The nested `YYYY/MM/DD` partition — `write_message_yaml` writes into it
      and `find_message_by_id` walks it newest-first (write → dedup → `.prev`).
   2. Header-only stubs — `_build_stub_msg_dict` / `ingest_row_stub` produce a
      dedupable, nested yaml from a body-less Envelope-Index row, and the
      in-memory `seen` index keeps the backfill O(n) (no per-insert disk scan).
 
-The mailv2 source is canonical in this repo; these import it directly rather
+The email source is canonical in this repo; these import it directly rather
 than via an installed copy, so they run in the pairegistry suite pre-install.
 """
 
@@ -23,9 +24,9 @@ ROOT = Path(__file__).resolve().parents[1]
 PAI_SRC = ROOT.parent / "pai" / "src"
 sys.path[:0] = [str(PAI_SRC), str(ROOT)]
 
-from drivers.mailv2 import shared  # noqa: E402
-from drivers.mailv2.macmail import accounts as A  # noqa: E402
-from drivers.mailv2.macmail import inbound  # noqa: E402
+from drivers.email import shared  # noqa: E402
+from drivers.email.macmail import accounts as A  # noqa: E402
+from drivers.email.macmail import inbound  # noqa: E402
 
 
 def _msg(message_id: str, subject: str, received: str, references=None) -> dict:

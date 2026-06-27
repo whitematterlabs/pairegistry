@@ -1,5 +1,5 @@
 name: inbox
 kind: bin
 version: 0.1.0
-description: Bounded, count-first lister over the nested mailv2 email archive (communication/email/<account>/YYYY/MM/DD).
+description: Bounded, count-first lister over the nested email archive (communication/email/<account>/YYYY/MM/DD).
 entrypoint: inbox.py

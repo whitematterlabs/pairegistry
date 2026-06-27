@@ -39,10 +39,10 @@ from . import emlx as E
 ENVELOPE_DIR = Path.home() / "Library" / "Mail" / "V10" / "MailData"
 ENVELOPE_INDEX = ENVELOPE_DIR / "Envelope Index"
 
-CURSOR_DIR = P.HOME_DIR / "tmp" / "drivers" / "mailv2"
+CURSOR_DIR = P.HOME_DIR / "tmp" / "drivers" / "macmail"
 CURSOR_PATH = CURSOR_DIR / "cursor.yaml"
 
-PARKED_DIR = paths.PAI_ROOT / "sys" / "drivers" / "mailv2"
+PARKED_DIR = paths.PAI_ROOT / "sys" / "drivers" / "macmail"
 PARKED_PATH = PARKED_DIR / "parked.yaml"
 
 # ~30 minutes at 60s tick. Mail.app finishes downloads well within that;
@@ -197,12 +197,12 @@ ORDER BY m.ROWID ASC
     try:
         conn = _connect()
     except sqlite3.OperationalError as e:
-        print(f"[mailv2-in] cannot open Envelope Index: {e}", flush=True)
+        print(f"[macmail-in] cannot open Envelope Index: {e}", flush=True)
         return None
     try:
         return conn.execute(sql, (*rowids, *patterns)).fetchall()
     except sqlite3.OperationalError as e:
-        print(f"[mailv2-in] parked retry query failed: {e}", flush=True)
+        print(f"[macmail-in] parked retry query failed: {e}", flush=True)
         return None
     finally:
         conn.close()
@@ -246,7 +246,7 @@ def _ensure_account_meta(account_dir: Path, account_address: str, account_uuid: 
         "created": datetime.now().date().isoformat(),
     }
     _atomic_write_yaml(meta_path, meta, sort_keys=False)
-    print(f"[mailv2-in] auto-created meta.yaml for {account_address}", flush=True)
+    print(f"[macmail-in] auto-created meta.yaml for {account_address}", flush=True)
 
 
 def _build_msg_dict(msg, direction: str, ts: datetime, conversation_id: int) -> dict:
@@ -273,61 +273,6 @@ def _build_msg_dict(msg, direction: str, ts: datetime, conversation_id: int) -> 
         "subject": subject,
         "direction": direction,
         "content": content,
-        "body_state": "present",
-        "attachments": [],
-        "provider_thread_id": str(conversation_id) if conversation_id else None,
-    }
-    if direction == "outbound":
-        out["sent_at"] = ts.isoformat(timespec="seconds")
-    else:
-        out["received_at"] = ts.isoformat(timespec="seconds")
-    return out
-
-
-def _build_stub_msg_dict(row, direction: str, ts: datetime, conversation_id: int) -> dict:
-    """Header-only message dict built from the Envelope Index — no .emlx body.
-
-    Mirrors `_build_msg_dict`'s key order so a stub yaml is structurally
-    identical to a full one except `content` is empty and `body_state` is
-    "absent". `message_id` comes from `message_global_data.message_id_header`
-    so a later full ingest dedups against the stub by Message-ID.
-
-    `row` is a plain mapping (not a raw sqlite3.Row) carrying the scalar
-    columns plus pre-resolved list/string fields the backfill assembles from
-    the `addresses` / `recipients` / `message_references` joins:
-        rowid, url, date_received, date_sent, conversation_id   (scalars)
-        message_id          str   — RFC Message-ID header (may be "")
-        from_address        str
-        from_name           str | None
-        to                  list[str]
-        cc                  list[str]
-        references          list[str]  — RFC Message-IDs, root-first
-        subject             str
-    """
-    message_id = (row.get("message_id") or "").strip()
-    references = list(row.get("references") or [])
-    from_addr = (row.get("from_address") or "").strip().lower()
-    from_name = row.get("from_name") or None
-    to_addrs = list(row.get("to") or [])
-    cc_addrs = list(row.get("cc") or [])
-    subject = str(row.get("subject") or "")
-
-    out: dict = {
-        "message_id": message_id,
-        # In-Reply-To isn't stored as such; parenting falls back to
-        # references[-1] (the immediate parent) in ingest_row_stub.
-        "in_reply_to": None,
-        "references": references,
-        "thread_slug": shared.thread_slug(subject, references, message_id),
-        "from": from_addr,
-        "from_name": from_name,
-        "to": to_addrs,
-        "cc": cc_addrs,
-        "bcc": [],
-        "subject": subject,
-        "direction": direction,
-        "content": "",
-        "body_state": "absent",
         "attachments": [],
         "provider_thread_id": str(conversation_id) if conversation_id else None,
     }
@@ -359,68 +304,11 @@ def _direction_for_message(
     return "outbound" if cfg.owns_address(account_uuid, from_addr) else "inbound"
 
 
-def _persist_msg(
-    account_dir: Path,
-    msg_dict: dict,
-    ts: datetime,
-    address: str,
-    direction: str,
-    *,
-    seen: Optional[dict] = None,
-    stub: bool = False,
-) -> dict:
-    """Write the yaml + thread/prev links, return the event payload.
-
-    Shared tail of `ingest_row` and `ingest_row_stub`. When `seen` is None
-    (live driver) dedup + parent resolution go through the on-disk
-    `find_message_by_id` scan exactly as before. When `seen` is an in-memory
-    `{message_id: Path}` map (backfill), it is used for both — keeping the
-    bulk rebuild O(n) — and the freshly written path is recorded into it.
-    """
-    mid = (msg_dict.get("message_id") or "").strip()
-    if seen is not None and mid and mid in seen:
-        msg_path = seen[mid]
-        created = False
-    else:
-        msg_path, created = shared.write_message_yaml(
-            account_dir, msg_dict, dedup=(seen is None)
-        )
-        if seen is not None and mid:
-            seen[mid] = msg_path
-
-    shared.link_thread(account_dir, msg_path, msg_dict["thread_slug"], ts)
-
-    parent_id = msg_dict.get("in_reply_to") or (
-        msg_dict["references"][-1] if msg_dict["references"] else None
-    )
-    if parent_id:
-        if seen is not None:
-            parent_path = seen.get(parent_id)
-        else:
-            parent_path = shared.find_message_by_id(account_dir, parent_id)
-        if parent_path:
-            shared.link_prev(msg_path, parent_path)
-
-    payload = {
-        "account": address,
-        "thread_slug": msg_dict["thread_slug"],
-        "subject": msg_dict["subject"],
-        "from": msg_dict["from"],
-        "direction": direction,
-        "path": shared.home_view_path(str(msg_path.relative_to(paths.PAI_ROOT))),
-        "_created": created,
-    }
-    if stub:
-        payload["_stub"] = True
-    return payload
-
-
-def ingest_row(row, cfg: A.AccountsConfig, *, seen: Optional[dict] = None) -> Optional[dict]:
+def ingest_row(row, cfg: A.AccountsConfig) -> Optional[dict]:
     """Process one delta row. Returns an event-payload dict on success or
     None if we should leave the cursor parked (e.g. partial emlx).
 
-    Public so the `backfill` tool can reuse the full row-to-yaml pipeline
-    (and fall back to `ingest_row_stub` when this returns None).
+    Public so the `mailsearch` tool can reuse the row-to-yaml pipeline.
     """
     rowid = int(row["rowid"])
     url = row["url"] or ""
@@ -428,7 +316,7 @@ def ingest_row(row, cfg: A.AccountsConfig, *, seen: Optional[dict] = None) -> Op
     if role is None:
         # URL didn't match any known inbox/sent role — shouldn't happen
         # for rows the SQL filter accepts, but skip defensively.
-        print(f"[mailv2-in] no role for url={url!r}; skipping rowid={rowid}", flush=True)
+        print(f"[macmail-in] no role for url={url!r}; skipping rowid={rowid}", flush=True)
         return {"_skip": True}
     all_mail = cfg.is_all_mail_url(url)
 
@@ -445,12 +333,12 @@ def ingest_row(row, cfg: A.AccountsConfig, *, seen: Optional[dict] = None) -> Op
     try:
         data = path.read_bytes()
     except OSError as e:
-        print(f"[mailv2-in] cannot read {path}: {e}", flush=True)
+        print(f"[macmail-in] cannot read {path}: {e}", flush=True)
         return None
     try:
         msg = E.parse_emlx(data)
     except ValueError as e:
-        print(f"[mailv2-in] parse failed rowid={rowid}: {e}", flush=True)
+        print(f"[macmail-in] parse failed rowid={rowid}: {e}", flush=True)
         # Bad framing — advance past it; we won't recover by retrying.
         return {"_skip": True}
 
@@ -459,7 +347,7 @@ def ingest_row(row, cfg: A.AccountsConfig, *, seen: Optional[dict] = None) -> Op
         # AppleScript discovery hasn't enumerated this account yet (rare;
         # account added since last refresh). Skip; the next refresh will
         # pick it up and a future kqueue tick will retry via boot scan.
-        print(f"[mailv2-in] no canonical address for uuid={account_uuid}; skipping rowid={rowid}", flush=True)
+        print(f"[macmail-in] no canonical address for uuid={account_uuid}; skipping rowid={rowid}", flush=True)
         return {"_skip": True}
 
     ts = _mac_date_to_dt(int(row["date_received"] or 0))
@@ -469,45 +357,28 @@ def ingest_row(row, cfg: A.AccountsConfig, *, seen: Optional[dict] = None) -> Op
     account_dir = paths.var_spool_email() / address
     _ensure_account_meta(account_dir, address, account_uuid)
 
-    return _persist_msg(account_dir, msg_dict, ts, address, direction, seen=seen)
+    msg_path, created = shared.write_message_yaml(account_dir, msg_dict)
+    shared.link_thread(account_dir, msg_path, msg_dict["thread_slug"], ts)
 
+    parent_path: Optional[Path] = None
+    parent_id = msg_dict["in_reply_to"] or (msg_dict["references"][-1] if msg_dict["references"] else None)
+    if parent_id:
+        parent_path = shared.find_message_by_id(account_dir, parent_id)
+        if parent_path:
+            shared.link_prev(msg_path, parent_path)
 
-def ingest_row_stub(row, cfg: A.AccountsConfig, *, seen: Optional[dict] = None) -> Optional[dict]:
-    """Header-only ingest for a row whose `.emlx` body is unavailable
-    (Mail.app evicted it, or it was never downloaded).
-
-    `row` is the enriched mapping `_build_stub_msg_dict` documents — the
-    backfill assembles it from the Envelope Index joins. Writes a stub yaml
-    (empty `content`, `body_state: absent`) via the same `write_message_yaml`
-    / `link_thread` / `link_prev` path as a full ingest, so the stub dedups
-    by Message-ID and threads correctly. Returns the same payload shape as
-    `ingest_row` (with `_stub: True`), or `{"_skip": True}`.
-    """
-    rowid = int(row["rowid"])
-    url = row["url"] or ""
-    account_uuid, role = _parse_url(url, cfg)
-    if role is None:
-        print(f"[mailv2-in] no role for url={url!r}; skipping stub rowid={rowid}", flush=True)
-        return {"_skip": True}
-    all_mail = cfg.is_all_mail_url(url)
-
-    address = cfg.address_for_uuid(account_uuid)
-    if address is None:
-        print(f"[mailv2-in] no canonical address for uuid={account_uuid}; skipping stub rowid={rowid}", flush=True)
-        return {"_skip": True}
-
-    ts = _mac_date_to_dt(int(row.get("date_received") or row.get("date_sent") or 0))
-    from_addr = (row.get("from_address") or "").strip().lower()
-    if all_mail:
-        direction = "outbound" if cfg.owns_address(account_uuid, from_addr) else "inbound"
-    else:
-        direction = role
-    msg_dict = _build_stub_msg_dict(row, direction, ts, int(row.get("conversation_id") or 0))
-
-    account_dir = paths.var_spool_email() / address
-    _ensure_account_meta(account_dir, address, account_uuid)
-
-    return _persist_msg(account_dir, msg_dict, ts, address, direction, seen=seen, stub=True)
+    return {
+        "account": address,
+        "thread_slug": msg_dict["thread_slug"],
+        "subject": msg_dict["subject"],
+        "from": msg_dict["from"],
+        "direction": direction,
+        "path": shared.home_view_path(str(msg_path.relative_to(paths.PAI_ROOT))),
+        # Underscore-prefixed → stripped from emitted event payloads; mailsearch
+        # uses it to dedupe sqlite hits against on-disk archive hits.
+        "_message_id": msg_dict["message_id"],
+        "_created": created,
+    }
 
 
 # ---------- live + catchup drains ------------------------------------------
@@ -516,13 +387,13 @@ def _query_rows(last_rowid: int, cfg: A.AccountsConfig) -> Optional[list]:
     try:
         conn = _connect()
     except sqlite3.OperationalError as e:
-        print(f"[mailv2-in] cannot open Envelope Index: {e}", flush=True)
+        print(f"[macmail-in] cannot open Envelope Index: {e}", flush=True)
         return None
     sql, patterns = _build_delta_sql(cfg)
     try:
         return conn.execute(sql, (last_rowid, *patterns)).fetchall()
     except sqlite3.OperationalError as e:
-        print(f"[mailv2-in] query failed: {e}", flush=True)
+        print(f"[macmail-in] query failed: {e}", flush=True)
         return None
     finally:
         conn.close()
@@ -538,11 +409,6 @@ _last_live_log: tuple[int, int] | None = None
 STALE_GRACE = timedelta(minutes=5)
 DEBOUNCE_SECONDS = 20.0
 
-# How many recent subjects each backlog account bucket carries. The full
-# list lives on disk; the SKILL tells the PAI to rg the date dirs for it.
-# Capped so the event payload stays small regardless of backlog size.
-SAMPLE_SUBJECTS_CAP = 5
-
 _kernel_started_at: Optional[datetime] = None
 _stale_buffer: dict[str, dict] = {}
 _stale_earliest: Optional[datetime] = None
@@ -556,34 +422,24 @@ def _is_stale(ts: datetime) -> bool:
 
 
 def _new_bucket(account: str) -> dict:
-    return {
-        "account": account,
-        "count": 0,
-        "last_subject": "",
-        "sample_subjects": [],
-        "since": None,
-    }
+    """A fresh per-account backlog bucket. `subjects` accumulates EVERY
+    subject in the backlog (not just the most recent) so the coalesced
+    nudge can recap the whole batch; `last_subject` is kept for back-compat
+    and is just `subjects[-1]`."""
+    return {"account": account, "count": 0, "last_subject": "", "subjects": []}
 
 
-def _bump_bucket(bucket: dict, subject: str, ts: datetime) -> None:
-    """Fold one message into an account backlog bucket: bump count, track the
-    last + a capped tail of recent subjects, and the account's earliest ts."""
+def _fold_into_bucket(bucket: dict, subject: str) -> None:
     bucket["count"] += 1
     bucket["last_subject"] = subject
-    samples = bucket.setdefault("sample_subjects", [])
-    samples.append(subject)
-    if len(samples) > SAMPLE_SUBJECTS_CAP:
-        del samples[:-SAMPLE_SUBJECTS_CAP]  # keep the most recent N
-    cur = bucket.get("since")
-    if cur is None or ts < datetime.fromisoformat(cur):
-        bucket["since"] = ts.isoformat(timespec="seconds")
+    bucket.setdefault("subjects", []).append(subject)
 
 
 def _bucket_stale(result: dict, ts: datetime) -> None:
     global _stale_earliest, _stale_last_add
     acc = result["account"]
     bucket = _stale_buffer.setdefault(acc, _new_bucket(acc))
-    _bump_bucket(bucket, result["subject"], ts)
+    _fold_into_bucket(bucket, result["subject"])
     if _stale_earliest is None or ts < _stale_earliest:
         _stale_earliest = ts
     _stale_last_add = time.monotonic()
@@ -597,14 +453,14 @@ def _flush_stale() -> None:
     total = sum(b["count"] for b in accounts)
     since = _stale_earliest.isoformat(timespec="seconds") if _stale_earliest else None
     P.emit_event({
-        "source": "mailv2",
+        "source": "macmail",
         "kind": "email_backlog",
         "since": since,
         "accounts": accounts,
         "total": total,
     })
     print(
-        f"[mailv2-in] emitted stale backlog (total={total}, accounts={len(accounts)})",
+        f"[macmail-in] emitted stale backlog (total={total}, accounts={len(accounts)})",
         flush=True,
     )
     _stale_buffer = {}
@@ -618,7 +474,7 @@ def _park_failure(parked: dict[int, dict], rowid: int) -> None:
     entry["attempts"] = int(entry.get("attempts", 0)) + 1
     if entry["attempts"] >= MAX_PARK_ATTEMPTS:
         print(
-            f"[mailv2-in] giving up on rowid={rowid} after {entry['attempts']} attempts "
+            f"[macmail-in] giving up on rowid={rowid} after {entry['attempts']} attempts "
             f"(likely deleted before full download)",
             flush=True,
         )
@@ -644,7 +500,7 @@ def _retry_parked(parked: dict[int, dict], cfg: A.AccountsConfig) -> list[tuple[
     # Rowids that vanished from the index entirely — Mail discarded them.
     for rid in list(parked.keys()):
         if rid not in seen:
-            print(f"[mailv2-in] parked rowid={rid} no longer in index; dropping", flush=True)
+            print(f"[macmail-in] parked rowid={rid} no longer in index; dropping", flush=True)
             parked.pop(rid, None)
 
     successes: list[tuple[int, dict, object]] = []
@@ -689,14 +545,14 @@ def _drain_live(last_rowid: int, cfg: A.AccountsConfig, last_announced: int) -> 
         if _is_stale(ts):
             _bucket_stale(result, ts)
             print(
-                f"[mailv2-in] bucketed (unparked,stale) rowid={rid} → {result['account']} ({result['direction']})",
+                f"[macmail-in] bucketed (unparked,stale) rowid={rid} → {result['account']} ({result['direction']})",
                 flush=True,
             )
         else:
-            payload = {"source": "mailv2", "kind": "new_email", **payload}
+            payload = {"source": "macmail", "kind": "new_email", **payload}
             P.emit_event(payload)
             print(
-                f"[mailv2-in] emitted (unparked) rowid={rid} → {result['account']} ({result['direction']})",
+                f"[macmail-in] emitted (unparked) rowid={rid} → {result['account']} ({result['direction']})",
                 flush=True,
             )
         if rid > last_announced:
@@ -714,7 +570,7 @@ def _drain_live(last_rowid: int, cfg: A.AccountsConfig, last_announced: int) -> 
     if rows:
         sig = (last_rowid, len(rows))
         if sig != _last_live_log:
-            print(f"[mailv2-in] live drain: {len(rows)} rows since rowid={last_rowid}", flush=True)
+            print(f"[macmail-in] live drain: {len(rows)} rows since rowid={last_rowid}", flush=True)
             _last_live_log = sig
 
     max_processed = last_rowid
@@ -739,13 +595,13 @@ def _drain_live(last_rowid: int, cfg: A.AccountsConfig, last_announced: int) -> 
         if _is_stale(ts):
             _bucket_stale(result, ts)
             print(
-                f"[mailv2-in] bucketed (stale) rowid={rowid} → {result['account']} ({result['direction']})",
+                f"[macmail-in] bucketed (stale) rowid={rowid} → {result['account']} ({result['direction']})",
                 flush=True,
             )
         else:
-            payload = {"source": "mailv2", "kind": "new_email", **payload}
+            payload = {"source": "macmail", "kind": "new_email", **payload}
             P.emit_event(payload)
-            print(f"[mailv2-in] emitted rowid={rowid} → {result['account']} ({result['direction']})", flush=True)
+            print(f"[macmail-in] emitted rowid={rowid} → {result['account']} ({result['direction']})", flush=True)
         if rowid > last_announced:
             last_announced = rowid
         # rows is ordered ASC, so max_processed == rowid here and no
@@ -778,8 +634,8 @@ def _drain_catchup(last_rowid: int, cfg: A.AccountsConfig, last_announced: int) 
             return  # already announced in a prior boot
         acc = result["account"]
         bucket = summaries.setdefault(acc, _new_bucket(acc))
+        _fold_into_bucket(bucket, result["subject"])
         ts = _mac_date_to_dt(int(row["date_received"] or 0))
-        _bump_bucket(bucket, result["subject"], ts)
         if earliest is None or ts < earliest:
             earliest = ts
 
@@ -795,7 +651,7 @@ def _drain_catchup(last_rowid: int, cfg: A.AccountsConfig, last_announced: int) 
         return last_rowid, last_announced
 
     if rows:
-        print(f"[mailv2-in] catchup: {len(rows)} rows since rowid={last_rowid}", flush=True)
+        print(f"[macmail-in] catchup: {len(rows)} rows since rowid={last_rowid}", flush=True)
 
     max_processed = last_rowid
     new_announced = last_announced
@@ -817,7 +673,7 @@ def _drain_catchup(last_rowid: int, cfg: A.AccountsConfig, last_announced: int) 
     if summaries:
         total = sum(b["count"] for b in summaries.values())
         P.emit_event({
-            "source": "mailv2",
+            "source": "macmail",
             "kind": "email_backlog",
             "since": earliest.isoformat(timespec="seconds") if earliest else None,
             "accounts": list(summaries.values()),
@@ -826,14 +682,14 @@ def _drain_catchup(last_rowid: int, cfg: A.AccountsConfig, last_announced: int) 
         # Persist immediately after the emit — a crash here must not let the
         # next boot re-announce this same backlog.
         _checkpoint(parked, new_last, final_announced)
-        print(f"[mailv2-in] emitted backlog (total={total}, accounts={len(summaries)})", flush=True)
+        print(f"[macmail-in] emitted backlog (total={total}, accounts={len(summaries)})", flush=True)
     else:
         _save_parked(parked)
         if new_last != last_rowid or final_announced != last_announced:
             _save_cursor(new_last, final_announced)
 
     if parked:
-        print(f"[mailv2-in] catchup: {len(parked)} rowid(s) parked for retry", flush=True)
+        print(f"[macmail-in] catchup: {len(parked)} rowid(s) parked for retry", flush=True)
     return new_last, final_announced
 
 
@@ -898,11 +754,11 @@ class _KqueueWatcher:
             fd = self._open_target(name)
             if fd is not None:
                 self._register(fd, name)
-                print(f"[mailv2-in] kqueue watching {name} fd={fd}", flush=True)
+                print(f"[macmail-in] kqueue watching {name} fd={fd}", flush=True)
             else:
-                print(f"[mailv2-in] kqueue target {name} missing — skipping", flush=True)
+                print(f"[macmail-in] kqueue target {name} missing — skipping", flush=True)
 
-        self._thread = threading.Thread(target=self._loop, name="mailv2-in-kq", daemon=True)
+        self._thread = threading.Thread(target=self._loop, name="macmail-in-kq", daemon=True)
         self._thread.start()
 
     def _reopen(self, old_fd: int, name: str) -> None:
@@ -914,7 +770,7 @@ class _KqueueWatcher:
         fd = self._open_target(name)
         if fd is not None:
             self._register(fd, name)
-            print(f"[mailv2-in] kqueue re-opened {name} fd={fd}", flush=True)
+            print(f"[macmail-in] kqueue re-opened {name} fd={fd}", flush=True)
 
     def _loop(self) -> None:
         assert self._kq is not None
@@ -932,12 +788,12 @@ class _KqueueWatcher:
                     fflags = ev.fflags
                     self.loop.call_soon_threadsafe(self.queue.put_nowait, None)
                     if fflags & (select.KQ_NOTE_DELETE | select.KQ_NOTE_RENAME):
-                        print(f"[mailv2-in] kq {name} rotated, reopening", flush=True)
+                        print(f"[macmail-in] kq {name} rotated, reopening", flush=True)
                         self._reopen(fd, name)
                 if stop:
                     return
         except Exception as e:
-            print(f"[mailv2-in] kq-loop crashed: {e!r}", flush=True)
+            print(f"[macmail-in] kq-loop crashed: {e!r}", flush=True)
 
     def stop(self) -> None:
         if self._stop_fd_w is not None:
@@ -971,7 +827,7 @@ class _KqueueWatcher:
 # misleading "not found" (`Path.exists()` returns False under a TCC denial,
 # which used to mask a permission wall as an absent mailbox).
 _FDA_HINT = (
-    "[mailv2-in] cannot read Mail: PAI is missing Full Disk Access. Grant it in "
+    "[macmail-in] cannot read Mail: PAI is missing Full Disk Access. Grant it in "
     "System Settings → Privacy & Security → Full Disk Access, then restart "
     "PAI. Driver idle until granted."
 )
@@ -1007,21 +863,21 @@ async def run() -> None:
         print(_FDA_HINT, flush=True)
         return
     if access == "absent":
-        print(f"[mailv2-in] Envelope Index not found at {ENVELOPE_INDEX}; driver idle", flush=True)
+        print(f"[macmail-in] Envelope Index not found at {ENVELOPE_INDEX}; driver idle", flush=True)
         return
 
     _kernel_started_at = datetime.now(timezone.utc).astimezone()
 
     cfg = await A.refresh()
-    print(f"[mailv2-in] discovered accounts: {A.summarize(cfg)}", flush=True)
+    print(f"[macmail-in] discovered accounts: {A.summarize(cfg)}", flush=True)
 
     cursor = _load_cursor()
     if cursor is None:
         try:
             cursor = _bootstrap_cursor()
-            print(f"[mailv2-in] bootstrap cursor last_rowid={cursor[0]}", flush=True)
+            print(f"[macmail-in] bootstrap cursor last_rowid={cursor[0]}", flush=True)
         except sqlite3.OperationalError as e:
-            print(f"[mailv2-in] cannot bootstrap (FDA granted?): {e}", flush=True)
+            print(f"[macmail-in] cannot bootstrap (FDA granted?): {e}", flush=True)
             return
     last_rowid, last_announced = cursor
 
@@ -1030,7 +886,7 @@ async def run() -> None:
     watcher = _KqueueWatcher(loop, queue)
     watcher.start()
     print(
-        f"[mailv2-in] started, last_rowid={last_rowid}, last_announced_rowid={last_announced}",
+        f"[macmail-in] started, last_rowid={last_rowid}, last_announced_rowid={last_announced}",
         flush=True,
     )
 
@@ -1074,7 +930,7 @@ async def run() -> None:
             if ticks % ACCOUNTS_REFRESH_EVERY == 0:
                 fresh = await A.refresh()
                 if fresh.accounts and fresh.accounts != cfg.accounts:
-                    print(f"[mailv2-in] accounts refreshed: {A.summarize(fresh)}", flush=True)
+                    print(f"[macmail-in] accounts refreshed: {A.summarize(fresh)}", flush=True)
                     cfg = fresh
             last_rowid, last_announced = await asyncio.to_thread(
                 _drain_live, last_rowid, cfg, last_announced
@@ -1085,4 +941,4 @@ async def run() -> None:
         ticker_task.cancel()
         flusher_task.cancel()
         watcher.stop()
-        print("[mailv2-in] stopped", flush=True)
+        print("[macmail-in] stopped", flush=True)

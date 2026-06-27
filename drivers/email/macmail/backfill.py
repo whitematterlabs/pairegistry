@@ -1,7 +1,7 @@
 #!/usr/bin/env python
-"""mailv2 one-time backfill — hard-copy the entire Envelope Index into the tree.
+"""email one-time backfill — hard-copy the entire Envelope Index into the tree.
 
-The live `mailv2-in` driver only ingests rows past its cursor. This tool does
+The live `email-in` driver only ingests rows past its cursor. This tool does
 the *initial* population: it walks every message Mail.app has indexed for the
 known inbox/sent/all-mail mailboxes and writes one yaml per message into the
 nested `communication/email/<account>/YYYY/MM/DD/` tree — a full message when
@@ -15,14 +15,14 @@ Design notes
   writes pass `dedup=False`, so no per-insert full-tree scan happens. Over ~40k
   rows that is the difference between seconds and hours.
 * Resumable: the last-processed ROWID is checkpointed to
-  `sys/drivers/mailv2/backfill_progress.yaml`. A crashed run resumes from there;
+  `sys/drivers/email/backfill_progress.yaml`. A crashed run resumes from there;
   re-running a completed backfill processes zero rows.
 * On completion it bootstraps the live cursor to MAX(ROWID) (same semantics as
-  `inbound._bootstrap_cursor`) so the first `mailv2-in` start does NOT
+  `inbound._bootstrap_cursor`) so the first `email-in` start does NOT
   re-announce the whole archive as a backlog.
 
 Run from the FHS root with the PAI venv:
-    cd ~/.pai && usr/bin/python -m drivers.mailv2.macmail.backfill [--dry-run]
+    cd ~/.pai && usr/bin/python -m drivers.email.macmail.backfill [--dry-run]
 """
 
 from __future__ import annotations
@@ -296,7 +296,7 @@ def run_backfill(args: argparse.Namespace) -> int:
         _save_progress(last_rowid)
         last, _ = IN._bootstrap_cursor()
         print(f"[backfill] bootstrapped live cursor to ROWID={last} "
-              "(first mailv2-in start won't re-announce the archive)", flush=True)
+              "(first email-in start won't re-announce the archive)", flush=True)
 
     elapsed = time.monotonic() - t0
     print(f"[backfill] {'DRY RUN ' if args.dry_run else ''}done in {elapsed:.1f}s: "
@@ -307,7 +307,7 @@ def run_backfill(args: argparse.Namespace) -> int:
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        prog="mailv2-backfill",
+        prog="email-backfill",
         description="One-time hard-copy of the Envelope Index into the nested "
                     "communication/email tree (full + header-only stubs).",
     )

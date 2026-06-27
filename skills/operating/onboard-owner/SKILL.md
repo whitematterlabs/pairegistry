@@ -29,17 +29,20 @@ SINCE=$(date -v-30d +%F)   # macOS: 30 days ago, YYYY-MM-DD
 TODAY=$(date +%F)
 ```
 
-## 3. Mail — `mailsearch`
+## 3. Mail — `inbox` over the archive
+
+The email driver keeps a complete on-disk archive under
+`~/communication/email/<account>/YYYY/MM/DD/`. List recent traffic with `inbox`
+(count-first, bounded):
 
 ```sh
-bin/mailsearch --since "$SINCE" --limit 200
+inbox --since "$SINCE" --limit 200
 ```
 
-Hits are materialized as canonical yamls under `~/communication/email/<account>/<date>/...`;
-`mailsearch` prints their paths. Read them to see who the owner corresponds with
-and about what. If a month clearly exceeds the 200 cap (you see the limit hit),
-page it by narrowing windows, e.g. `--since "$SINCE" --until <mid-month>` then
-the back half.
+It prints the message yaml paths; read them to see who the owner corresponds
+with and about what. If you hit the limit, narrow with `--day` or `--account`
+and page through. If the archive is empty, the one-time backfill hasn't run yet
+(it needs Full Disk Access) — note that and move on; don't block onboarding.
 
 ## 4. iMessage — `imessage-history`
 

@@ -1,15 +1,20 @@
 ---
 name: drafting-emails
-description: Draft Mail.app email by writing YAML files; triage inbound email and handle draft failures.
+description: Draft Mail.app email by writing YAML files; triage inbound email, recap the backlog, and search the on-disk archive with rg.
 driver: email
 ---
 
 # When to use this
 
 Use this skill whenever the owner asks you to draft an email, reply to
-an email, or prepare outbound mail. Use `bin/draft-email`; it writes a
-draft YAML file under `~/drafts/`, and the `macmail-out` driver then
-saves it into Mail.app's Drafts folder for the owner to review and send.
+an email, prepare outbound mail, recap the inbox/backlog, or find old
+mail. The `email` driver keeps a **complete on-disk archive** of every
+message Mail.app has indexed, so you answer questions by globbing and
+`rg`-ing files — never by hand-parsing a YAML dump in the shell.
+
+For drafting, use `bin/draft-email`; it writes a draft YAML under
+`~/drafts/`, and the `email-out` driver saves it into Mail.app's Drafts
+folder for the owner to review and send.
 
 Do not paste the full email into chat as the final result unless the
 owner explicitly asks to see text only. For normal "draft an email"
@@ -18,47 +23,104 @@ saved.
 
 # Your filesystem
 
-Everything is under `~/communication/`.
+Everything is under `~/communication/`. The archive is partitioned by
+date into a **nested `YYYY/MM/DD`** tree:
 
 ```
-~/communication/email/<account>/<date>/<thread-slug>.yaml   inbound messages
-~/communication/email/<account>/meta.yaml                   account info
-~/communication/email/drafts/                               drafts you write
+~/communication/email/<account>/<YYYY>/<MM>/<DD>/<thread-slug>.yaml   one message
+~/communication/email/<account>/<YYYY>/<MM>/<DD>/<thread-slug>.prev   -> parent message
+~/communication/email/<account>/threads/<thread-slug>/...            chronological index
+~/communication/email/<account>/meta.yaml                            account info
+~/communication/email/drafts/                                        drafts you write
 ```
 
 `~/drafts/` is a shortcut to `~/communication/email/drafts/` — **one
-shared dir, not per-account**. The `from:` field on the yaml picks
-which Mail.app account owns the saved draft.
+shared dir, not per-account**. The `from:` field on the yaml picks which
+Mail.app account owns the saved draft.
 
 A message yaml looks like:
 
 ```yaml
 message_id: <...@mail.example.com>
+in_reply_to: <parent@example.com>
+references:
+- <root@example.com>
+- <parent@example.com>
 thread_slug: re-q3-budget-a9582e42
 from: bob@example.com
 from_name: Bob
 to:
 - owner@example.com
 cc: []
+bcc: []
 subject: "Re: Q3 budget"
 direction: inbound
-received_at: '2026-05-10T18:19:52-07:00'
 content: |
   Hey — can you confirm the Q3 numbers by Friday?
+body_state: present      # `absent` = header-only stub; Mail.app evicted the body
+received_at: '2026-05-10T18:19:52-07:00'
 ```
+
+**`body_state`** is the one field unique to email. `present` means the
+full body is in `content`. `absent` means this is a header-only **stub**
+written when Mail.app no longer had the `.emlx` body on disk — every
+header is real and accurate, but `content` is empty. Treat a stub as a
+genuine message you can see metadata for but can't quote the body of.
+
+# Listing and searching — `inbox` + `rg`
+
+**Reach for `inbox` first** for "what's in the inbox / backlog" questions.
+It is count-first and bounded — it never floods you:
+
+```sh
+inbox                       # today, all accounts, counts + recent sample
+inbox --since 7d            # last 7 days
+inbox --since 2026-06-01
+inbox --day 2026-06-25 --account icloud
+inbox --direction inbound --limit 30
+```
+
+For detail or full-text search, `rg` the date globs directly. The tree
+layout makes scoping trivial, and `rg` prints only matching lines (never
+whole files):
+
+```sh
+# Everyone who wrote today, with subjects (one account or all):
+rg --no-heading '^(from|subject):' communication/email/*/2026/06/25/
+
+# Count messages on a day / in a month:
+rg -c '^message_id:' communication/email/*/2026/06/25/ | awk -F: '{s+=$2} END{print s}'
+rg -l '^message_id:' communication/email/*/2026/06/ | wc -l
+
+# Find a sender across the whole archive:
+rg -l '^from: .*bob@example.com' communication/email/
+
+# Dedup / existence check for a specific Message-ID:
+rg -l 'message_id: <abc@example.com>' communication/email/
+
+# Header-only stubs only (no body available):
+rg -l '^body_state: absent' communication/email/*/2026/06/
+```
+
+Keep output bounded: prefer `-c`/`-l` and a date scope over dumping a
+whole month. There is **no `mailsearch` for email** — the archive is
+complete, so `inbox` + `rg` answer everything; don't shell out to
+`mailsearch`.
 
 # Events you wake on
 
-- **`email:new`** — read the yaml at `payload.path`, decide whether
-  to stay silent, draft a reply, or surface to the owner. Event paths should
-  be home-view paths (`communication/email/...`). If an older/stale runtime
+- **`email:new`** — read the yaml at `payload.path`, decide whether to
+  stay silent, draft a reply, or surface to the owner. Event paths are
+  home-view paths (`communication/email/...`). If an older/stale runtime
   emits `var/spool/communication/email/...`, read it as
   `/var/spool/communication/email/...` or rewrite it to
   `communication/email/...` before treating it as missing.
-- **`email:backlog`** — brief recap to the owner thread, grouped by
-  account. Each account bucket carries `count`, `last_subject`, and
-  `subjects` (every subject in that account's backlog) — recap from the
-  full `subjects` list, not just `last_subject`. Don't draft from backlog.
+- **`email:backlog`** — the kernel booted and found mail it missed.
+  Each account bucket carries `count`, `last_subject`, a capped
+  `sample_subjects`, and the account's `since`. Give a brief recap to the
+  owner thread grouped by account. For the **full** list run
+  `inbox --since <event.since>` or `rg` the date dirs — don't try to put
+  every subject in the event. Don't draft from backlog.
 - **`email:draft_failed`** — read `draft_error` on the yaml at
   `payload.path`. Trivial fix → patch the yaml and clear
   `draft_state`/`draft_error`. Anything else → surface to the owner.
@@ -142,10 +204,12 @@ content: |
 **Threading.** Copy parent's `message_id` → your `in_reply_to`. Copy
 parent's `references` and append parent's `message_id` → your
 `references`. Subject: prepend `Re: ` if not already there. For brand-new
-outbound (not a reply), omit `in_reply_to` and `references`.
+outbound (not a reply), omit `in_reply_to` and `references`. A stub
+(`body_state: absent`) still has accurate `message_id`/`references`, so
+you can thread a reply off it even without the body.
 
-**`from:` discipline.** Use the canonical address of the account dir
-the parent lives in (`~/communication/email/<account>/...`) — that
+**`from:` discipline.** Use the canonical address of the account dir the
+parent lives in (`~/communication/email/<account>/...`) — that
 `<account>` is your `from:`. Never read the parent's `to:` header; it
 often contains a Hide-My-Email relay or forwarder that Mail.app rejects
 as a sender. The driver validates `from:` at boot and rejects unknowns
@@ -162,25 +226,3 @@ nested mapping and silently breaks the draft.
   synced yet; driver retries with backoff. Wait.
 - `draft_state: failed` + `draft_error` — terminal; `email:draft_failed`
   fires.
-
-# Searching old mail
-
-`mailsearch` searches two sources and merges them, deduped by Message-ID
-(newest first): the on-disk yaml archive under
-`~/communication/email/<account>/...` (everything already ingested —
-including mail Mail.app has since deleted; works even with Mail.app
-closed) **and** Mail.app's full index for anything older than the
-driver's ingest window. Index hits are materialized as yamls in the same
-tree, ready to read or reply to. `--unread`/`--flagged` are live-state
-filters, so they search the Mail.app index only.
-
-```
-mailsearch --from bob@example.com --limit 10
-mailsearch --subject "Q3 budget" --since 2025-01-01
-mailsearch --to owner@icloud.com --account owner@work.example --unread
-mailsearch --flagged --since 2024-06-01
-```
-
-At least one of `--from`, `--to`, `--subject`, or `--since` is
-required. Default limit 20, max 200. Re-running on the same hit is
-idempotent.

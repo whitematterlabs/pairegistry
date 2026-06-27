@@ -62,7 +62,7 @@ wake_on:
   - email:draft_failed
 deps:
   - email          # driver
-  - mailsearch     # bin
+  - inbox          # bin
 home:
   links:
     - link: communication/email

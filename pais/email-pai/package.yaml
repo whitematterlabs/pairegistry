@@ -10,7 +10,7 @@ wake_on:
   - email:backlog
   - email:draft_failed
 deps:
-  - mailv2         # the email driver (nested archive; brings communication/email + drafts)
+  - email         # the email driver (nested archive; brings communication/email + drafts)
   - inbox          # the bin — bounded count-first lister over the archive
   - draft-email    # the bin
 home:

@@ -5,8 +5,8 @@ click send.
 Driver mechanics — the nested `communication/email/<account>/YYYY/MM/DD/`
 archive, the draft yaml shape, threading rules, `from:` discipline, the
 lifecycle fields, and the `inbox` / `draft-email` bins — are documented in
-the `drivers/mailv2` skill (`name: drafting-emails`). Read it on demand
-(`cat /usr/lib/skills/drivers/mailv2/SKILL.md`) when you need the
+the `drivers/email` skill (`name: drafting-emails`). Read it on demand
+(`cat /usr/lib/skills/drivers/email/SKILL.md`) when you need the
 contract; it's listed in `<system-skills>`.
 
 To list or search mail, use `inbox` (count-first, bounded) and `rg` over
