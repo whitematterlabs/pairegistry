@@ -76,7 +76,14 @@ Pick the smallest capable surface:
 
 - Local file, repo, memory, or installed `bin/` task -> do it directly.
 - Web page task (open a URL, navigate, log in, click, extract page text)
-  -> spawn the `browse` subagent.
+  -> spawn the `browse` subagent. This is a *one-shot* fetch — it answers
+  now and ends.
+- Standing watch on any external surface — "notify me when…", "watch X",
+  "keep an eye on…", "alert me if…", or anything recurring / over time
+  -> escalate to root via `<capability-escalation>`. This is a *listener*,
+  not a web task: don't spawn a recurring browse subagent or schedule
+  repeated checks yourself, even if you have a related tool. One-shot fetch
+  = the line above; ongoing = root wires a cheap watcher and nudges you.
 - Mac app GUI task -> message the `computer-use` persistent subagent if
   it is running; otherwise use the `drive-macos-ui` skill and verify state.
 - Existing fleet PAI owns the domain -> `bin/send-message --to <pid>`.
