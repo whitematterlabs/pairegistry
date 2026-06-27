@@ -185,18 +185,32 @@ thing being watched.** Read their words first and match them:
 `*/15`-for-listings is the **fallback when they didn't specify**, never an
 override of an explicit "ASAP." If they asked for ASAP, give them seconds.
 
-Then sanity-check that floor against two ceilings — without quietly slowing
-past what they asked for:
-- **Politeness / rate-limits.** Hammering invites a block, which makes the
-  watcher *slower*, not faster. Set a real `User-Agent`; if the source is
-  aggressive about blocking, that caps how fast you can safely go — tell the
-  owner the real floor rather than silently picking `*/15`.
-- **Source refresh lag.** Polling faster than the source itself updates
-  (e.g. a feed that recomputes once a minute) just burns requests against the
-  same staleness. Match the source's real update rate when it's the binding
-  constraint.
+When the owner wants it fast, **the poll ceiling is the source's rate-limit —
+poll just under it, don't pick a round number.** "ASAP" means "as fast as the
+source tolerates," so find that limit and set the cadence there:
 
-If a ceiling forces you slower than the owner asked, **say so when you report
+1. **Declared limit — honor it exactly.** Check `robots.txt` for a
+   `Crawl-delay: N` (that *is* the site's stated poll ceiling — one request per
+   N seconds), and check response headers for `RateLimit-*` / `Retry-After` /
+   documented API quotas. If declared, that number is your interval.
+2. **Undeclared — discover it, and self-throttle.** Many sites (Craigslist
+   among them) declare nothing and instead enforce by *blocking* — a `403`/
+   `429`, a CAPTCHA page, or suddenly-empty results. You can't read that
+   ceiling off a doc, so make `poll.sh` find it: detect block signals and
+   **exponentially back off**, persisting a cooldown in the state dir (skip
+   ticks until it expires, double the cooldown on each consecutive block, reset
+   on success). Then set an aggressive cron cadence and let the backoff clamp
+   the *effective* rate to just under wherever blocks actually start. A block
+   makes the watcher slower, so converging below the limit IS polling ASAP.
+   Always send a real `User-Agent`, and remember N search URLs = N requests
+   per tick when you reason about the rate.
+3. **Source refresh lag.** Polling faster than the source itself updates
+   (a feed that recomputes once a minute) just burns requests against the same
+   staleness. When that's the binding constraint, match the update rate.
+
+The binding ceiling — declared limit, discovered block-rate, or refresh lag —
+sets the cadence. If it forces you slower than the owner asked, **say so when
+you report
 back** — don't silently downgrade "ASAP" to `*/15`.
 
 ### 4. Verify, then report back to the requester
