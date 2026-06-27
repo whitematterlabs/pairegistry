@@ -68,9 +68,22 @@ Hunt, in order of preference:
    body — if no feed exists.
 
 Decide the **predicate**:
-- *new-item* — newest id/link/title differs from last-seen (listings, posts).
+- *new-item* — a listing appears that wasn't there before (listings, posts).
 - *threshold* — extracted number crosses a bound (price < X, drop ≥ 5%).
 - *changed* — a hash of the extracted region differs (in-stock, status).
+
+**For a multi-item feed, track item IDs — never a whole-set hash.** The
+tempting shortcut is `md5` over the full result list and fire when it
+changes. Don't: a set hash flips on every reorder and expiry, so you wake on
+churn with nothing actually new, and when you *do* fire you can't say *which*
+item is new — so you dump the entire list every time (the owner sees the same
+wall of listings repeatedly). Instead key each item by a **stable id** (a
+permalink/post token, not the title — titles repeat and get edited), persist
+the set of ids seen on the previous run, and each tick emit only
+`current − previous`. **Empty delta ⇒ stay silent** — that single rule kills
+both the reorder/expiry false-wakes and the batching. Roll the baseline
+forward to `current` each run so expired items self-prune. The note then
+names just the new items, with their links.
 
 Pick a `slug` (kebab, stable, descriptive): `sf-craigslist-bikes`,
 `aapl-drop-5pct`.
