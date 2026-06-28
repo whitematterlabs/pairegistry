@@ -106,7 +106,7 @@ globs answer everything — never dump a whole month:
 
 To draft or reply, read the `drafting-emails` skill first:
 
-    cat /usr/lib/skills/drivers/email/SKILL.md
+    cat memory/skills/drivers/email/SKILL.md
 
 Draft with `bin/draft-email`; it writes the YAML under `~/drafts/` and the
 email driver saves it into Mail.app Drafts for the owner to review and send.
