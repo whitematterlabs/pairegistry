@@ -217,6 +217,36 @@ def _seed_profile_if_needed() -> None:
               "continuing with partial copy", file=sys.stderr)
 
 
+def _disable_autofill_prefs() -> None:
+    """Turn off Chrome autofill + password-manager fill in PAI's profile.
+
+    The profile is seeded from the owner's real Chrome, so it carries their
+    saved addresses and passwords. On a controlled (React/Vue) form Chrome will
+    autofill those over whatever a subagent typed the moment the field gains
+    focus or the form re-renders — clobbering the values. We saw this silently
+    break a signup: the owner's saved password got merged into the password
+    field, pushing it over the length limit and tripping validation, while a
+    typed email was replaced by the owner's saved email. Cookies / logged-in
+    sessions are untouched, so SSO still works. Written while our Chrome is
+    down; Chrome reads Preferences only at launch."""
+    prefs_path = Path(CHROME_PROFILE) / "Default" / "Preferences"
+    try:
+        prefs = json.loads(prefs_path.read_text()) if prefs_path.is_file() else {}
+    except (json.JSONDecodeError, OSError):
+        prefs = {}
+    autofill = prefs.setdefault("autofill", {})
+    autofill["enabled"] = False          # legacy blanket toggle
+    autofill["profile_enabled"] = False  # addresses (name/email/phone)
+    autofill["credit_card_enabled"] = False
+    prefs["credentials_enable_service"] = False     # password manager fill/save
+    prefs["credentials_enable_autosignin"] = False
+    try:
+        prefs_path.parent.mkdir(parents=True, exist_ok=True)
+        prefs_path.write_text(json.dumps(prefs))
+    except OSError as e:
+        print(f"[browse] could not disable autofill prefs: {e}", file=sys.stderr)
+
+
 def _ensure_chrome() -> None:
     """Ensure PAI's own Chrome is up with CDP on CDP_PORT — and that whatever
     answers there is actually ours.
@@ -243,6 +273,7 @@ def _ensure_chrome() -> None:
     if not Path(CHROME_APP_BIN).is_file():
         sys.exit(f"browse: Chrome not found at {CHROME_APP_BIN}")
     _seed_profile_if_needed()
+    _disable_autofill_prefs()
     subprocess.Popen(
         [
             CHROME_APP_BIN,
@@ -252,6 +283,7 @@ def _ensure_chrome() -> None:
             f"--user-data-dir={CHROME_PROFILE}",
             "--no-first-run",
             "--no-default-browser-check",
+            "--disable-features=AutofillServerCommunication",
             "about:blank",
         ],
         stdout=subprocess.DEVNULL,
