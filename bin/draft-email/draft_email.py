@@ -117,7 +117,7 @@ def _wait_for_terminal(path: Path, timeout: float) -> dict[str, Any]:
         data = _load_state(path)
         if data:
             last = data
-        if last.get("draft_state") in {"drafted", "failed"}:
+        if last.get("draft_state") in {"drafted", "sent", "failed"}:
             return last
         time.sleep(0.2)
     return last
@@ -146,7 +146,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="draft-email",
         description=(
-            "Create a Mail.app draft. This writes a draft YAML only; it never sends."
+            "Create a Mail.app draft (default) or send it with --send. Writes a "
+            "draft YAML the macmail-out driver picks up. --send only delivers if "
+            "the owner granted capabilities.email_send; otherwise it's saved as a "
+            "draft."
         ),
     )
     parser.add_argument(
@@ -174,6 +177,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--in-reply-to", help="parent Message-ID; switches the driver to reply mode"
+    )
+    parser.add_argument(
+        "--send",
+        action="store_true",
+        help="set action: send so the driver delivers the message instead of "
+             "saving a draft (subject to the owner's email_send capability)",
     )
     parser.add_argument(
         "--reference",
@@ -231,6 +240,8 @@ def main(argv: list[str] | None = None) -> int:
         draft["in_reply_to"] = args.in_reply_to.strip()
     if references:
         draft["references"] = references
+    if args.send:
+        draft["action"] = "send"
 
     drafts_dir = paths.var_spool_email_drafts()
     path = _unique_path(drafts_dir, _draft_name(args, to_addrs))

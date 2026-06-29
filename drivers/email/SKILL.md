@@ -125,14 +125,20 @@ complete, so `inbox` + `rg` answer everything; don't shell out to
   `payload.path`. Trivial fix → patch the yaml and clear
   `draft_state`/`draft_error`. Anything else → surface to the owner.
 
-# Drafting
+# Drafting and sending
 
-Your job is drafting only. Write draft YAMLs for Mail.app to save in
-Drafts; the owner reviews and sends manually. Do not send email, click
-Send, invoke AppleScript `send`, use SMTP/API sending paths, or treat
-delivery as your responsibility.
+You write draft YAMLs; the macmail-out driver hands them to Mail.app. By
+default it `save`s them to Drafts for the owner to review and send. If a
+draft sets `action: send`, the driver delivers it instead.
 
-Prefer the CLI:
+**Whether you may send is decided by the owner's `email_send` capability,
+stated in your `<capabilities>` block — not by this skill.** When send is
+granted you may set `action: send` at your discretion; when it isn't, the
+driver ignores `action: send` and saves the message as a draft (recording
+`send_blocked`), so nothing leaves the machine. Don't try to bypass this
+with your own AppleScript/SMTP — the driver is the only outbound path.
+
+Prefer the CLI (add `--send` to deliver, omit it to draft):
 
 ```sh
 printf '%s\n' "Hi Alex,

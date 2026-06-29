@@ -43,10 +43,13 @@ up bare lines, sends via Messages.app, then writes the canonical
 `[HH:MM] me: <text>` record itself. Bracketed lines are log entries
 only and never get sent. Create today's file if it doesn't exist.
 
-If `~/.pai/sys/drivers/imessage/outbound.freeze` exists, outbound sends
-are frozen. The driver consumes attempted bare lines, appends a
-`kernel: send frozen` note, emits `imessage:send_failed`, and does not
-call Messages.app. Do not retry frozen sends.
+Whether you may send is decided by the owner's `imessage_send` capability,
+stated in your `<capabilities>` block. The kernel enforces it via a freeze
+file: when send isn't granted, `~/.pai/sys/drivers/imessage/outbound.freeze`
+exists and the driver consumes attempted bare lines, appends a
+`kernel: send frozen` note, emits `imessage:send_failed`, and does not call
+Messages.app. If your `<capabilities>` block says iMessage is read-only,
+don't attempt sends; never retry a frozen send.
 
 ```
 echo "thurs after 6 works" >> ~/messages/<thread>/<today>.md

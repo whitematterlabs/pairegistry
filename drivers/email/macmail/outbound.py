@@ -1,24 +1,31 @@
-"""macOS Mail.app outbound driver — drafts only (v1).
+"""macOS Mail.app outbound driver — draft or send.
 
 Watches `var/spool/communication/email/drafts/*.yaml` (single shared dir,
 not per-account). Each draft yaml carries a required `from:` field naming
-the Mail.app account that should own the draft. When PAI writes a draft,
-this driver hands it to Mail.app via AppleScript `save` (NOT `send`) —
-the draft lands in Mail's Drafts folder under the right account and Arda
-reviews + sends manually.
+the Mail.app account that should own the message.
 
-v1 deliberately does not autosend. Even a hallucinated recipient or
-content can't leave the machine without a human click. Autosend is a v2
-problem.
+By default a yaml is handed to Mail.app via AppleScript `save` — it lands in
+Mail's Drafts folder under the right account and the owner reviews + sends
+by hand. If the yaml sets `action: send`, the driver instead uses AppleScript
+`send` and the message leaves the machine.
+
+Sending is gated by a freeze (mirrors the imessage driver), the hard
+enforcement boundary for the owner's `capabilities.email_send` grant:
+  - env `PAI_EMAIL_SENDS_FROZEN` (truthy) — wins if set; else
+  - file `~/.pai/sys/drivers/email/outbound.freeze` exists → frozen.
+When frozen, an `action: send` yaml is NOT sent — it's saved as a draft
+instead (defense in depth even if a prompt is stale), with `send_blocked`
+recording why. The kernel writes/removes the freeze from `capabilities:`.
 
 Lifecycle (`draft_state` field):
   - missing / "pending"        → re-evaluate on next event
   - "pending_parent"           → reply parent not found yet; retry with backoff
   - "drafted"                  → terminal success; saved to Mail's Drafts
+  - "sent"                     → terminal success; delivered via Mail.app
   - "failed"                   → terminal failure; draft_error explains why
 
 Boot-time scan and watchdog events are equivalent — both trigger
-"look at this file, draft it if it has no terminal state yet".
+"look at this file, draft/send it if it has no terminal state yet".
 """
 
 from __future__ import annotations
@@ -42,6 +49,39 @@ from . import accounts as A
 
 EMAIL_ROOT = paths.var_spool_email()
 DRAFTS_DIR = paths.var_spool_email_drafts()
+
+# Outbound send freeze — the enforcement boundary for capabilities.email_send.
+# Same contract as the imessage driver: env wins if set, else file-existence.
+STATE_DIR = paths.PAI_ROOT / "sys" / "drivers" / "email"
+FREEZE_PATH = STATE_DIR / "outbound.freeze"
+FREEZE_ENV = "PAI_EMAIL_SENDS_FROZEN"
+
+
+def _truthy(value: str) -> bool:
+    return value.strip().lower() not in {"", "0", "false", "no", "off"}
+
+
+def _sends_frozen() -> bool:
+    env = os.environ.get(FREEZE_ENV)
+    if env is not None:
+        return _truthy(env)
+    return FREEZE_PATH.exists()
+
+
+def _freeze_reason() -> str:
+    env = os.environ.get(FREEZE_ENV)
+    if env is not None:
+        source = f"${FREEZE_ENV}"
+        detail = env.strip()
+    else:
+        source = str(FREEZE_PATH)
+        try:
+            detail = FREEZE_PATH.read_text(encoding="utf-8").strip().splitlines()[0]
+        except (FileNotFoundError, IndexError, OSError):
+            detail = ""
+    if detail:
+        return f"email sends frozen by {source}: {detail}"
+    return f"email sends frozen by {source}"
 
 
 # Reply retry schedule (seconds). Mail may not have synced the parent
@@ -95,7 +135,7 @@ def _esc(s: str) -> str:
     return s.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def _build_new_message_script(account: str, draft: dict) -> str:
+def _build_new_message_script(account: str, draft: dict, *, send: bool = False) -> str:
     sender = _esc(account)
     subject = _esc(str(draft.get("subject") or ""))
     content = _esc(str(draft.get("content") or ""))
@@ -112,7 +152,11 @@ def _build_new_message_script(account: str, draft: dict) -> str:
         recipients.append(f'  make new bcc recipient at end of bcc recipients with properties {{address:"{a}"}}')
     recipients_block = "\n".join(recipients)
 
-    # `sender` pins which Mail account owns the draft. Without it, Mail
+    # `save` keeps it in Drafts; `send newMsg` delivers it. The send verb runs
+    # after the recipients are attached, outside the inner `tell newMsg` block.
+    tail = '  end tell\n  send newMsg\n' if send else '    save\n  end tell\n'
+
+    # `sender` pins which Mail account owns the message. Without it, Mail
     # falls back to the default account regardless of where the yaml lives.
     return (
         'tell application "Mail"\n'
@@ -120,24 +164,24 @@ def _build_new_message_script(account: str, draft: dict) -> str:
         f'{{sender:"{sender}", subject:"{subject}", content:"{content}", visible:false}}\n'
         '  tell newMsg\n'
         f'{recipients_block}\n'
-        '    save\n'
-        '  end tell\n'
+        f'{tail}'
         'end tell'
     )
 
 
-def _build_reply_script(account: str, draft: dict) -> str:
-    """Reply-shaped draft. Locates the parent by Message-ID and uses Mail's
-    `reply` to inherit threading + recipients, then saves to Drafts.
+def _build_reply_script(account: str, draft: dict, *, send: bool = False) -> str:
+    """Reply-shaped message. Locates the parent by Message-ID and uses Mail's
+    `reply` to inherit threading + recipients, then saves to Drafts (or sends).
 
     Note: macOS 15 (Sequoia) dropped the `opens window` parameter on `reply`
     — earlier versions accepted `without opens window` to keep the reply
     hidden, but that now errors with -2741. Reply window will briefly flash;
-    we close it after `save`.
+    we close it after `save`/`send`.
     """
     sender = _esc(account)
     parent = _esc(str(draft.get("in_reply_to") or ""))
     content = _esc(str(draft.get("content") or ""))
+    verb = "send replyMsg" if send else "save replyMsg"
     return (
         'tell application "Mail"\n'
         '  set parentMsgs to {}\n'
@@ -154,7 +198,7 @@ def _build_reply_script(account: str, draft: dict) -> str:
         '  set replyMsg to reply parentMsg\n'
         f'  set sender of replyMsg to "{sender}"\n'
         f'  set content of replyMsg to "{content}"\n'
-        '  save replyMsg\n'
+        f'  {verb}\n'
         '  try\n'
         '    close (every window whose name starts with "Re:")\n'
         '  end try\n'
@@ -225,10 +269,10 @@ async def _process(path: Path) -> None:
         return
     if draft is None:
         return
-    # `draft_state`: "drafted" / "failed" are terminal — never re-process.
-    # "pending_parent" is transient; the retry timer re-enqueues it.
+    # `draft_state`: "drafted" / "sent" / "failed" are terminal — never
+    # re-process. "pending_parent" is transient; the retry timer re-enqueues it.
     state = draft.get("draft_state")
-    if state in ("drafted", "failed"):
+    if state in ("drafted", "sent", "failed"):
         return
     if not draft.get("to") and not draft.get("in_reply_to"):
         # Nothing actionable yet (PAI may still be writing).
@@ -250,10 +294,31 @@ async def _process(path: Path) -> None:
         )
         return
 
-    if draft.get("in_reply_to"):
-        script = _build_reply_script(account, draft)
+    # Send only when the yaml explicitly opts in AND sends aren't frozen. A
+    # frozen send is not an error — it falls back to a draft (the message still
+    # lands safely in Drafts), with `send_blocked` recording why so a stale
+    # prompt can't silently leak mail. `send_blocked` is cleared on a real draft.
+    want_send = str(draft.get("action") or "").strip().lower() == "send"
+    do_send = False
+    if want_send:
+        if _sends_frozen():
+            reason = _freeze_reason()
+            draft["send_blocked"] = reason
+            print(
+                f"[email-out] send requested but frozen — saving as draft "
+                f"({account}/{path.name}): {reason}",
+                flush=True,
+            )
+        else:
+            do_send = True
+            draft.pop("send_blocked", None)
     else:
-        script = _build_new_message_script(account, draft)
+        draft.pop("send_blocked", None)
+
+    if draft.get("in_reply_to"):
+        script = _build_reply_script(account, draft, send=do_send)
+    else:
+        script = _build_new_message_script(account, draft, send=do_send)
 
     code, err = await _run_osascript(script)
     if code != 0:
@@ -278,12 +343,18 @@ async def _process(path: Path) -> None:
         _mark_failed(path, draft, account, reason)
         return
 
-    draft["draft_state"] = "drafted"
+    draft["draft_state"] = "sent" if do_send else "drafted"
     draft.pop("draft_error", None)
     draft.pop("draft_retries", None)
-    draft["drafted_at"] = datetime.now().isoformat(timespec="seconds")
-    _atomic_dump(path, draft)
-    print(f"[email-out] drafted to Mail.app: {account}/{path.name}", flush=True)
+    stamp = datetime.now().isoformat(timespec="seconds")
+    if do_send:
+        draft["sent_at"] = stamp
+        _atomic_dump(path, draft)
+        print(f"[email-out] sent via Mail.app: {account}/{path.name}", flush=True)
+    else:
+        draft["drafted_at"] = stamp
+        _atomic_dump(path, draft)
+        print(f"[email-out] drafted to Mail.app: {account}/{path.name}", flush=True)
 
 
 # ---------- retry scheduling ----------------------------------------------
