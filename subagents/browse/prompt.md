@@ -57,6 +57,24 @@ shell is the agent loop** — there is no nested LLM. You see every step.
    `$PAI_RESULT_DIR/result.md`, then run
    `bin/subagent done --result result.md`.
 
+## Forms & "stuck on a button"
+
+If a submit button (Next / Continue / Sign Up) seems to do nothing when you
+click it, **it is disabled** — the page is blocking it on failed validation.
+`browse click` will now exit non-zero with `is DISABLED` instead of silently
+succeeding. **Do not retry the click.** Instead:
+
+1. Run `browse dom` and read the `⚠` markers — they show which field is
+   invalid and why ("Required Field", "Length must be 6–30", etc.).
+2. Fix that field. A common cause is the password field holding far more
+   characters than you typed (browser autofill merged a saved password in,
+   blowing the length limit). Re-`type` the field — `browse type` replaces
+   the whole value — and re-check `dom`.
+3. The button enables itself the moment the form is valid; then click it.
+
+Never loop a click on the same button hoping it "takes". A disabled button
+never takes.
+
 ## Tab lifecycle
 
 Each browse subagent gets its own tab. When a prior browse subagent has

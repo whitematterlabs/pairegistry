@@ -776,9 +776,19 @@ def cmd_dom(args: argparse.Namespace) -> int:
 
 
 def _click_expr(idx: int) -> str:
+    # A disabled <button>/<input> (el.disabled) or an aria-disabled control
+    # swallows el.click() silently — the handler never fires. Without this
+    # guard cmd_click would print "clicked N → <same url>" and the subagent
+    # would loop forever on a button the page is deliberately blocking (the
+    # classic "stuck on Next" while a form is still invalid). Report DISABLED
+    # so the caller stops and fixes the inputs instead. We check only the
+    # semantic disabled markers, not CSS pointer-events/opacity, since a
+    # programmatic el.click() bypasses those and would still work.
     return (
         f"(() => {{const el = document.querySelector('[data-pai-idx=\"{idx}\"]');"
         f"if (!el) return 'NOT_FOUND';"
+        f"if (el.disabled === true || el.getAttribute('aria-disabled') === 'true')"
+        f"  return 'DISABLED:' + el.tagName;"
         f"el.scrollIntoView({{block:'center'}});"
         f"el.click();"
         f"return 'OK:' + (el.tagName) + ':' + (el.getAttribute('href')||'');}})()"
@@ -800,6 +810,15 @@ def cmd_click(args: argparse.Namespace) -> int:
         val = r.get("result", {}).get("value", "")
         if val == "NOT_FOUND":
             sys.exit(f"browse: idx {args.idx} not found in current DOM")
+        if isinstance(val, str) and val.startswith("DISABLED"):
+            sys.exit(
+                f"browse: idx {args.idx} is DISABLED — the page is blocking this "
+                f"button, so the click did nothing. This is almost always failed "
+                f"form validation. Do NOT retry the click. Run `browse dom` and "
+                f"read the ⚠ markers for the invalid fields, fix those inputs "
+                f"(e.g. a password over the length limit, a missing/duplicate "
+                f"field), and the button enables itself once the form is valid."
+            )
         # Click may have navigated; wait briefly for readyState
         time.sleep(0.3)
         for _ in range(40):
