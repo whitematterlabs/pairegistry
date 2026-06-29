@@ -168,6 +168,48 @@ def test_ingest_row_stub_writes_nested_and_dedups_via_seen(tmp_path, monkeypatch
     assert len(files2) == 1
 
 
+def test_prepare_then_persist_matches_ingest_and_is_picklable(tmp_path, monkeypatch):
+    """The backfill parallelizes the parse half (`_prepare_*`, run in a worker
+    process) and serializes the write half (`_persist_prepared`). The prepared
+    bundle must be picklable (it crosses the process boundary) and the two-step
+    path must produce the same yaml as the single-call `ingest_row_stub`."""
+    import pickle
+
+    monkeypatch.setattr(inbound.paths, "PAI_ROOT", tmp_path)
+    cfg = _stub_cfg()
+    rec = {
+        "rowid": 11,
+        "url": "imap://UUID/INBOX",
+        "date_received": _epoch(2026, 6, 26),
+        "date_sent": _epoch(2026, 6, 26),
+        "conversation_id": 2,
+        "from_address": "carol@x.com",
+        "from_name": "Carol",
+        "to": ["owner@example.com"],
+        "cc": [],
+        "references": [],
+        "subject": "Split path",
+        "message_id": "<split@x>",
+    }
+
+    prep = inbound._prepare_stub(rec, cfg)
+    assert prep is not None and not prep.get("_skip")
+    # Survives the process boundary (ProcessPoolExecutor pickles worker results).
+    prep = pickle.loads(pickle.dumps(prep))
+
+    seen: dict = {}
+    res = inbound._persist_prepared(prep, seen=seen, stub=True)
+    assert res and res.get("_stub") and res["_created"] is True
+    assert "<split@x>" in seen
+
+    acc_root = tmp_path / "var" / "spool" / "communication" / "email" / "owner@example.com"
+    files = list(acc_root.glob("[0-9][0-9][0-9][0-9]/[0-9][0-9]/[0-9][0-9]/*.yaml"))
+    assert len(files) == 1
+    body = yaml.safe_load(files[0].read_text())
+    assert body["message_id"] == "<split@x>"
+    assert body["body_state"] == "absent"
+
+
 # ---------- bounded backlog buckets ----------------------------------------
 
 def test_bump_bucket_caps_samples_and_tracks_earliest():

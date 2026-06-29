@@ -29,9 +29,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sqlite3
 import sys
 import time
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Optional
 from urllib.parse import unquote, urlparse
@@ -46,7 +48,51 @@ from . import inbound as IN
 
 
 PROGRESS_PATH = IN.PARKED_DIR / "backfill_progress.yaml"
-CHECKPOINT_EVERY = 500
+# Rows handed to the pool per checkpoint window. Bounds peak memory (each
+# in-flight bundle holds one parsed message body) and gives a natural
+# resume granularity — the checkpoint advances once per batch.
+BATCH_ROWS = 2000
+
+
+# ---------- parallel prepare (process pool) --------------------------------
+
+_WORKER_CFG: Optional[A.AccountsConfig] = None
+
+
+def _worker_init() -> None:
+    """Pool-worker bootstrap. Loads the account config from disk once per
+    worker (the parent's `A.refresh()` already persisted it) so we never
+    pickle `AccountsConfig` across the process boundary."""
+    global _WORKER_CFG
+    _WORKER_CFG = A.load()
+
+
+def _prepare_one(rec: dict) -> dict:
+    """Process-pool worker: parse one enriched row into a persist bundle.
+
+    Does the expensive, disk-write-free half (emlx read + MIME/HTML parse, or
+    a header-only stub when the body is gone). Tags the bundle with `_kind` so
+    the serial persist step knows how to count it. Never touches `seen` or the
+    output tree — that stays single-threaded in the parent."""
+    cfg = _WORKER_CFG
+    prep = IN._prepare_full(rec, cfg)
+    if prep is None:
+        # body unavailable → header-only stub (mirrors the serial fallback)
+        prep = IN._prepare_stub(rec, cfg)
+        if prep is None or prep.get("_skip"):
+            return {"_kind": "skip", "rowid": rec["rowid"]}
+        prep["_kind"] = "stub"
+        return prep
+    if prep.get("_skip"):
+        return {"_kind": "skip", "rowid": rec["rowid"]}
+    prep["_kind"] = "full"
+    return prep
+
+
+def _resolve_workers(args: argparse.Namespace) -> int:
+    if getattr(args, "workers", 0):
+        return max(1, int(args.workers))
+    return max(2, min(8, (os.cpu_count() or 4) - 1))
 
 
 # ---------- progress checkpoint --------------------------------------------
@@ -256,50 +302,76 @@ def run_backfill(args: argparse.Namespace) -> int:
     last_rowid = resume_from
     t0 = time.monotonic()
 
-    for i, row in enumerate(rows, 1):
-        rec = _enrich(row, recips, refs)
-        rowid = rec["rowid"]
-        mid = (rec["message_id"] or "").strip()
-
-        if mid and mid in seen:
-            stats["skipped"] += 1
-            last_rowid = rowid
-            continue
-
-        if args.dry_run:
+    if args.dry_run:
+        for row in rows:
+            rec = _enrich(row, recips, refs)
+            mid = (rec["message_id"] or "").strip()
+            if mid and mid in seen:
+                stats["skipped"] += 1
+                continue
             stats["full" if _emlx_present(rec, cfg) else "stub"] += 1
-            last_rowid = rowid
-            continue
+        elapsed = time.monotonic() - t0
+        print(f"[backfill] DRY RUN done in {elapsed:.1f}s: "
+              f"full={stats['full']} stub={stats['stub']} skipped={stats['skipped']} "
+              f"error={stats['error']}", flush=True)
+        return 0
 
+    workers = _resolve_workers(args)
+    print(f"[backfill] parsing across {workers} worker(s)", flush=True)
+
+    def _persist(prep: dict) -> None:
+        """Serial persist of one prepared bundle. Single-threaded: it mutates
+        `seen` and resolves slug collisions / parent `.prev` links against the
+        on-disk tree, so it must stay in the parent and run in ROWID order."""
+        kind = prep.get("_kind")
+        if kind == "skip":
+            stats["error"] += 1
+            return
         try:
-            result = IN.ingest_row(rec, cfg, seen=seen)
-            kind = "full"
-            if result is None:
-                result = IN.ingest_row_stub(rec, cfg, seen=seen)
-                kind = "stub"
-            if result is None or result.get("_skip"):
+            payload = IN._persist_prepared(prep, seen=seen, stub=(kind == "stub"))
+            if payload is None or payload.get("_skip"):
                 stats["error"] += 1
             else:
                 stats[kind] += 1
         except Exception as e:  # one bad row must not abort the whole rebuild
-            print(f"[backfill] error rowid={rowid}: {e!r}", file=sys.stderr, flush=True)
+            print(f"[backfill] error rowid={prep.get('rowid')}: {e!r}",
+                  file=sys.stderr, flush=True)
             stats["error"] += 1
 
-        last_rowid = rowid
-        if not args.dry_run and i % CHECKPOINT_EVERY == 0:
+    i = 0
+    # Process pool parses (emlx read + MIME/HTML parse) in parallel; the parent
+    # persists each batch serially in ROWID order, preserving every dedup,
+    # slug-collision, and parent-threading invariant of the single-threaded path.
+    with ProcessPoolExecutor(max_workers=workers, initializer=_worker_init) as ex:
+        for start in range(0, total, BATCH_ROWS):
+            batch = rows[start:start + BATCH_ROWS]
+            todo: list[dict] = []
+            for row in batch:
+                rec = _enrich(row, recips, refs)
+                mid = (rec["message_id"] or "").strip()
+                if mid and mid in seen:
+                    stats["skipped"] += 1
+                    continue
+                todo.append(rec)
+
+            # map() preserves input order → persist happens in ROWID order.
+            for prep in ex.map(_prepare_one, todo, chunksize=64):
+                _persist(prep)
+
+            i += len(batch)
+            last_rowid = int(batch[-1]["rowid"])  # rows are ORDER BY ROWID ASC
             _save_progress(last_rowid)
             rate = i / max(time.monotonic() - t0, 1e-6)
             print(f"[backfill] {i}/{total} (full={stats['full']} stub={stats['stub']} "
                   f"skip={stats['skipped']} err={stats['error']}) {rate:.0f}/s", flush=True)
 
-    if not args.dry_run:
-        _save_progress(last_rowid)
-        last, _ = IN._bootstrap_cursor()
-        print(f"[backfill] bootstrapped live cursor to ROWID={last} "
-              "(first email-in start won't re-announce the archive)", flush=True)
+    _save_progress(last_rowid)
+    last, _ = IN._bootstrap_cursor()
+    print(f"[backfill] bootstrapped live cursor to ROWID={last} "
+          "(first email-in start won't re-announce the archive)", flush=True)
 
     elapsed = time.monotonic() - t0
-    print(f"[backfill] {'DRY RUN ' if args.dry_run else ''}done in {elapsed:.1f}s: "
+    print(f"[backfill] done in {elapsed:.1f}s: "
           f"full={stats['full']} stub={stats['stub']} skipped={stats['skipped']} "
           f"error={stats['error']}", flush=True)
     return 0
@@ -315,6 +387,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
                    help="count full vs stub without writing or moving the cursor")
     p.add_argument("--reset", action="store_true",
                    help="clear the resume checkpoint and start from ROWID 0")
+    p.add_argument("--workers", type=int, default=0,
+                   help="parse worker processes (default: CPUs-1, capped 2..8)")
     return p.parse_args(argv)
 
 

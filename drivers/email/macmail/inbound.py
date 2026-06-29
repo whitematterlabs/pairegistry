@@ -415,12 +415,15 @@ def _persist_msg(
     return payload
 
 
-def ingest_row(row, cfg: A.AccountsConfig, *, seen: Optional[dict] = None) -> Optional[dict]:
-    """Process one delta row. Returns an event-payload dict on success or
-    None if we should leave the cursor parked (e.g. partial emlx).
+def _prepare_full(row, cfg: A.AccountsConfig) -> Optional[dict]:
+    """Parse one row's `.emlx` body into a persist-ready bundle — no disk writes.
 
-    Public so the `backfill` tool can reuse the full row-to-yaml pipeline
-    (and fall back to `ingest_row_stub` when this returns None).
+    This is the expensive half of `ingest_row` (emlx resolve + read + MIME/HTML
+    parse) split out so the backfill can run it across a process pool while
+    `_persist_prepared` runs serially. Returns the persist bundle, or None when
+    the body is unavailable (caller parks the cursor / falls back to a stub), or
+    `{"_skip": True}` on an unrecoverable row. The returned dict is picklable
+    (Path + datetime + plain dict) so it crosses process boundaries cleanly.
     """
     rowid = int(row["rowid"])
     url = row["url"] or ""
@@ -466,23 +469,21 @@ def ingest_row(row, cfg: A.AccountsConfig, *, seen: Optional[dict] = None) -> Op
     direction = _direction_for_message(role, msg, cfg, account_uuid, all_mail=all_mail)
     msg_dict = _build_msg_dict(msg, direction, ts, int(row["conversation_id"] or 0))
 
-    account_dir = paths.var_spool_email() / address
-    _ensure_account_meta(account_dir, address, account_uuid)
+    return {
+        "rowid": rowid,
+        "account_dir": paths.var_spool_email() / address,
+        "account_uuid": account_uuid,
+        "address": address,
+        "direction": direction,
+        "ts": ts,
+        "msg_dict": msg_dict,
+    }
 
-    return _persist_msg(account_dir, msg_dict, ts, address, direction, seen=seen)
 
-
-def ingest_row_stub(row, cfg: A.AccountsConfig, *, seen: Optional[dict] = None) -> Optional[dict]:
-    """Header-only ingest for a row whose `.emlx` body is unavailable
-    (Mail.app evicted it, or it was never downloaded).
-
-    `row` is the enriched mapping `_build_stub_msg_dict` documents — the
-    backfill assembles it from the Envelope Index joins. Writes a stub yaml
-    (empty `content`, `body_state: absent`) via the same `write_message_yaml`
-    / `link_thread` / `link_prev` path as a full ingest, so the stub dedups
-    by Message-ID and threads correctly. Returns the same payload shape as
-    `ingest_row` (with `_stub: True`), or `{"_skip": True}`.
-    """
+def _prepare_stub(row, cfg: A.AccountsConfig) -> Optional[dict]:
+    """Build the header-only persist bundle for a row whose `.emlx` body is
+    unavailable. Disk-write-free counterpart of `_prepare_full` for stubs;
+    returns the bundle or `{"_skip": True}`."""
     rowid = int(row["rowid"])
     url = row["url"] or ""
     account_uuid, role = _parse_url(url, cfg)
@@ -504,10 +505,59 @@ def ingest_row_stub(row, cfg: A.AccountsConfig, *, seen: Optional[dict] = None) 
         direction = role
     msg_dict = _build_stub_msg_dict(row, direction, ts, int(row.get("conversation_id") or 0))
 
-    account_dir = paths.var_spool_email() / address
-    _ensure_account_meta(account_dir, address, account_uuid)
+    return {
+        "rowid": rowid,
+        "account_dir": paths.var_spool_email() / address,
+        "account_uuid": account_uuid,
+        "address": address,
+        "direction": direction,
+        "ts": ts,
+        "msg_dict": msg_dict,
+    }
 
-    return _persist_msg(account_dir, msg_dict, ts, address, direction, seen=seen, stub=True)
+
+def _persist_prepared(prep: dict, *, seen: Optional[dict] = None, stub: bool = False) -> dict:
+    """Serial tail: ensure account meta, then write yaml + thread/prev links for
+    a bundle produced by `_prepare_full` / `_prepare_stub`. Must run
+    single-threaded (it mutates `seen` and resolves slug collisions / parents
+    against the on-disk tree)."""
+    _ensure_account_meta(prep["account_dir"], prep["address"], prep["account_uuid"])
+    return _persist_msg(
+        prep["account_dir"], prep["msg_dict"], prep["ts"],
+        prep["address"], prep["direction"], seen=seen, stub=stub,
+    )
+
+
+def ingest_row(row, cfg: A.AccountsConfig, *, seen: Optional[dict] = None) -> Optional[dict]:
+    """Process one delta row. Returns an event-payload dict on success or
+    None if we should leave the cursor parked (e.g. partial emlx).
+
+    Public so the `backfill` tool can reuse the full row-to-yaml pipeline
+    (and fall back to `ingest_row_stub` when this returns None).
+    """
+    prep = _prepare_full(row, cfg)
+    if prep is None:
+        return None
+    if prep.get("_skip"):
+        return {"_skip": True}
+    return _persist_prepared(prep, seen=seen)
+
+
+def ingest_row_stub(row, cfg: A.AccountsConfig, *, seen: Optional[dict] = None) -> Optional[dict]:
+    """Header-only ingest for a row whose `.emlx` body is unavailable
+    (Mail.app evicted it, or it was never downloaded).
+
+    `row` is the enriched mapping `_build_stub_msg_dict` documents — the
+    backfill assembles it from the Envelope Index joins. Writes a stub yaml
+    (empty `content`, `body_state: absent`) via the same `write_message_yaml`
+    / `link_thread` / `link_prev` path as a full ingest, so the stub dedups
+    by Message-ID and threads correctly. Returns the same payload shape as
+    `ingest_row` (with `_stub: True`), or `{"_skip": True}`.
+    """
+    prep = _prepare_stub(row, cfg)
+    if prep is None or prep.get("_skip"):
+        return {"_skip": True}
+    return _persist_prepared(prep, seen=seen, stub=True)
 
 
 # ---------- live + catchup drains ------------------------------------------
