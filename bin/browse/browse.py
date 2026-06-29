@@ -577,14 +577,25 @@ _DOM_TAGGER_JS = r"""
       if (t) { const s = (t.innerText || t.textContent || '').trim(); if (s) parts.push(s); }
     }
     if (parts.length) return parts.join(' ').replace(/\s+/g, ' ').slice(0, 140);
-    const own = ((el.value || '') + ' ' + (el.getAttribute('placeholder') || '') + ' ' +
-                 (el.getAttribute('aria-label') || '')).replace(/\s+/g, ' ').trim();
-    let c = el;
-    for (let i = 0; i < 3 && c.parentElement; i++) {
-      c = c.parentElement;
-      let s = (c.innerText || '').replace(/\s+/g, ' ').trim();
-      if (own) s = s.split(own).join(' ').replace(/\s+/g, ' ').trim();
-      if (s) return s.slice(0, 140);
+    // No explicit ARIA link: find the nearest text-only node (no form controls)
+    // sitting beside the field or its wrapper. This catches a plain
+    // <div class="...error">Required Field</div> next to the input without
+    // grabbing sibling fields the way an ancestor's full innerText would.
+    const textOnly = (node) => {
+      if (!node || !node.querySelector) return '';
+      if (node.querySelector('input,select,textarea,button,a,[role="button"],[role="link"]')) return '';
+      const s = (node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim();
+      return s.length && s.length <= 140 ? s : '';
+    };
+    let node = el;
+    for (let i = 0; i < 3 && node; i++) {
+      let sib = node.nextElementSibling, hops = 0;
+      while (sib && hops < 3) {
+        const t = textOnly(sib);
+        if (t) return t;
+        sib = sib.nextElementSibling; hops++;
+      }
+      node = node.parentElement;
     }
     return '';
   }
