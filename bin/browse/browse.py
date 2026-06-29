@@ -563,6 +563,31 @@ _DOM_TAGGER_JS = r"""
 (() => {
   const sel = 'a, button, input, select, textarea, [role="button"], [role="link"], [role="textbox"], [role="checkbox"], [role="radio"], [onclick], [contenteditable="true"]';
   const els = Array.from(document.querySelectorAll(sel));
+  // Resolve the error message bound to a field flagged aria-invalid, the
+  // standard framework-agnostic marker of an invalid control. Prefer explicit
+  // ARIA linkage; fall back to the nearest container's text minus the field's
+  // own label/placeholder, so a plain <div class="...error"> next to the input
+  // is still picked up without guessing class names.
+  function errText(el) {
+    const ids = (el.getAttribute('aria-errormessage') || el.getAttribute('aria-describedby') || '')
+      .split(/\s+/).filter(Boolean);
+    const parts = [];
+    for (const id of ids) {
+      const t = document.getElementById(id);
+      if (t) { const s = (t.innerText || t.textContent || '').trim(); if (s) parts.push(s); }
+    }
+    if (parts.length) return parts.join(' ').replace(/\s+/g, ' ').slice(0, 140);
+    const own = ((el.value || '') + ' ' + (el.getAttribute('placeholder') || '') + ' ' +
+                 (el.getAttribute('aria-label') || '')).replace(/\s+/g, ' ').trim();
+    let c = el;
+    for (let i = 0; i < 3 && c.parentElement; i++) {
+      c = c.parentElement;
+      let s = (c.innerText || '').replace(/\s+/g, ' ').trim();
+      if (own) s = s.split(own).join(' ').replace(/\s+/g, ' ').trim();
+      if (s) return s.slice(0, 140);
+    }
+    return '';
+  }
   const out = [];
   let n = 0;
   for (const el of els) {
@@ -575,6 +600,8 @@ _DOM_TAGGER_JS = r"""
     let label = (el.getAttribute('aria-label') || el.getAttribute('placeholder') ||
                  el.value || el.innerText || el.textContent || '').trim();
     label = label.replace(/\s+/g, ' ').slice(0, 140);
+    let err = '';
+    if (el.getAttribute('aria-invalid') === 'true') err = errText(el) || 'invalid';
     out.push({
       idx,
       tag: el.tagName.toLowerCase(),
@@ -582,7 +609,8 @@ _DOM_TAGGER_JS = r"""
       role: el.getAttribute('role') || '',
       name: el.getAttribute('name') || '',
       href: el.getAttribute('href') || '',
-      text: label
+      text: label,
+      err: err
     });
   }
   return JSON.stringify(out);
@@ -611,6 +639,53 @@ def _drop_snapshot(slug: str) -> None:
     p = _snap_path(slug)
     if p.exists():
         p.unlink()
+
+
+def _page_text(cdp: "CDP") -> str:
+    """Full visible text of the page (document.body.innerText)."""
+    try:
+        r = _eval_js(cdp, "document.body && document.body.innerText || ''", timeout=10.0)
+        return r.get("result", {}).get("value", "") or ""
+    except Exception:
+        return ""
+
+
+def _current_url(cdp: "CDP") -> str:
+    try:
+        r = _eval_js(cdp, "location.href", timeout=3.0)
+        return r.get("result", {}).get("value", "") or ""
+    except Exception:
+        return ""
+
+
+def _report_new_text(before: str, after: str, limit: int = 12) -> None:
+    """Surface visible text that appeared after an in-page action.
+
+    This is the most markup-agnostic way to catch what a terse "clicked/typed"
+    result hides: validation errors ("Required Field", "Length must be 6–30"),
+    next-step prompts ("enter your age and gender"), toasts — anything new,
+    regardless of CSS class, ARIA, or framework. It's a plain line-diff of
+    innerText, so it needs no per-site selectors. Callers invoke it only when the
+    URL did not change (a same-page mutation); on real navigation the new page is
+    not "new text" worth diffing and `→ url` already says what happened."""
+    if not after or after == before:
+        return
+    before_lines = {ln.strip() for ln in before.splitlines() if ln.strip()}
+    new: list[str] = []
+    seen: set[str] = set()
+    for ln in after.splitlines():
+        s = ln.strip()
+        if not s or s in before_lines or s in seen:
+            continue
+        seen.add(s)
+        new.append(s)
+    if not new:
+        return
+    print("  new on page:")
+    for s in new[:limit]:
+        print(f"    + {s[:200]}")
+    if len(new) > limit:
+        print(f"    … +{len(new) - limit} more new lines (run `browse text`)")
 
 
 # ---------- Verbs ----------
@@ -677,7 +752,11 @@ def cmd_dom(args: argparse.Namespace) -> int:
             text = (it.get("text") or "").strip()
             if not text and it.get("href"):
                 text = it["href"]
-            print(f"  {it['idx']:>3}  {tag:<14} {text}")
+            line = f"  {it['idx']:>3}  {tag:<14} {text}"
+            err = (it.get("err") or "").strip()
+            if err:
+                line += f"  ⚠ {err}"
+            print(line)
         if not items:
             print("(no interactive elements found)")
     finally:
@@ -704,6 +783,8 @@ def cmd_click(args: argparse.Namespace) -> int:
     cdp = CDP(ws_url)
     try:
         cdp.call("Page.enable", timeout=5.0)
+        before_url = _current_url(cdp)
+        before_text = _page_text(cdp)
         r = _eval_js(cdp, _click_expr(args.idx), timeout=10.0)
         val = r.get("result", {}).get("value", "")
         if val == "NOT_FOUND":
@@ -718,6 +799,8 @@ def cmd_click(args: argparse.Namespace) -> int:
         _drop_snapshot(slug)
         _update_tab_after_nav(tab, cdp)
         print(f"clicked {args.idx} → {tab['last_url']}")
+        if _current_url(cdp) == before_url:
+            _report_new_text(before_text, _page_text(cdp))
     finally:
         cdp.close()
     return 0
@@ -753,6 +836,8 @@ def cmd_type(args: argparse.Namespace) -> int:
         if val == "NOT_FOUND":
             sys.exit(f"browse: idx {args.idx} not found in current DOM")
         if args.submit:
+            before_url = _current_url(cdp)
+            before_text = _page_text(cdp)
             cdp.call("Input.dispatchKeyEvent", {
                 "type": "keyDown", "key": "Enter", "code": "Enter",
                 "windowsVirtualKeyCode": 13, "nativeVirtualKeyCode": 13,
@@ -763,7 +848,11 @@ def cmd_type(args: argparse.Namespace) -> int:
             }, timeout=5.0)
             time.sleep(0.4)
             _update_tab_after_nav(tab, cdp)
-        print(f"typed into {args.idx}")
+            print(f"typed into {args.idx}")
+            if _current_url(cdp) == before_url:
+                _report_new_text(before_text, _page_text(cdp))
+        else:
+            print(f"typed into {args.idx}")
     finally:
         cdp.close()
     return 0
@@ -802,12 +891,16 @@ def cmd_press(args: argparse.Namespace) -> int:
     code, vk = _KEYMAP[key]
     cdp = CDP(ws_url)
     try:
+        before_url = _current_url(cdp)
+        before_text = _page_text(cdp)
         params = {"key": code, "code": code, "windowsVirtualKeyCode": vk, "nativeVirtualKeyCode": vk}
         cdp.call("Input.dispatchKeyEvent", {"type": "keyDown", **params}, timeout=5.0)
         cdp.call("Input.dispatchKeyEvent", {"type": "keyUp", **params}, timeout=5.0)
         time.sleep(0.2)
         _update_tab_after_nav(tab, cdp)
         print(f"pressed {code}")
+        if _current_url(cdp) == before_url:
+            _report_new_text(before_text, _page_text(cdp))
     finally:
         cdp.close()
     return 0
