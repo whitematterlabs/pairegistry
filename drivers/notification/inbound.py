@@ -102,7 +102,8 @@ def _load_cursor() -> Optional[int]:
 
 
 def _save_cursor(last_cursor_id: int) -> None:
-    for attempt in range(2):
+    attempts = 5
+    for attempt in range(attempts):
         STATE_DIR.mkdir(parents=True, exist_ok=True)
         tmp = CURSOR_PATH.with_suffix(".yaml.tmp")
         try:
@@ -111,7 +112,10 @@ def _save_cursor(last_cursor_id: int) -> None:
             os.replace(tmp, CURSOR_PATH)
             return
         except FileNotFoundError:
-            if attempt == 1:
+            # Cold-boot race: STATE_DIR can be (re)created/removed by
+            # provisioning concurrently. Re-mkdir and retry; only raise
+            # once we've exhausted attempts.
+            if attempt == attempts - 1:
                 raise
 
 
@@ -697,6 +701,9 @@ class _KqueueWatcher:
 
 
 async def run() -> None:
+    # Establish state dir up front so the first cursor save can't lose a
+    # cold-boot race against provisioning.
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
     try:
         db_path = _find_db()
     except NotificationAccessError as e:
