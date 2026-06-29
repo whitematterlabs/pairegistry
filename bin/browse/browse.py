@@ -561,7 +561,14 @@ def _update_tab_after_nav(tab: dict, cdp: CDP) -> None:
 
 _DOM_TAGGER_JS = r"""
 (() => {
-  const sel = 'a, button, input, select, textarea, [role="button"], [role="link"], [role="textbox"], [role="checkbox"], [role="radio"], [onclick], [contenteditable="true"]';
+  // Include ARIA widget roles (combobox/listbox/option/menu/switch/tab/slider/
+  // spinbutton) and keyboard-focusable [tabindex] divs, not just native
+  // controls. Modern sites build dropdowns and menus from <div role="...">; a
+  // native-tag-only selector renders them invisible to `dom`, which is what
+  // forced an agent to hand-roll a CDP client to click a role="combobox"
+  // gender dropdown. tabindex="-1" is excluded — that's programmatic-only
+  // focus (scroll containers, etc.), not a user-operable control.
+  const sel = 'a, button, input, select, textarea, [role="button"], [role="link"], [role="textbox"], [role="checkbox"], [role="radio"], [role="combobox"], [role="listbox"], [role="option"], [role="menu"], [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="switch"], [role="tab"], [role="slider"], [role="spinbutton"], [onclick], [contenteditable="true"], [tabindex]:not([tabindex="-1"])';
   const els = Array.from(document.querySelectorAll(sel));
   // Resolve the error message bound to a field flagged aria-invalid, the
   // standard framework-agnostic marker of an invalid control. Prefer explicit
@@ -741,6 +748,37 @@ def cmd_text(args: argparse.Namespace) -> int:
         if args.max_chars and len(text) > args.max_chars:
             text = text[: args.max_chars] + f"\n…[truncated, {len(text) - args.max_chars} more chars]"
         print(text)
+    finally:
+        cdp.close()
+    return 0
+
+
+def cmd_eval(args: argparse.Namespace) -> int:
+    # Last-resort escape hatch: run arbitrary JS in your tab. Reach for this
+    # ONLY when `dom` genuinely can't see an element or you need page state the
+    # structured verbs don't expose. Prefer dom/click/type — they keep snapshot
+    # indices and the disabled-button guard, which raw eval bypasses. This runs
+    # in the same CDP tab as every other verb (not an out-of-band client), so it
+    # is the sanctioned alternative to hand-rolling a CDP socket from /tmp.
+    slug = _slug()
+    tab, ws_url = _ensure_tab(slug)
+    cdp = CDP(ws_url)
+    try:
+        r = _eval_js(cdp, args.expr, await_promise=args.await_promise, timeout=args.timeout)
+        exc = r.get("exceptionDetails")
+        if exc:
+            ex = exc.get("exception") or {}
+            msg = ex.get("description") or ex.get("value") or exc.get("text") or str(exc)
+            print(f"JS error: {msg}", file=sys.stderr)
+            return 1
+        result = r.get("result", {})
+        val = result.get("value")
+        if val is None:
+            print(f"(no value: {result.get('type', 'undefined')})")
+        elif isinstance(val, (dict, list)):
+            print(json.dumps(val, indent=2, ensure_ascii=False))
+        else:
+            print(val)
     finally:
         cdp.close()
     return 0
@@ -1160,6 +1198,13 @@ def main(argv: list[str] | None = None) -> int:
     st = sub.add_parser("text", help="print current page innerText")
     st.add_argument("--max-chars", type=int, default=8000)
     st.set_defaults(func=cmd_text)
+
+    sev = sub.add_parser("eval", help="LAST RESORT: run JS in the tab when dom can't see an element")
+    sev.add_argument("expr", help="JavaScript expression to evaluate (its value is printed)")
+    sev.add_argument("--await", dest="await_promise", action="store_true",
+                     help="await a returned Promise before printing")
+    sev.add_argument("--timeout", type=float, default=15.0)
+    sev.set_defaults(func=cmd_eval)
 
     sd = sub.add_parser("dom", help="snapshot + print numbered interactive elements")
     sd.set_defaults(func=cmd_dom)

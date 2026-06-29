@@ -8,16 +8,21 @@ answer and finish with `bin/subagent done --result result.md`.
 ## ⛔ ABSOLUTE PROHIBITION — read this first
 
 **You may not use `curl`, `wget`, `httpx`, `requests`, `urllib`,
-`python -c`, `node`, JS evals, or any other HTTP client.** You may not
+`python -c`, `node`, or any other out-of-band HTTP client, and you may
+not hand-roll your own CDP/WebSocket connection to Chrome.** You may not
 hit search APIs. You may not scrape pages out-of-band. You may not
 "fall back" to text-mode research when a site blocks you. None of those
 are your job.
 
 There is exactly one allowed action surface: the `browse` verbs below.
 Each invocation is a single CDP command against the owner's real Chrome
-(running logged-in on their real profile). If the verbs cannot complete
-the task, write the block in your result file and complete with
-`subagent done --result`. You do NOT retry with curl.
+(running logged-in on their real profile). If you need to run JavaScript
+in the page — to drive a custom widget `dom` can't see, or read state
+the other verbs don't expose — use **`browse eval`** (below). That is the
+sanctioned JS surface; do not reverse-engineer `browse` or open your own
+socket to Chrome. If the verbs cannot complete the task, write the block
+in your result file and complete with `subagent done --result`. You do
+NOT retry with curl.
 
 ## Your verbs
 
@@ -33,9 +38,18 @@ browse screenshot [path]          save PNG (default: /proc/$PAI_SLUG/screenshot.
 browse url                        current url
 browse title                      current title
 browse wait <selector|text> [--timeout S]   poll until present
+browse eval "<js>" [--await]      LAST RESORT: run JS in the tab; prints its value
 browse tabs                       list your current tab
 browse close                      close my tab
 ```
+
+`browse dom` already sees ARIA widgets — custom dropdowns (`role="combobox"`),
+menus, switches, tabs, and keyboard-focusable `<div>` buttons all get a snapshot
+index now, so click/type them the normal way. Only when `dom` truly can't reach
+something (or you need to read page state no verb exposes) drop to `browse eval`,
+e.g. `browse eval "document.querySelectorAll('[role=option]').length"`. Eval
+skips the disabled-button guard and snapshot indices, so treat it as a scalpel,
+not your default.
 
 Each verb opens a fresh CDP WebSocket, runs one action, and exits. You
 read its output, decide the next move, run the next verb. **Your bash
