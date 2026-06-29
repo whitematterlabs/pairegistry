@@ -19,6 +19,23 @@ def _load_browse():
 browse = _load_browse()
 
 
+def test_type_expr_sets_value_via_native_setter_not_direct_assignment():
+    # React (and Vue) wrap an input's `value` with a patched setter backed by an
+    # internal _valueTracker. A direct `el.value = …` runs through that patch and
+    # updates the tracker, so the synthetic `input` event that follows is seen as
+    # "no change" and onChange never fires — the form's state stays empty even
+    # though the DOM shows the typed text. The fix sets value through the native
+    # HTMLInputElement/HTMLTextAreaElement prototype setter, bypassing the tracker.
+    js = browse._type_expr(4, "Arda")
+    # (a) value is written through the native prototype setter.
+    assert "getOwnPropertyDescriptor" in js
+    assert "desc.set.call(el" in js
+    # (b) the value branch must not open with the bare direct assignment (the bug).
+    #     A guarded `else el.value = …` fallback for exotic elements is fine.
+    assert "in el) { el.value =" not in js
+    assert "in el) {el.value =" not in js
+
+
 def test_pai_uses_dedicated_debug_port_not_9222():
     # The conventional Chrome debug port (9222) is what the owner's own Chrome
     # (or an IDE/login item) is most likely to expose. PAI must not share it.

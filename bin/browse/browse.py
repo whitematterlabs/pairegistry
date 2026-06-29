@@ -697,10 +697,16 @@ def _type_expr(idx: int, text: str) -> str:
         f"(() => {{const el = document.querySelector('[data-pai-idx=\"{idx}\"]');"
         f"if (!el) return 'NOT_FOUND';"
         f"el.focus();"
-        f"if ('value' in el) {{ el.value = {payload}; "
+        f"if ('value' in el) {{"
+        f"  const proto = (el instanceof HTMLTextAreaElement)"
+        f"    ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;"
+        f"  const desc = Object.getOwnPropertyDescriptor(proto, 'value');"
+        f"  if (desc && desc.set) desc.set.call(el, {payload});"
+        f"  else el.value = {payload};"
         f"  el.dispatchEvent(new Event('input', {{bubbles:true}})); "
         f"  el.dispatchEvent(new Event('change', {{bubbles:true}})); }}"
-        f"else {{ el.textContent = {payload}; }}"
+        f"else {{ el.textContent = {payload};"
+        f"  el.dispatchEvent(new Event('input', {{bubbles:true}})); }}"
         f"return 'OK';}})()"
     )
 
