@@ -1,0 +1,59 @@
+# Event spec for the approvals (draft & approve) driver.
+#
+# Watches var/spool/approvals/*.yaml — the channel-agnostic queue of outbound
+# actions a PAI proposed (via `propose-send`) under a send capability in
+# `approve` mode. The owner approves/rejects each in the web console; this
+# driver delivers the approved ones through the channel's native send path.
+#
+# Lifecycle (status field):
+#   pending    → awaiting the owner's decision (set by propose-send)
+#   approved   → owner approved (set by the web console) — this driver acts
+#   rejected   → owner rejected — terminal, never sent
+#   dispatched → handed to the channel's send path (email: a token'd send-draft
+#                the macmail-out driver delivers) — terminal for this driver
+#   sent       → delivered directly by this driver (channels it sends inline)
+#   failed     → delivery error — terminal, error explains why
+
+driver: approvals
+description: Owner-gated outbound delivery — proposed sends wait for approval.
+
+processes:
+  - slug: approvals
+    module: drivers.approvals.driver
+    entrypoint: run
+
+events:
+  - kind: approvals:pending
+    description: A new proposed send was queued and awaits the owner's approval.
+    emitted_by: drivers/approvals/driver.py
+    raw_kind: pending
+    payload:
+      id: string
+      channel: string
+      summary: string
+
+  - kind: approvals:dispatched
+    description: An approved item was handed to the channel's native send path.
+    emitted_by: drivers/approvals/driver.py
+    raw_kind: dispatched
+    payload:
+      id: string
+      channel: string
+      draft_ref: string|null
+
+  - kind: approvals:sent
+    description: An approved item was delivered inline by this driver.
+    emitted_by: drivers/approvals/driver.py
+    raw_kind: sent
+    payload:
+      id: string
+      channel: string
+
+  - kind: approvals:failed
+    description: An approved item could not be delivered.
+    emitted_by: drivers/approvals/driver.py
+    raw_kind: failed
+    payload:
+      id: string
+      channel: string
+      reason: string

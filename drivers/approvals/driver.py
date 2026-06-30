@@ -1,0 +1,246 @@
+"""approvals driver — owner-gated outbound delivery (draft & approve).
+
+Watches `var/spool/approvals/*.yaml`. A PAI under a send capability in
+`approve` mode proposes a send with `propose-send` (status: pending); the
+owner approves it in the web console (status: approved); this driver then
+delivers it through the channel's native send path.
+
+Trust model — PAIs are cooperative, not adversarial. The gate stops an
+eager PAI from sending on its own, not a PAI deliberately circumventing via
+raw shell (it runs as the same unix user). The mechanical backstop is the
+per-driver outbound *freeze*, which stays ON in approve mode so the PAI's own
+`action: send` / bare line never leaves. This driver carries an *approved*
+email through that freeze using a secret token it owns under
+`sys/drivers/approvals/grant.token` — written fresh each boot, never exposed
+to a PAI's prompt or home view. Only a record the owner moved to `approved`
+is ever delivered; a PAI is told (via the <capabilities> block) to propose,
+never to approve.
+
+Email reuses the mature macmail-out path: this driver writes a normal
+send-draft carrying the token, and the email driver's send gate honors the
+token even while frozen. Channels added later (iMessage) deliver inline.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import secrets
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+import yaml
+from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
+
+from boot import paths
+from boot import processes as P
+
+
+QUEUE_DIR = paths.var_spool_approvals()
+STATE_DIR = paths.PAI_ROOT / "sys" / "drivers" / "approvals"
+TOKEN_PATH = STATE_DIR / "grant.token"
+
+# Records the owner hasn't decided on yet.
+PENDING = "pending"
+# Owner decisions / our outcomes.
+APPROVED = "approved"
+TERMINAL = {"rejected", "dispatched", "sent", "failed"}
+
+# Per-boot secret the email driver checks to let an approved send through the
+# freeze. Set in run(); never logged.
+_TOKEN = ""
+# Records we've already announced as pending, so a re-read doesn't re-notify.
+_announced: set[str] = set()
+
+
+def _now() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def _atomic_dump(path: Path, data: dict) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w") as f:
+        yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
+    os.replace(tmp, path)
+
+
+def _load(path: Path) -> Optional[dict]:
+    try:
+        with path.open() as f:
+            data = yaml.safe_load(f)
+    except (OSError, yaml.YAMLError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _ensure_token() -> str:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    tok = secrets.token_hex(16)
+    tmp = TOKEN_PATH.with_suffix(".token.tmp")
+    tmp.write_text(tok + "\n")
+    os.replace(tmp, TOKEN_PATH)
+    try:
+        TOKEN_PATH.chmod(0o600)
+    except OSError:
+        pass
+    return tok
+
+
+def _emit(kind: str, rec: dict, **extra) -> None:
+    P.emit_event({
+        "source": "approvals",
+        "kind": kind,
+        "id": rec.get("id"),
+        "channel": rec.get("channel"),
+        **extra,
+    })
+
+
+def _is_queue_record(path: Path) -> bool:
+    return path.suffix == ".yaml" and path.parent.resolve() == QUEUE_DIR.resolve()
+
+
+def _fail(path: Path, rec: dict, reason: str) -> None:
+    rec["status"] = "failed"
+    rec["error"] = reason
+    rec["decided_at"] = rec.get("decided_at") or _now()
+    _atomic_dump(path, rec)
+    _emit("failed", rec, reason=reason)
+    print(f"[approvals] {rec.get('id')} failed: {reason}", flush=True)
+
+
+async def _deliver_email(path: Path, rec: dict) -> None:
+    action = rec.get("action") or {}
+    if not action.get("from"):
+        _fail(path, rec, "email record missing `from`")
+        return
+    if not action.get("to") and not action.get("in_reply_to"):
+        _fail(path, rec, "email record has neither `to` nor `in_reply_to`")
+        return
+    draft: dict = {
+        "from": action.get("from"),
+        "to": action.get("to") or [],
+        "cc": action.get("cc") or [],
+        "content": action.get("content") or "",
+        "action": "send",
+        # The macmail-out send gate lets this through the freeze.
+        "approved_token": _TOKEN,
+        "approved_id": rec.get("id"),
+    }
+    if action.get("subject"):
+        draft["subject"] = action["subject"]
+    if action.get("in_reply_to"):
+        draft["in_reply_to"] = action["in_reply_to"]
+
+    drafts_dir = paths.var_spool_email_drafts()
+    drafts_dir.mkdir(parents=True, exist_ok=True)
+    draft_path = drafts_dir / f"approved-{rec.get('id')}.yaml"
+    _atomic_dump(draft_path, draft)
+
+    rec["status"] = "dispatched"
+    rec["dispatched_at"] = _now()
+    rec["draft_ref"] = str(draft_path.relative_to(paths.PAI_ROOT))
+    _atomic_dump(path, rec)
+    _emit("dispatched", rec, draft_ref=rec["draft_ref"])
+    print(
+        f"[approvals] {rec.get('id')} approved → handed to email driver "
+        f"({draft_path.name})",
+        flush=True,
+    )
+
+
+async def _process(path: Path) -> None:
+    if not _is_queue_record(path) or not path.exists():
+        return
+    rec = _load(path)
+    if rec is None:
+        return
+    rec.setdefault("id", path.stem)
+    status = str(rec.get("status") or PENDING)
+    if status in TERMINAL:
+        return
+    if status == PENDING:
+        # Announce once so the web surface can badge it. The owner decides.
+        if rec["id"] not in _announced:
+            _announced.add(rec["id"])
+            _emit("pending", rec, summary=rec.get("summary"))
+        return
+    if status != APPROVED:
+        return
+
+    channel = str(rec.get("channel") or "")
+    if channel == "email":
+        await _deliver_email(path, rec)
+    else:
+        _fail(path, rec, f"channel {channel!r} is not deliverable in approve mode yet")
+
+
+def _scan_existing() -> list[Path]:
+    if not QUEUE_DIR.exists():
+        return []
+    return [f for f in QUEUE_DIR.glob("*.yaml") if _is_queue_record(f)]
+
+
+class _Handler(FileSystemEventHandler):
+    def __init__(self, loop: asyncio.AbstractEventLoop, queue: "asyncio.Queue[Path]"):
+        self.loop = loop
+        self.queue = queue
+
+    def _enqueue(self, raw: str) -> None:
+        p = Path(raw)
+        if p.suffix == ".yaml":
+            self.loop.call_soon_threadsafe(self.queue.put_nowait, p)
+
+    def on_created(self, event) -> None:  # type: ignore[override]
+        if not event.is_directory:
+            self._enqueue(event.src_path)
+
+    def on_modified(self, event) -> None:  # type: ignore[override]
+        if not event.is_directory:
+            self._enqueue(event.src_path)
+
+    def on_moved(self, event) -> None:  # type: ignore[override]
+        if event.is_directory:
+            return
+        dest = getattr(event, "dest_path", None)
+        if dest:
+            self._enqueue(dest)
+
+
+async def run() -> None:
+    global _TOKEN
+
+    QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+    _TOKEN = _ensure_token()
+    loop = asyncio.get_running_loop()
+    queue: "asyncio.Queue[Path]" = asyncio.Queue()
+
+    observer = Observer()
+    observer.schedule(_Handler(loop, queue), str(QUEUE_DIR), recursive=False)
+    observer.start()
+    print(f"[approvals] watching {QUEUE_DIR}", flush=True)
+
+    # Boot scan: re-evaluate anything already queued (idempotent — terminal
+    # records are skipped, pending re-announced only if not seen this run).
+    for f in _scan_existing():
+        await _process(f)
+
+    try:
+        while True:
+            path = await queue.get()
+            seen = {path}
+            while not queue.empty():
+                try:
+                    seen.add(queue.get_nowait())
+                except asyncio.QueueEmpty:
+                    break
+            for f in seen:
+                await _process(f)
+    except asyncio.CancelledError:
+        raise
+    finally:
+        observer.stop()
+        observer.join(timeout=2)
+        print("[approvals] stopped", flush=True)

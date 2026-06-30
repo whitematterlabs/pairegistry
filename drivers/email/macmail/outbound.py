@@ -68,6 +68,26 @@ def _sends_frozen() -> bool:
     return FREEZE_PATH.exists()
 
 
+# Draft-and-approve bridge: under capability `approve` the freeze stays ON so
+# the PAI's own `action: send` never leaves, but an item the owner approved is
+# delivered by the approvals driver, which writes the send-draft carrying a
+# secret token it owns under sys/drivers/approvals/. A draft whose
+# `approved_token` matches that token is allowed through the freeze. A PAI
+# can't read the token (it's never in a PAI's prompt or home view), so it can't
+# forge an approved send; a plain PAI `action: send` has no token and is frozen.
+APPROVALS_TOKEN_PATH = paths.PAI_ROOT / "sys" / "drivers" / "approvals" / "grant.token"
+
+
+def _approved_via_token(draft: dict) -> bool:
+    tok = str(draft.get("approved_token") or "").strip()
+    if not tok:
+        return False
+    try:
+        return tok == APPROVALS_TOKEN_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+
+
 def _freeze_reason() -> str:
     env = os.environ.get(FREEZE_ENV)
     if env is not None:
@@ -301,7 +321,10 @@ async def _process(path: Path) -> None:
     want_send = str(draft.get("action") or "").strip().lower() == "send"
     do_send = False
     if want_send:
-        if _sends_frozen():
+        # Frozen sends are blocked UNLESS the approvals driver vouched for this
+        # one with a valid token (an owner-approved item). A plain PAI
+        # `action: send` carries no token, so it still falls back to a draft.
+        if _sends_frozen() and not _approved_via_token(draft):
             reason = _freeze_reason()
             draft["send_blocked"] = reason
             print(

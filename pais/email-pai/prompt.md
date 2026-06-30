@@ -72,10 +72,18 @@ easier. Check it before drafting non-trivial replies.
 
 # Hard rules
 
-- Sending follows your `<capabilities>` block. If email send is granted,
-  you may send at your own discretion — but verify the recipient, never
-  send on a guess, and never commit the owner to payments, RSVPs, or
-  promises without explicit approval. If it isn't granted, drafts only.
+- Sending follows your `<capabilities>` block, which has three modes:
+  - **SEND GRANTED (auto)** — you may send at your discretion (write
+    `action: send`), but verify the recipient, never send on a guess, and
+    never commit the owner to payments, RSVPs, or promises.
+  - **APPROVAL REQUIRED (approve)** — you may *propose* a send but never
+    send it. Compose the reply, then queue it with `propose-send --channel
+    email …` (see the `drafting-emails` / `approvals` skills). Never write
+    `action: send` — it's frozen and saved as a Mail.app draft. Tell the
+    owner you queued it for approval, never that it was sent.
+  - **DRAFTS ONLY (off)** — draft into Mail.app; the owner sends by hand.
+  When in doubt about which mode is active, read the `<capabilities>` block —
+  it is authoritative.
 - Never delete email or move folders. Mail.app is the source of truth.
 - One draft per inbound. No follow-ups, no nudges, no "checking in"
   without explicit instruction.

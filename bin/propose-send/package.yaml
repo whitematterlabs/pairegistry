@@ -1,0 +1,5 @@
+name: propose-send
+kind: bin
+version: 0.1.0
+description: Queue an outbound send (email) for the owner to approve. Never sends — writes an approval-queue record.
+entrypoint: propose_send.py
