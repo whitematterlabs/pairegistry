@@ -1,9 +1,20 @@
+"""Unit tests for the browse CLI client (Playwright-daemon era).
+
+browse.py is now a thin socket client to a Node/Playwright daemon; the old
+CDP-port identity guards (_cmdline_is_pai_chrome, _cdp_owner_is_pai, port 9333)
+were deleted with the hand-rolled CDP engine. These tests cover the surface
+that remains in Python: verb→request shaping, the press key-map, daemon path
+resolution, node discovery, and the stdout formats the subagent prompt expects.
+"""
+
 from __future__ import annotations
 
 import importlib.util
+import json
+import socket
 from pathlib import Path
 
-import yaml
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -19,207 +30,196 @@ def _load_browse():
 browse = _load_browse()
 
 
-def test_type_expr_sets_value_via_native_setter_not_direct_assignment():
-    # React (and Vue) wrap an input's `value` with a patched setter backed by an
-    # internal _valueTracker. A direct `el.value = …` runs through that patch and
-    # updates the tracker, so the synthetic `input` event that follows is seen as
-    # "no change" and onChange never fires — the form's state stays empty even
-    # though the DOM shows the typed text. The fix sets value through the native
-    # HTMLInputElement/HTMLTextAreaElement prototype setter, bypassing the tracker.
-    js = browse._type_expr(4, "Arda")
-    # (a) value is written through the native prototype setter.
-    assert "getOwnPropertyDescriptor" in js
-    assert "desc.set.call(el" in js
-    # (b) the value branch must not open with the bare direct assignment (the bug).
-    #     A guarded `else el.value = …` fallback for exotic elements is fine.
-    assert "in el) { el.value =" not in js
-    assert "in el) {el.value =" not in js
+# ---------- daemon path resolution ----------
+
+def test_daemon_paths_live_under_pai_root():
+    assert browse.SOCK_PATH == browse.STATE_DIR / "browse.sock"
+    assert browse.STATE_DIR == browse.PAI_ROOT / "var" / "lib" / "browse"
+    assert browse.SERVER_MJS == browse.PAI_ROOT / "usr" / "libexec" / "browse" / "server.mjs"
 
 
-def test_pai_uses_dedicated_debug_port_not_9222():
-    # The conventional Chrome debug port (9222) is what the owner's own Chrome
-    # (or an IDE/login item) is most likely to expose. PAI must not share it.
-    assert browse.CDP_PORT != 9222
-    assert str(browse.CDP_PORT) in browse.CDP_BASE
+# ---------- node discovery ----------
+
+def test_find_node_prefers_path(monkeypatch):
+    monkeypatch.setattr(browse.shutil, "which", lambda name: "/path/bin/node")
+    assert browse._find_node() == "/path/bin/node"
 
 
-def test_recognizes_pai_chrome_by_profile():
-    browse.CHROME_PROFILE = "/Users/x/.pai/var/chrome/profile"
-    cmd = (
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome "
-        f"--remote-debugging-port={browse.CDP_PORT} "
-        "--user-data-dir=/Users/x/.pai/var/chrome/profile --no-first-run about:blank"
-    )
-    assert browse._cmdline_is_pai_chrome(cmd) is True
-
-
-def test_rejects_owner_real_chrome_default_profile():
-    browse.CHROME_PROFILE = "/Users/x/.pai/var/chrome/profile"
-    # Owner's everyday Chrome on the debug port, no --user-data-dir (default profile).
-    cmd = (
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome "
-        f"--remote-debugging-port={browse.CDP_PORT}"
-    )
-    assert browse._cmdline_is_pai_chrome(cmd) is False
-
-
-def test_rejects_other_user_data_dir():
-    browse.CHROME_PROFILE = "/Users/x/.pai/var/chrome/profile"
-    cmd = (
-        "Google Chrome "
-        f"--remote-debugging-port={browse.CDP_PORT} "
-        "--user-data-dir=/Users/x/Library/Application Support/Google/Chrome"
-    )
-    assert browse._cmdline_is_pai_chrome(cmd) is False
-
-
-def test_owner_is_pai_delegates_to_listener_cmdline(monkeypatch):
-    browse.CHROME_PROFILE = "/p/profile"
+def test_find_node_falls_back_to_homebrew(monkeypatch):
+    monkeypatch.setattr(browse.shutil, "which", lambda name: None)
     monkeypatch.setattr(
-        browse, "_port_listener_cmdline", lambda port: "chrome --user-data-dir=/p/profile"
+        browse.Path, "exists", lambda self: str(self) == "/opt/homebrew/bin/node"
     )
-    assert browse._cdp_owner_is_pai() is True
+    # no nvm dir
+    monkeypatch.setattr(browse.Path, "is_dir", lambda self: False)
+    assert browse._find_node() == "/opt/homebrew/bin/node"
 
+
+def test_find_node_missing_exits(monkeypatch):
+    monkeypatch.setattr(browse.shutil, "which", lambda name: None)
+    monkeypatch.setattr(browse.Path, "exists", lambda self: False)
+    monkeypatch.setattr(browse.Path, "is_dir", lambda self: False)
+    with pytest.raises(SystemExit):
+        browse._find_node()
+
+
+# ---------- press key-map ----------
+
+def test_keymap_maps_to_playwright_key_names():
+    # Real Playwright key names, not CDP virtual-key codes.
+    assert browse._KEYMAP["enter"] == "Enter"
+    assert browse._KEYMAP["return"] == "Enter"
+    assert browse._KEYMAP["down"] == "ArrowDown"
+    assert browse._KEYMAP["space"] == "Space"
+    assert browse._KEYMAP["esc"] == "Escape"
+
+
+def test_press_unknown_key_exits(monkeypatch):
+    monkeypatch.setattr(browse, "_request", lambda *a, **k: {"ok": True})
+    ns = type("NS", (), {"key": "frobnicate"})()
+    with pytest.raises(SystemExit):
+        browse.cmd_press(ns)
+
+
+def test_press_sends_mapped_key(monkeypatch):
+    sent = {}
+
+    def fake_request(verb, **args):
+        sent.update(verb=verb, **args)
+        return {"ok": True, "code": "ArrowDown", "new_lines": []}
+
+    monkeypatch.setattr(browse, "_request", fake_request)
+    browse.cmd_press(type("NS", (), {"key": "DOWN"})())
+    assert sent == {"verb": "press", "key": "ArrowDown"}
+
+
+# ---------- verb → request shaping ----------
+
+def test_goto_normalizes_scheme(monkeypatch):
+    sent = {}
     monkeypatch.setattr(
-        browse, "_port_listener_cmdline", lambda port: "chrome --user-data-dir=/other"
+        browse, "_request",
+        lambda verb, **a: sent.update(verb=verb, **a) or {"ok": True, "url": "x", "title": ""},
     )
-    assert browse._cdp_owner_is_pai() is False
+    browse.cmd_goto(type("NS", (), {"url": "example.com"})())
+    assert sent["url"] == "https://example.com"
+    # already-schemed urls are left alone
+    sent.clear()
+    browse.cmd_goto(type("NS", (), {"url": "http://example.com"})())
+    assert sent["url"] == "http://example.com"
 
 
-def test_owner_is_pai_is_conservative_when_listener_unknown(monkeypatch):
-    # If we cannot introspect who holds the port, never claim it as ours —
-    # refusing is safe; silently driving a foreign browser is the bug.
-    browse.CHROME_PROFILE = "/p/profile"
-    monkeypatch.setattr(browse, "_port_listener_cmdline", lambda port: None)
-    assert browse._cdp_owner_is_pai() is False
-
-
-def test_host_process_tool_prefers_existing_absolute_path(monkeypatch):
+def test_type_passes_submit_flag(monkeypatch):
+    sent = {}
     monkeypatch.setattr(
-        browse.Path,
-        "exists",
-        lambda self: str(self) == "/host/bin/tool",
+        browse, "_request",
+        lambda verb, **a: sent.update(verb=verb, **a) or {"ok": True, "status": "OK", "new_lines": []},
     )
-
-    assert (
-        browse._host_process_tool("/missing/tool", "/host/bin/tool", fallback="tool")
-        == "/host/bin/tool"
-    )
+    browse.cmd_type(type("NS", (), {"idx": 17, "text": "New York", "submit": True})())
+    assert sent == {"verb": "type", "idx": 17, "text": "New York", "submit": True}
 
 
-def test_port_listener_uses_host_process_tools(monkeypatch):
-    # PAI installs its own `ps` shim on PATH. The CDP ownership check must use
-    # host process tools by absolute path, or it cannot read Chrome's cmdline.
-    calls = []
-
-    class Result:
-        def __init__(self, stdout: str):
-            self.stdout = stdout
-
-    def fake_run(cmd, **kwargs):
-        calls.append(cmd)
-        if cmd[0] == "/usr/sbin/lsof":
-            return Result("123\n")
-        if cmd[0] == "/bin/ps":
-            return Result("chrome --user-data-dir=/p/profile")
-        return Result("")
-
-    monkeypatch.setattr(browse, "LSOF_BIN", "/usr/sbin/lsof")
-    monkeypatch.setattr(browse, "PS_BIN", "/bin/ps")
-    monkeypatch.setattr(browse.subprocess, "run", fake_run)
-
-    assert browse._port_listener_cmdline(9333) == "chrome --user-data-dir=/p/profile"
-    assert calls[:2] == [
-        ["/usr/sbin/lsof", "-nP", "-iTCP:9333", "-sTCP:LISTEN", "-t"],
-        ["/bin/ps", "-p", "123", "-o", "command="],
-    ]
+def test_click_not_found_exits(monkeypatch):
+    monkeypatch.setattr(browse, "_request", lambda *a, **k: {"ok": True, "status": "NOT_FOUND"})
+    with pytest.raises(SystemExit) as e:
+        browse.cmd_click(type("NS", (), {"idx": 9})())
+    assert "not found" in str(e.value)
 
 
-def test_ensure_tab_closes_orphan_tabs_before_opening_fresh_tab(
-    tmp_path, monkeypatch
-):
-    tabs = tmp_path / "tabs"
-    snaps = tmp_path / "snapshots"
-    tabs.mkdir()
-    snaps.mkdir()
-    orphan = tabs / "old-browse.yaml"
-    orphan.write_text(
-        yaml.safe_dump(
-            {
-                "tab_id": "old-tab",
-                "owner_slug": "old-browse",
-                "owner_status": "orphan",
-            }
-        )
-    )
-    (snaps / "old-browse.json").write_text("{}")
-    closed = []
-
-    monkeypatch.setattr(browse, "TAB_DIR", tabs)
-    monkeypatch.setattr(browse, "SNAP_DIR", snaps)
-    monkeypatch.setattr(browse, "_ensure_chrome", lambda: None)
+def test_click_disabled_exits_with_guidance(monkeypatch):
     monkeypatch.setattr(
-        browse, "_list_targets", lambda: [{"id": "old-tab", "type": "page"}]
+        browse, "_request", lambda *a, **k: {"ok": True, "status": "DISABLED", "tag": "BUTTON"}
     )
-    monkeypatch.setattr(browse, "_close_target", lambda tab_id: closed.append(tab_id))
+    with pytest.raises(SystemExit) as e:
+        browse.cmd_click(type("NS", (), {"idx": 3})())
+    assert "DISABLED" in str(e.value)
+    assert "Do NOT retry" in str(e.value)
+
+
+def test_click_ok_prints_url_and_new_lines(monkeypatch, capsys):
     monkeypatch.setattr(
-        browse,
-        "_new_target",
-        lambda: {
-            "id": "new-tab",
-            "url": "about:blank",
-            "title": "",
-            "webSocketDebuggerUrl": "ws://new-tab",
-        },
+        browse, "_request",
+        lambda *a, **k: {"ok": True, "status": "OK", "url": "https://x/y",
+                         "title": "Y", "new_lines": ["Required Field"]},
     )
-
-    tab, ws_url = browse._ensure_tab("new-browse")
-
-    assert closed == ["old-tab"]
-    assert not orphan.exists()
-    assert not (snaps / "old-browse.json").exists()
-    assert tab["tab_id"] == "new-tab"
-    assert tab["owner_slug"] == "new-browse"
-    assert tab["owner_status"] == "running"
-    assert ws_url == "ws://new-tab"
+    browse.cmd_click(type("NS", (), {"idx": 5})())
+    out = capsys.readouterr().out
+    assert "clicked 5 → https://x/y" in out
+    assert "new on page:" in out
+    assert "+ Required Field" in out
 
 
-def test_ensure_tab_does_not_reuse_same_slug_orphan(tmp_path, monkeypatch):
-    tabs = tmp_path / "tabs"
-    tabs.mkdir()
-    (tmp_path / "snapshots").mkdir()
-    (tabs / "browse.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "tab_id": "old-tab",
-                "owner_slug": "browse",
-                "owner_status": "orphan",
-            }
-        )
-    )
-    closed = []
-
-    monkeypatch.setattr(browse, "TAB_DIR", tabs)
-    monkeypatch.setattr(browse, "SNAP_DIR", tmp_path / "snapshots")
-    monkeypatch.setattr(browse, "_ensure_chrome", lambda: None)
+def test_wait_selector_heuristic(monkeypatch):
+    sent = {}
     monkeypatch.setattr(
-        browse, "_list_targets", lambda: [{"id": "old-tab", "type": "page"}]
+        browse, "_request",
+        lambda verb, **a: sent.update(verb=verb, **a) or {"ok": True, "found": True},
     )
-    monkeypatch.setattr(browse, "_ws_for_tab", lambda tab_id: "ws://old-tab")
-    monkeypatch.setattr(browse, "_close_target", lambda tab_id: closed.append(tab_id))
-    monkeypatch.setattr(
-        browse,
-        "_new_target",
-        lambda: {
-            "id": "new-tab",
-            "url": "about:blank",
-            "title": "",
-            "webSocketDebuggerUrl": "ws://new-tab",
-        },
-    )
+    browse.cmd_wait(type("NS", (), {"what": "#login", "timeout": 5.0})())
+    assert sent["is_selector"] is True
+    sent.clear()
+    # A bare word (no selector punctuation, no spaces) is treated as page text.
+    browse.cmd_wait(type("NS", (), {"what": "Welcome", "timeout": 5.0})())
+    assert sent["is_selector"] is False
 
-    tab, ws_url = browse._ensure_tab("browse")
 
-    assert closed == ["old-tab"]
-    assert tab["tab_id"] == "new-tab"
-    assert ws_url == "ws://new-tab"
+# ---------- _ensure_daemon / _request ----------
+
+def test_ensure_daemon_missing_server_exits(monkeypatch):
+    monkeypatch.setattr(browse, "_daemon_alive", lambda: False)
+    monkeypatch.setattr(browse.Path, "is_file", lambda self: False)
+    with pytest.raises(SystemExit) as e:
+        browse._ensure_daemon()
+    assert "paiman install bin/browse" in str(e.value)
+
+
+def test_request_raises_on_daemon_error(monkeypatch):
+    monkeypatch.setattr(browse, "_ensure_daemon", lambda: None)
+    monkeypatch.setenv("PAI_SLUG", "pai")
+
+    class FakeSock:
+        def settimeout(self, *_): pass
+        def connect(self, *_): pass
+        def sendall(self, *_): pass
+        def recv(self, *_): return json.dumps({"ok": False, "error": "boom"}).encode() + b"\n"
+        def close(self): pass
+
+    monkeypatch.setattr(browse.socket, "socket", lambda *a, **k: FakeSock())
+    with pytest.raises(SystemExit) as e:
+        browse._request("goto", url="x")
+    assert "boom" in str(e.value)
+
+
+def test_request_shapes_payload_with_slug_and_args(monkeypatch):
+    monkeypatch.setattr(browse, "_ensure_daemon", lambda: None)
+    monkeypatch.setenv("PAI_SLUG", "browse-7")
+    captured = {}
+
+    class FakeSock:
+        def settimeout(self, *_): pass
+        def connect(self, *_): pass
+        def sendall(self, data): captured["sent"] = data
+        def recv(self, *_): return json.dumps({"ok": True, "url": "u"}).encode() + b"\n"
+        def close(self): pass
+
+    monkeypatch.setattr(browse.socket, "socket", lambda *a, **k: FakeSock())
+    reply = browse._request("goto", url="https://x")
+    assert reply["url"] == "u"
+    payload = json.loads(captured["sent"].decode().strip())
+    assert payload == {"slug": "browse-7", "verb": "goto", "args": {"url": "https://x"}}
+
+
+# ---------- new-line rendering ----------
+
+def test_print_new_lines_caps_and_counts(capsys):
+    lines = [f"line {i}" for i in range(15)]
+    browse._print_new_lines(lines, limit=12)
+    out = capsys.readouterr().out
+    assert "new on page:" in out
+    assert out.count("    + ") == 12
+    assert "+3 more new lines" in out
+
+
+def test_print_new_lines_empty_is_silent(capsys):
+    browse._print_new_lines([])
+    assert capsys.readouterr().out == ""

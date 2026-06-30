@@ -1,0 +1,10 @@
+{
+  "name": "pai-browse-sidecar",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Playwright daemon that drives PAI's persistent Chrome for the browse verbs.",
+  "dependencies": {
+    "playwright-core": "^1.49.0"
+  }
+}

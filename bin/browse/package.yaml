@@ -1,5 +1,10 @@
 name: browse
 kind: bin
 version: 0.1.0
-description: Thin CDP verbs against the owner's persistent Chrome (one tab per subagent).
+description: Playwright verbs against the owner's persistent Chrome (one page per subagent).
 entrypoint: browse.py
+hooks:
+  install:
+    # cwd is $PAI_ROOT; the sidecar was just copied into the bin's opt slot.
+    # Stages server.mjs + deps into usr/libexec/browse and runs npm ci.
+    - "bash opt/paiman/bin/browse/sidecar/install.sh"
