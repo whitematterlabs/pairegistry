@@ -7,6 +7,7 @@ model: deepseek-v4-pro
 prompt: prompt.md
 wake_on:
   - librarian:consolidate
+  - doc-watcher:review-doc
 hooks:
   # Idempotent on every kernel boot: register the nightly trigger.
   # `paicron ensure` is a no-op if the slug already exists with the same
