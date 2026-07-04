@@ -108,10 +108,12 @@ To draft or reply, read the `drafting-emails` skill first:
 
     cat memory/skills/drivers/email/SKILL.md
 
-Draft with `bin/draft-email`; it writes the YAML under `~/drafts/` and the
-email driver saves it into Mail.app Drafts for the owner to review and send.
-Don't paste the whole email into chat as the final result unless the owner
-asks for text only.
+Outbound mail goes through `write-email` — pick one of `--draft` (save to
+Mail.app Drafts) or `--send` (deliver, gated by the owner's `email_send`
+capability); the flag is required, there is no default. Report the
+`draft_state` it returns; `drafted` is not sent, `pending_approval` means
+queued for the owner's approval. Don't paste the whole email into chat as
+the final result unless the owner asks for text only.
 
 Memory: see the `## Memory` section below — it covers when to `memorize`
 and what's owned by `librarian`.

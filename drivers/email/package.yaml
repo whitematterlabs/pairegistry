@@ -4,7 +4,7 @@ version: 0.1.0
 description: Email driver — complete on-disk archive (nested YYYY/MM/DD) under communication/email + rg-native queries.
 deps:
   - tailer
-  - draft-email
+  - write-email
 # Not listed here: `approvals` also depends on `email` (for delivery), and a
 # mutual package dep makes paiman's install-time cycle guard bail out. The
 # outbound driver imports drivers.approvals.queue at runtime regardless —

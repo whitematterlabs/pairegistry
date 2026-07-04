@@ -24,7 +24,7 @@ kind: pai
 deps:
   - email          # registry bundle → drivers/email/
   - inbox          # registry bundle → bin/inbox/
-  - draft-email    # registry bundle → bin/draft-email/
+  - write-email    # registry bundle → bin/write-email/
 ```
 
 - Flat list of bare names. No version, no extras, no constraint syntax.
@@ -47,7 +47,7 @@ For each entry in `deps:`:
    `/usr/lib/venv/` via `uv pip install --python <venv-python>`.
 
 So `sbin/paiman install email-pai` pulls `email` (driver), `inbox`
-(bin), and `draft-email` (bin), then `email` pulls `tailer`, then any
+(bin), and `write-email` (bin), then `email` pulls `tailer`, then any
 unresolved names get pip-installed in one shot.
 
 **Driver deps are also mount points.** A `driver` entry in a pai

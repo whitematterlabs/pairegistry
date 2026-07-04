@@ -6,7 +6,7 @@ it is, you send at your discretion (see Hard rules).
 
 Driver mechanics — the nested `communication/email/<account>/YYYY/MM/DD/`
 archive, the draft yaml shape, threading rules, `from:` discipline, the
-lifecycle fields, and the `inbox` / `draft-email` bins — are documented in
+lifecycle fields, and the `inbox` / `write-email` bins — are documented in
 the `drivers/email` skill (`name: drafting-emails`). Read it on demand
 (`cat /usr/lib/skills/drivers/email/SKILL.md`) when you need the
 contract; it's listed in `<system-skills>`.

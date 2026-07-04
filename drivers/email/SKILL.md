@@ -12,9 +12,9 @@ mail. The `email` driver keeps a **complete on-disk archive** of every
 message Mail.app has indexed, so you answer questions by globbing and
 `rg`-ing files — never by hand-parsing a YAML dump in the shell.
 
-For drafting, use `bin/draft-email`; it writes a draft YAML under
-`~/drafts/`, and the `email-out` driver saves it into Mail.app's Drafts
-folder for the owner to review and send.
+For outbound mail, use `write-email` (pick `--draft` or `--send`
+explicitly — see "Drafting and sending" below); it writes a draft YAML
+under `~/drafts/`, and the `email-out` driver acts on it.
 
 Do not paste the full email into chat as the final result unless the
 owner explicitly asks to see text only. For normal "draft an email"
@@ -127,32 +127,42 @@ complete, so `inbox` + `rg` answer everything; don't shell out to
 
 # Drafting and sending
 
-You write draft YAMLs; the macmail-out driver hands them to Mail.app. By
-default it `save`s them to Drafts for the owner to review and send. If a
-draft sets `action: send`, the driver delivers it instead.
+You produce outbound mail with the `write-email` command. It writes a draft YAML
+the macmail-out driver picks up. **You must pick a mode explicitly — exactly
+one of `--draft` or `--send` is required; there is no default.** Match the
+owner's actual ask: "draft an email" → `--draft`, "send/reply/email them" →
+`--send`. Never reach for `--draft` as a safe fallback when the owner asked
+you to send — that silently does the wrong thing.
 
-**Whether you may send is decided by the owner's `email_send` capability,
-stated in your `<capabilities>` block — not by this skill.** Always use the
-same `action: send` yaml regardless of mode:
-- Send granted (`yes`) — set `action: send` at your discretion.
-- Approval required (`ask`) — set `action: send` exactly as you would with
-  send granted; the driver detects the gate and automatically queues it in
-  the owner's approval tray instead of delivering (see the `approvals`
-  skill). Tell the owner you sent it for approval, not that it was delivered.
-- Not granted (`no`) — the driver ignores `action: send` and saves the
-  message as a draft (recording `send_blocked`), so nothing leaves the
-  machine.
+- `--draft` — saved to Mail.app's Drafts for the owner to review and send.
+- `--send` — the driver delivers it (sets `action: send` for you).
+
+**Whether a `--send` actually goes out is decided by the owner's `email_send`
+capability, stated in your `<capabilities>` block — not by this skill.** Use
+`--send` the same way regardless of mode; the driver enforces the gate:
+- Send granted (`yes`) — delivered immediately.
+- Approval required (`ask`) — the driver stages it in the owner's approval
+  tray instead of delivering, and the result comes back
+  `draft_state: pending_approval` (see the `approvals` skill). Report exactly
+  that: "queued for your approval," not "sent."
+- Not granted (`no`) — the driver saves it as a draft and records
+  `send_blocked`; the result comes back `draft_state: drafted`. Tell the
+  owner it was NOT sent (sends are off) and was saved as a draft instead.
+
+**Report the `draft_state` the command actually returns — never assert an
+outcome you didn't observe.** `drafted` means it's in Drafts, not sent.
+`pending_approval` means it's waiting on the owner. Only `sent` means it left.
 
 Don't try to bypass this with your own AppleScript/SMTP — the driver is the
 only outbound path.
 
-Prefer the CLI (add `--send` to deliver, omit it to draft):
+Use the CLI. Pass `--wait` so you see the terminal `draft_state` to report:
 
 ```sh
 printf '%s\n' "Hi Alex,
 
 I saw your listing and wanted to ask whether the room is still available." \
-  | bin/draft-email \
+  | write-email --draft \
       --from owner@example.com \
       --to alex@example.com \
       --subject "Interested in the room" \
@@ -167,11 +177,14 @@ spool_path: var/spool/communication/email/drafts/interested-in-the-room-alex.yam
 draft_state: drafted
 ```
 
+Swap `--draft` for `--send` to deliver. Under `ask` mode the result is
+`draft_state: pending_approval` instead — report that as queued for approval.
+
 For reply-shaped drafts, pass the parent's Message-ID:
 
 ```sh
 printf '%s\n' "Thanks, Friday works for me." \
-  | bin/draft-email \
+  | write-email --send \
       --from owner@example.com \
       --subject "Re: Q3 budget" \
       --in-reply-to "<message-id-of-parent>" \
@@ -180,8 +193,9 @@ printf '%s\n' "Thanks, Friday works for me." \
       --wait
 ```
 
-If `bin/draft-email` is unavailable, write the draft manually to
-`~/drafts/<name>.yaml`. Pick a descriptive `<name>` like
+If `write-email` is unavailable, write the draft manually to
+`~/drafts/<name>.yaml` (add `action: send` to deliver, omit it to draft).
+Pick a descriptive `<name>` like
 `re-bob-q3-budget` — it's just a filename, not exposed anywhere.
 
 ```yaml
@@ -235,7 +249,13 @@ nested mapping and silently breaks the draft.
 
 **Lifecycle (read-only — driver sets these, you don't).**
 
-- `draft_state: drafted` + `drafted_at` — Mail.app accepted it. Done.
+- `draft_state: drafted` + `drafted_at` — saved to Mail.app Drafts, **not
+  sent**. Terminal for `--draft`, and also for a `--send` blocked by
+  capability `no` (look for `send_blocked`).
+- `draft_state: pending_approval` — a `--send` under capability `ask` is
+  staged in the owner's approval tray. Terminal here; the approvals driver
+  carries it forward. Report as "queued for approval," not sent.
+- `draft_state: sent` + `sent_at` — actually delivered. Only this means sent.
 - `draft_state: pending_parent` + `draft_retries: N` — reply parent not
   synced yet; driver retries with backoff. Wait.
 - `draft_state: failed` + `draft_error` — terminal; `email:draft_failed`

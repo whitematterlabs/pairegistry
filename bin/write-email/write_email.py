@@ -1,9 +1,19 @@
 #!/usr/bin/env python
-"""draft-email - create a Mail.app draft through the email driver spool.
+"""write-email - draft or send a Mail.app message through the email driver spool.
 
-This command never sends mail. It writes one YAML file under
-var/spool/communication/email/drafts/; macmail-out notices the file and
-saves it into Mail.app Drafts for the owner to review and send.
+Writes one YAML file under var/spool/communication/email/drafts/; the
+macmail-out driver notices it and acts on the explicit mode you chose:
+
+  --draft   save it into Mail.app's Drafts folder for the owner to review.
+  --send    set `action: send` so the driver delivers it — subject to the
+            owner's `capabilities.email_send` grant. Under `ask` the send is
+            staged into the owner's approvals queue (draft_state:
+            pending_approval) and surfaced in the web console; under `no` it
+            falls back to a saved draft with `send_blocked` set.
+
+Exactly one of --send / --draft is required. There is no default: "draft an
+email" and "send an email" are different owner intents, so the caller must
+say which. This prevents silently drafting when the owner asked to send.
 """
 
 from __future__ import annotations
@@ -22,6 +32,12 @@ from boot import paths
 
 
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
+
+# Terminal draft_state values macmail-out writes. `pending_approval` is
+# terminal from this command's view: under `ask` mode a send hands off to the
+# approvals queue and never flips back here (an approved item returns as a
+# fresh draft written by the approvals driver).
+_TERMINAL_STATES = {"drafted", "sent", "failed", "pending_approval"}
 
 
 def _split_values(values: list[str] | None) -> list[str]:
@@ -43,9 +59,9 @@ def _draft_name(args: argparse.Namespace, to_addrs: list[str]) -> str:
     if args.name:
         raw = args.name.strip()
         if not raw:
-            raise SystemExit("draft-email: --name cannot be empty")
+            raise SystemExit("write-email: --name cannot be empty")
         if raw != Path(raw).name:
-            raise SystemExit("draft-email: --name must be a filename, not a path")
+            raise SystemExit("write-email: --name must be a filename, not a path")
         return raw if raw.endswith(".yaml") else f"{raw}.yaml"
 
     subject_part = _slug(args.subject or "reply")
@@ -64,12 +80,12 @@ def _unique_path(directory: Path, name: str) -> Path:
         candidate = directory / f"{base}-{i}.yaml"
         if not candidate.exists():
             return candidate
-    raise SystemExit(f"draft-email: too many existing drafts named like {name!r}")
+    raise SystemExit(f"email: too many existing drafts named like {name!r}")
 
 
 def _read_body(args: argparse.Namespace) -> str:
     if args.body is not None and args.body_file is not None:
-        raise SystemExit("draft-email: use only one of --body or --body-file")
+        raise SystemExit("write-email: use only one of --body or --body-file")
     if args.body is not None:
         body = args.body
     elif args.body_file is not None:
@@ -79,17 +95,17 @@ def _read_body(args: argparse.Namespace) -> str:
             try:
                 body = Path(args.body_file).read_text()
             except OSError as e:
-                raise SystemExit(f"draft-email: cannot read body file: {e}") from e
+                raise SystemExit(f"email: cannot read body file: {e}") from e
     elif not sys.stdin.isatty():
         body = sys.stdin.read()
     else:
         raise SystemExit(
-            "draft-email: provide body text with --body, --body-file, or stdin"
+            "email: provide body text with --body, --body-file, or stdin"
         )
 
     body = body.rstrip()
     if not body:
-        raise SystemExit("draft-email: body is empty")
+        raise SystemExit("write-email: body is empty")
     return body
 
 
@@ -117,7 +133,7 @@ def _wait_for_terminal(path: Path, timeout: float) -> dict[str, Any]:
         data = _load_state(path)
         if data:
             last = data
-        if last.get("draft_state") in {"drafted", "sent", "failed"}:
+        if last.get("draft_state") in _TERMINAL_STATES:
             return last
         time.sleep(0.2)
     return last
@@ -139,17 +155,19 @@ def _print_result(path: Path, state: dict[str, Any]) -> None:
     }
     if state.get("draft_error"):
         result["draft_error"] = state["draft_error"]
+    if state.get("send_blocked"):
+        result["send_blocked"] = state["send_blocked"]
     print(yaml.safe_dump(result, sort_keys=False), end="")
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        prog="draft-email",
+        prog="write-email",
         description=(
-            "Create a Mail.app draft (default) or send it with --send. Writes a "
-            "draft YAML the macmail-out driver picks up. --send only delivers if "
-            "the owner granted capabilities.email_send; otherwise it's saved as a "
-            "draft."
+            "Draft or send a Mail.app message. Exactly one of --send / --draft "
+            "is required. --send only delivers if the owner granted "
+            "capabilities.email_send; under `ask` it is queued for owner "
+            "approval, under `no` it falls back to a saved draft."
         ),
     )
     parser.add_argument(
@@ -178,11 +196,19 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--in-reply-to", help="parent Message-ID; switches the driver to reply mode"
     )
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument(
         "--send",
+        dest="send",
         action="store_true",
-        help="set action: send so the driver delivers the message instead of "
-             "saving a draft (subject to the owner's email_send capability)",
+        help="set action: send so the driver delivers the message (subject to "
+             "the owner's email_send capability; queued for approval under `ask`)",
+    )
+    mode.add_argument(
+        "--draft",
+        dest="send",
+        action="store_false",
+        help="save the message to Mail.app Drafts without sending",
     )
     parser.add_argument(
         "--reference",
@@ -201,7 +227,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default=0.0,
         type=float,
         metavar="SECONDS",
-        help="wait for macmail-out to mark the draft drafted/failed (default with flag: 15)",
+        help="wait for macmail-out to reach a terminal state (default with flag: 15)",
     )
     args = parser.parse_args(argv)
 
@@ -224,7 +250,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if not to_addrs and not args.in_reply_to:
         raise SystemExit(
-            "draft-email: provide --to for new mail or --in-reply-to for replies"
+            "email: provide --to for new mail or --in-reply-to for replies"
         )
 
     draft: dict[str, Any] = {

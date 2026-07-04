@@ -1,0 +1,5 @@
+name: write-email
+kind: bin
+version: 0.1.0
+description: Draft or send a Mail.app message by writing the email driver's draft YAML (--send / --draft).
+entrypoint: write_email.py
