@@ -28,20 +28,19 @@ const REAL_HOME = os.userInfo().homedir;
 const PAI_ROOT = process.env.PAI_ROOT || path.join(REAL_HOME, '.pai');
 const STATE_DIR = path.join(PAI_ROOT, 'var', 'lib', 'browse');
 const SOCK = path.join(STATE_DIR, 'browse.sock');
-// browse drives the owner's REAL Chrome profile live — no copy, no drift. DATA_DIR
-// is a throwaway user-data-dir whose `Default` and `Local State` are SYMLINKS into
-// the real profile, so cookies/logins are always current. A non-default DATA_DIR
-// path keeps Chrome 136+'s remote-debug happy; the symlinks let it use the real
-// profile anyway. The one hazard — Chrome purging cookies it can't decrypt (which
-// with secure_delete is unrecoverable) — is avoided by launching WITHOUT
-// --use-mock-keychain so decryption always succeeds (see startBrowser). As a
-// belt-and-suspenders guard, real cookies are snapshotted before every launch.
-const DATA_DIR = path.join(STATE_DIR, 'cdp');
+// browse runs its OWN second Chrome (its own profile dir → its own instance) so
+// the owner's real Chrome is never touched, quit, or locked — the two coexist.
+// The profile is seeded once for bulk (bookmarks/prefs/Local State), and its
+// COOKIES are refreshed from the owner's real profile on every daemon start via
+// SQLite online-backup, so browse always launches with current logins instead of
+// drifting like the old seed-once design did. Reading the real cookie DB is
+// read-only on the real profile; browse only ever writes its own copy — it can
+// never damage the owner's cookies (unlike the symlink design, which did).
+const PROFILE_DIR = path.join(STATE_DIR, 'chrome-profile');
 const REAL_CHROME_PROFILE = path.join(
   REAL_HOME, 'Library', 'Application Support', 'Google', 'Chrome');
-// Rotating pre-launch snapshots of the owner's real cookie DBs, so a launch that
-// ever damages them can be restored. Keeps the two most recent generations.
-const COOKIE_BACKUP_DIR = path.join(STATE_DIR, 'cookie-safety');
+// Written once the bulk profile has been seeded; cookies refresh independently.
+const SEED_MARKER = path.join(PROFILE_DIR, '.seed-ok');
 const LOG = path.join(PAI_ROOT, 'var', 'log', 'browse-daemon.log');
 
 function log(msg) {
@@ -49,11 +48,11 @@ function log(msg) {
   try { fs.appendFileSync(LOG, line); } catch { /* best-effort */ }
 }
 
-// ---------- real-profile attach (symlink, no copy) ----------
+// ---------- own-profile seed + cookie refresh (two-instance design) ----------
 
-// SQLite online-backup: reads a consistent image even while Chrome holds the DB
-// open (a plain cp can capture a torn snapshot). Sidecars are dropped so Chrome
-// can't replay a stale journal over the snapshot.
+// SQLite online-backup: reads a consistent image even while the owner's Chrome
+// holds the DB open (a plain cp can capture a torn snapshot). Sidecars are
+// dropped so Chrome can't replay a stale journal over the snapshot.
 function sqliteBackup(src, dst) {
   if (!fs.existsSync(src)) return false;
   fs.mkdirSync(path.dirname(dst), { recursive: true });
@@ -71,66 +70,88 @@ function cookieRows(db) {
   return parseInt((c.stdout || '0').trim(), 10) || 0;
 }
 
-// Snapshot the owner's real cookie DBs before a launch, keeping two generations
-// (curr → prev). Insurance: if a launch ever damages the live cookies, they can
-// be restored from cookie-safety/. Never blocks a launch on its own failure.
-function backupRealCookies() {
-  try {
-    fs.mkdirSync(COOKIE_BACKUP_DIR, { recursive: true });
-    for (const rel of ['Default/Cookies', 'Default/Network/Cookies']) {
-      const src = path.join(REAL_CHROME_PROFILE, rel);
-      if (!fs.existsSync(src)) continue;
-      const tag = rel.replace(/\//g, '_');
-      const curr = path.join(COOKIE_BACKUP_DIR, tag);
-      if (fs.existsSync(curr)) fs.renameSync(curr, path.join(COOKIE_BACKUP_DIR, tag + '.prev'));
-      if (sqliteBackup(src, curr)) log(`cookie safety snapshot ${rel}: ${cookieRows(curr)} rows`);
-    }
-  } catch (e) {
-    log(`cookie backup skipped: ${e}`);
+// One-time bulk clone of the owner's profile (bookmarks, prefs, Local State,
+// history) into browse's own profile dir. Cookies come in too but are refreshed
+// separately below. rsync skips the gigabyte caches.
+function seedBulkIfNeeded() {
+  if (fs.existsSync(SEED_MARKER)) return;
+  if (!fs.existsSync(REAL_CHROME_PROFILE)) {
+    log(`real Chrome profile not found at ${REAL_CHROME_PROFILE}; fresh profile`);
+    fs.mkdirSync(PROFILE_DIR, { recursive: true });
+    fs.writeFileSync(SEED_MARKER, '');
+    return;
   }
-}
-
-// DATA_DIR/Default and DATA_DIR/Local State are symlinks into the owner's real
-// Chrome profile: Chrome reads/writes the real cookies and logins with nothing
-// copied. Idempotent — re-point a missing/stale link, leave a correct one.
-function ensureRealProfileLinks() {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  const links = [
-    ['Default', path.join(REAL_CHROME_PROFILE, 'Default')],
-    ['Local State', path.join(REAL_CHROME_PROFILE, 'Local State')],
+  log(`first-run: cloning owner profile → ${PROFILE_DIR}`);
+  fs.mkdirSync(PROFILE_DIR, { recursive: true });
+  const args = [
+    '-a',
+    '--exclude=Default/Cache/',
+    '--exclude=Default/Code Cache/',
+    '--exclude=Default/GPUCache/',
+    '--exclude=Default/Service Worker/',
+    '--exclude=Default/File System/',
+    '--exclude=Default/DawnGraphiteCache/',
+    '--exclude=Default/DawnWebGPUCache/',
+    '--exclude=Default/Application Cache/',
+    '--include=Local State',
+    '--include=Default/***',
+    '--exclude=*',
+    `${REAL_CHROME_PROFILE}/`,
+    `${PROFILE_DIR}/`,
   ];
-  for (const [name, target] of links) {
-    if (!fs.existsSync(target)) { log(`real profile missing ${target}; skipping link`); continue; }
-    const link = path.join(DATA_DIR, name);
-    let ok = false;
-    try { ok = fs.readlinkSync(link) === target; } catch { ok = false; }
-    if (ok) continue;
-    fs.rmSync(link, { recursive: true, force: true });
-    fs.symlinkSync(target, link);
+  const r = spawnSync('rsync', args, { timeout: 300000 });
+  if (r.status !== 0) log(`bulk seed rsync rc=${r.status}; continuing`);
+  fs.writeFileSync(SEED_MARKER, '');
+}
+
+// Refresh browse's cookies from the owner's real profile on every daemon start,
+// so browse launches with current logins (the fix for the old design's drift).
+// Consistent online-backup snapshots of both cookie-store locations. Must run
+// while browse's own Chrome is DOWN (daemon start, before launch) so we never
+// overwrite a live DB. The owner's Chrome may be running — online-backup handles
+// that; we only READ the real profile.
+function refreshCookies() {
+  let n = 0;
+  for (const rel of ['Default/Cookies', 'Default/Network/Cookies']) {
+    const src = path.join(REAL_CHROME_PROFILE, rel);
+    const dst = path.join(PROFILE_DIR, rel);
+    if (sqliteBackup(src, dst)) n += cookieRows(dst);
   }
-  // A PAI Chrome that crashed can leave a Singleton* lock in DATA_DIR that blocks
-  // relaunch. These belong to PAI's throwaway dir, not the owner's profile.
+  log(`cookie refresh: ${n} cookies copied from owner profile`);
+}
+
+// Close a prior browse Chrome (matched by its own profile dir) so a fresh daemon
+// can refresh cookies and relaunch. Only ever targets browse's instance — the
+// owner's Chrome (different --user-data-dir) is left running.
+function closeOwnChrome() {
+  spawnSync('pkill', ['-f', `--user-data-dir=${PROFILE_DIR}`]);
   for (const lock of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) {
-    fs.rmSync(path.join(DATA_DIR, lock), { force: true });
+    fs.rmSync(path.join(PROFILE_DIR, lock), { force: true });
   }
 }
 
-function chromeRunning() {
-  return spawnSync('pgrep', ['-x', 'Google Chrome']).status === 0;
-}
-
-// The owner's normal Chrome and PAI's would both write the same Default (via the
-// symlink) and corrupt it. Quit the owner's Chrome so PAI can take over its
-// profile — the v1 takeover behavior. Blocks briefly during startup.
-function quitOwnerChrome() {
-  if (!chromeRunning()) return;
-  log('quitting owner Chrome to take over its profile…');
-  spawnSync('osascript', ['-e', 'tell application "Google Chrome" to quit']);
-  for (let i = 0; i < 20 && chromeRunning(); i++) spawnSync('sleep', ['0.5']);
-  if (chromeRunning()) {
-    log('Chrome would not quit; force-killing');
-    spawnSync('pkill', ['-x', 'Google Chrome']);
-    spawnSync('sleep', ['1']);
+function disableAutofillPrefs() {
+  // browse's profile carries the owner's saved addresses/passwords. On a
+  // controlled (React/Vue) form Chrome will autofill those over whatever a
+  // subagent typed the moment the field gains focus — clobbering values. Turn
+  // off autofill + password-manager fill in browse's OWN profile (never the
+  // owner's). Cookies / logged-in sessions untouched, so SSO still works.
+  const prefsPath = path.join(PROFILE_DIR, 'Default', 'Preferences');
+  let prefs = {};
+  try {
+    if (fs.existsSync(prefsPath)) prefs = JSON.parse(fs.readFileSync(prefsPath, 'utf8'));
+  } catch { prefs = {}; }
+  prefs.autofill = prefs.autofill || {};
+  prefs.autofill.enabled = false;
+  prefs.autofill.profile_enabled = false;
+  prefs.autofill.credit_card_enabled = false;
+  prefs.credentials_enable_service = false;
+  prefs.credentials_enable_autosignin = false;
+  try {
+    fs.mkdirSync(path.dirname(prefsPath), { recursive: true });
+    fs.writeFileSync(prefsPath, JSON.stringify(prefs));
+  } catch (e) {
+    log(`could not disable autofill prefs: ${e}`);
   }
 }
 
@@ -207,27 +228,22 @@ const DOM_TAGGER_JS = String.raw`
 // ---------- browser + page registry ----------
 
 function startBrowser() {
-  quitOwnerChrome();
-  backupRealCookies();
-  ensureRealProfileLinks();
-  log('launching owner Chrome under PAI control (channel:chrome, real profile)…');
-  return chromium.launchPersistentContext(DATA_DIR, {
+  closeOwnChrome();      // close a prior browse Chrome; leaves owner's running
+  seedBulkIfNeeded();    // one-time bookmarks/prefs/Local State clone
+  refreshCookies();      // pull current cookies from the owner profile each start
+  disableAutofillPrefs();
+  log('launching browse Chrome (own profile, channel:chrome)…');
+  return chromium.launchPersistentContext(PROFILE_DIR, {
     channel: 'chrome',
     headless: false,
     viewport: null,
-    // --restore-last-session reopens the owner's windows/tabs from before the
-    // takeover, so after the one-time quit+relaunch it's just their Chrome again
-    // (dock icon opens windows in this same instance) with browse working in its
-    // own tab alongside — not a stripped, foreign-feeling window.
-    args: ['--no-first-run', '--no-default-browser-check', '--restore-last-session'],
+    args: ['--no-first-run', '--no-default-browser-check'],
     // CRITICAL: Playwright defaults to --use-mock-keychain and
     // --password-store=basic, which force Chrome off the macOS Keychain. The
-    // owner's cookies are v10 — encrypted with the real "Chrome Safe Storage"
-    // Keychain key. Under the mock keychain Chrome can't decrypt them and PURGES
-    // them from the DB (and with secure_delete that is unrecoverable). Dropping
-    // both makes the real Chrome binary use the real Keychain, so every cookie
-    // decrypts and nothing is purged. This is the single flag that makes driving
-    // the real profile safe.
+    // copied cookies are v10 — encrypted with the real "Chrome Safe Storage"
+    // Keychain key (app-global on macOS, so a copy decrypts too). Under the mock
+    // keychain Chrome can't decrypt them and every site is logged out. Dropping
+    // both makes Chrome use the real Keychain so the copied cookies decrypt.
     ignoreDefaultArgs: ['--use-mock-keychain', '--password-store=basic'],
   });
 }
