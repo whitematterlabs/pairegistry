@@ -36,7 +36,9 @@ def test_local_synthesize_uses_say_and_afconvert(monkeypatch: pytest.MonkeyPatch
     def fake_run(args, input, text, capture_output, check, timeout):  # noqa: A002
         runs.append({"args": args, "input": input, "timeout": timeout})
         if args[0] == "/usr/bin/say":
-            Path(args[2]).write_bytes(b"aiff")
+            # The output path follows the `-o` flag (its position shifts once a
+            # `-r <wpm>` rate flag is prepended for a non-default speed).
+            Path(args[args.index("-o") + 1]).write_bytes(b"aiff")
         elif args[0] == "/usr/bin/afconvert":
             Path(args[-1]).write_bytes(b"m4a-bytes")
         return subprocess.CompletedProcess(args, 0)
@@ -51,11 +53,39 @@ def test_local_synthesize_uses_say_and_afconvert(monkeypatch: pytest.MonkeyPatch
     data, mime = local.synthesize("hello local", voice_id="ignored", speed=0.8)
 
     assert (data, mime) == (b"m4a-bytes", "audio/mp4")
-    assert runs[0]["args"][0] == "/usr/bin/say"
-    assert runs[0]["args"][3:] == ["-f", "-"]
+    say_args = runs[0]["args"]
+    assert say_args[0] == "/usr/bin/say"
+    # speed 0.8 → round(175 * 0.8) = 140 wpm, passed via `-r`.
+    assert say_args[1:3] == ["-r", "140"]
+    assert say_args[3:5] == ["-o"] + [say_args[4]]  # -o <tmp>.aiff
+    assert say_args[5:] == ["-f", "-"]
     assert runs[0]["input"] == "hello local"
     assert runs[1]["args"][0] == "/usr/bin/afconvert"
     assert runs[1]["args"][1:5] == ["-f", "m4af", "-d", "aac"]
+
+
+def test_local_synthesize_omits_rate_when_speed_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    runs: list[dict] = []
+
+    def fake_run(args, input, text, capture_output, check, timeout):  # noqa: A002
+        runs.append({"args": args})
+        if args[0] == "/usr/bin/say":
+            Path(args[args.index("-o") + 1]).write_bytes(b"aiff")
+        elif args[0] == "/usr/bin/afconvert":
+            Path(args[-1]).write_bytes(b"m4a-bytes")
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(
+        local.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}" if name in {"say", "afconvert"} else None,
+    )
+    monkeypatch.setattr(local.subprocess, "run", fake_run)
+
+    local.synthesize("hello", speed=None)
+
+    # No speed → no `-r` flag; `say` uses its own default rate.
+    assert "-r" not in runs[0]["args"]
 
 
 def test_local_transcribe_transcodes_webm_then_runs_whisper(

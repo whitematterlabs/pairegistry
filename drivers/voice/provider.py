@@ -83,9 +83,14 @@ def synthesize(
     text: str,
     *,
     voice_id: str | None = None,  # noqa: ARG001 — `say` uses the system voice
-    speed: float | None = None,   # noqa: ARG001
+    speed: float | None = None,
 ) -> tuple[bytes, str]:
-    """Turn text into playable audio via macOS `say` + `afconvert` (AAC/m4a)."""
+    """Turn text into playable audio via macOS `say` + `afconvert` (AAC/m4a).
+
+    `voice_id` is ignored — `say` leaves voice selection to System Settings.
+    `speed` (a 0.7–1.2 multiplier the web UI sends) maps to `say -r <wpm>` off a
+    ~175 wpm baseline, so the read-aloud speed slider works for Siri too.
+    """
     say_path = shutil.which("say")
     afconvert_path = shutil.which("afconvert")
     if not say_path:
@@ -93,10 +98,22 @@ def synthesize(
     if not afconvert_path:
         raise RuntimeError("macOS 'afconvert' is unavailable")
 
+    rate_flags: list[str] = []
+    if speed is not None:
+        # macOS `say` default is ~175 words/min; scale it by the UI multiplier
+        # (clamped to the same 0.7–1.2 band the cloud provider honors).
+        wpm = int(round(175 * max(0.7, min(1.2, float(speed)))))
+        rate_flags = ["-r", str(wpm)]
+
     with tempfile.TemporaryDirectory(prefix="pai-tts-") as tmp:
         aiff = Path(tmp) / "speech.aiff"
         m4a = Path(tmp) / "speech.m4a"
-        _run([say_path, "-o", str(aiff), "-f", "-"], input_text=text, label="macOS 'say'", timeout=60)
+        _run(
+            [say_path, *rate_flags, "-o", str(aiff), "-f", "-"],
+            input_text=text,
+            label="macOS 'say'",
+            timeout=60,
+        )
         _run(
             [afconvert_path, "-f", "m4af", "-d", "aac", str(aiff), str(m4a)],
             input_text=None,
