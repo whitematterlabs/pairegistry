@@ -3,5 +3,5 @@ kind: driver
 version: 0.1.0
 description: Owner-gated outbound delivery (draft & approve) over a channel-agnostic queue under var/spool/approvals/.
 deps:
-  - propose-send
+  - email
   - imessage

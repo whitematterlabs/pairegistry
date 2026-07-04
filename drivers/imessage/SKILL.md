@@ -49,12 +49,19 @@ up bare lines, sends via Messages.app, then writes the canonical
 only and never get sent. Create today's file if it doesn't exist.
 
 Whether you may send is decided by the owner's `imessage_send` capability,
-stated in your `<capabilities>` block. The kernel enforces it via a freeze
-file: when send isn't granted, `~/.pai/sys/drivers/imessage/outbound.freeze`
-exists and the driver consumes attempted bare lines, appends a
-`kernel: send frozen` note, emits `imessage:send_failed`, and does not call
-Messages.app. If your `<capabilities>` block says iMessage is read-only,
-don't attempt sends; never retry a frozen send.
+stated in your `<capabilities>` block. Always append the same bare line
+regardless of mode:
+- Send granted (`yes`) — delivered via Messages.app as described above.
+- Approval required (`ask`) — the driver detects the gate and automatically
+  queues your message in the owner's approval tray instead of sending (see
+  the `approvals` skill); it appends a `kernel: queued for owner approval`
+  note. Tell the owner you sent it for approval, not that it was delivered.
+- Not granted (`no`) — the driver consumes the line, appends a
+  `kernel: send frozen` note, emits `imessage:send_failed`, and does not call
+  Messages.app.
+
+If your `<capabilities>` block says iMessage is read-only, don't attempt
+sends; never retry a frozen or rejected send.
 
 ```
 echo "thurs after 6 works" >> /home/pai/messages/<thread>/<today>.md
@@ -83,5 +90,6 @@ first-last if needed for disambiguation.
   `sender`, `text`, `day_file` per message. Day-files are already
   written; decide whether to reply, surface, or stay silent — same
   rules as `imessage:new`, just batched.
-- **`imessage:send_failed`** — your outbound didn't deliver. Surface
-  the thread, text, and reason to the owner thread. Don't retry.
+- **`imessage:send_failed`** — your outbound didn't deliver, either because
+  sends aren't granted or because the owner rejected a queued approval.
+  Surface the thread, text, and reason to the owner thread. Don't retry.

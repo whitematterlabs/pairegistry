@@ -9,17 +9,25 @@ Mail's Drafts folder under the right account and the owner reviews + sends
 by hand. If the yaml sets `action: send`, the driver instead uses AppleScript
 `send` and the message leaves the machine.
 
-Sending is gated by a freeze (mirrors the imessage driver), the hard
-enforcement boundary for the owner's `capabilities.email_send` grant:
-  - env `PAI_EMAIL_SENDS_FROZEN` (truthy) — wins if set; else
-  - file `~/.pai/sys/drivers/email/outbound.freeze` exists → frozen.
-When frozen, an `action: send` yaml is NOT sent — it's saved as a draft
-instead (defense in depth even if a prompt is stale), with `send_blocked`
-recording why. The kernel writes/removes the freeze from `capabilities:`.
+Sending is gated by the owner's `capabilities.email_send` grant, read live
+from `config.capability_modes()` on every draft (no/ask/yes):
+  - `yes` (or a valid approvals token on this draft) — sends directly.
+  - `ask`, no token yet — the draft is NOT sent or saved to Mail.app; instead
+    it's staged into the owner's `var/spool/approvals/` queue
+    (`draft_state: pending_approval`) for the owner to approve/reject in the
+    web console. The approvals driver re-delivers an approved item by writing
+    a fresh draft carrying a secret token, which this driver honors.
+  - `no` — an `action: send` yaml is NOT sent — it's saved as a draft instead
+    (content preserved), with `send_blocked` recording why, and a
+    `draft_failed` event so the PAI learns the send didn't happen even
+    without `--wait`.
 
 Lifecycle (`draft_state` field):
   - missing / "pending"        → re-evaluate on next event
   - "pending_parent"           → reply parent not found yet; retry with backoff
+  - "pending_approval"         → terminal until the owner decides; the
+                                 approvals driver carries it forward, never
+                                 this driver
   - "drafted"                  → terminal success; saved to Mail's Drafts
   - "sent"                     → terminal success; delivered via Mail.app
   - "failed"                   → terminal failure; draft_error explains why
@@ -40,8 +48,11 @@ import yaml
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
+from boot import config
 from boot import paths
 from boot import processes as P
+
+from drivers.approvals import queue as approvals_queue
 
 from .. import shared
 from . import accounts as A
@@ -50,31 +61,15 @@ from . import accounts as A
 EMAIL_ROOT = paths.var_spool_email()
 DRAFTS_DIR = paths.var_spool_email_drafts()
 
-# Outbound send freeze — the enforcement boundary for capabilities.email_send.
-# Same contract as the imessage driver: env wins if set, else file-existence.
-STATE_DIR = paths.PAI_ROOT / "sys" / "drivers" / "email"
-FREEZE_PATH = STATE_DIR / "outbound.freeze"
-FREEZE_ENV = "PAI_EMAIL_SENDS_FROZEN"
 
-
-def _truthy(value: str) -> bool:
-    return value.strip().lower() not in {"", "0", "false", "no", "off"}
-
-
-def _sends_frozen() -> bool:
-    env = os.environ.get(FREEZE_ENV)
-    if env is not None:
-        return _truthy(env)
-    return FREEZE_PATH.exists()
-
-
-# Draft-and-approve bridge: under capability `approve` the freeze stays ON so
-# the PAI's own `action: send` never leaves, but an item the owner approved is
-# delivered by the approvals driver, which writes the send-draft carrying a
-# secret token it owns under sys/drivers/approvals/. A draft whose
-# `approved_token` matches that token is allowed through the freeze. A PAI
-# can't read the token (it's never in a PAI's prompt or home view), so it can't
-# forge an approved send; a plain PAI `action: send` has no token and is frozen.
+# Draft-and-approve bridge: under capability `ask`, a draft is staged into the
+# approvals queue instead of being sent or drafted. An item the owner approves
+# is delivered by the approvals driver, which writes a fresh send-draft
+# carrying a secret token it owns under sys/drivers/approvals/. A draft whose
+# `approved_token` matches that token is allowed through even though the mode
+# is still `ask` — this is the approvals driver's own re-delivery, not the
+# PAI's direct send. A PAI can't read the token (it's never in a PAI's prompt
+# or home view), so it can't forge an approved send.
 APPROVALS_TOKEN_PATH = paths.PAI_ROOT / "sys" / "drivers" / "approvals" / "grant.token"
 
 
@@ -86,22 +81,6 @@ def _approved_via_token(draft: dict) -> bool:
         return tok == APPROVALS_TOKEN_PATH.read_text(encoding="utf-8").strip()
     except OSError:
         return False
-
-
-def _freeze_reason() -> str:
-    env = os.environ.get(FREEZE_ENV)
-    if env is not None:
-        source = f"${FREEZE_ENV}"
-        detail = env.strip()
-    else:
-        source = str(FREEZE_PATH)
-        try:
-            detail = FREEZE_PATH.read_text(encoding="utf-8").strip().splitlines()[0]
-        except (FileNotFoundError, IndexError, OSError):
-            detail = ""
-    if detail:
-        return f"email sends frozen by {source}: {detail}"
-    return f"email sends frozen by {source}"
 
 
 # Reply retry schedule (seconds). Mail may not have synced the parent
@@ -262,6 +241,16 @@ def _emit_failed(account: str, path: Path, reason: str) -> None:
     })
 
 
+def _emit_sent(account: str, path: Path) -> None:
+    rel_path = str(path.relative_to(paths.PAI_ROOT)) if path.is_absolute() else str(path)
+    P.emit_event({
+        "source": "email-out",
+        "kind": "sent",
+        "account": account,
+        "path": shared.home_view_path(rel_path),
+    })
+
+
 def _mark_failed(path: Path, draft: dict, account: str, reason: str) -> None:
     draft["draft_state"] = "failed"
     draft["draft_error"] = reason
@@ -289,10 +278,12 @@ async def _process(path: Path) -> None:
         return
     if draft is None:
         return
-    # `draft_state`: "drafted" / "sent" / "failed" are terminal — never
-    # re-process. "pending_parent" is transient; the retry timer re-enqueues it.
+    # `draft_state`: "drafted" / "sent" / "failed" / "pending_approval" are
+    # terminal — never re-process (an approved item comes back as a *new*
+    # draft yaml written by the approvals driver, not a state flip on this
+    # one). "pending_parent" is transient; the retry timer re-enqueues it.
     state = draft.get("draft_state")
-    if state in ("drafted", "sent", "failed"):
+    if state in ("drafted", "sent", "failed", "pending_approval"):
         return
     if not draft.get("to") and not draft.get("in_reply_to"):
         # Nothing actionable yet (PAI may still be writing).
@@ -314,27 +305,55 @@ async def _process(path: Path) -> None:
         )
         return
 
-    # Send only when the yaml explicitly opts in AND sends aren't frozen. A
-    # frozen send is not an error — it falls back to a draft (the message still
-    # lands safely in Drafts), with `send_blocked` recording why so a stale
-    # prompt can't silently leak mail. `send_blocked` is cleared on a real draft.
+    # Send only when the yaml explicitly opts in. Gated by the owner's live
+    # `capabilities.email_send` mode (no/ask/yes) — a valid approvals token
+    # bypasses the mode check entirely, since that's the approvals driver's
+    # own re-delivery of an already-approved item, not the PAI's direct send.
     want_send = str(draft.get("action") or "").strip().lower() == "send"
     do_send = False
+    blocked_reason: Optional[str] = None
     if want_send:
-        # Frozen sends are blocked UNLESS the approvals driver vouched for this
-        # one with a valid token (an owner-approved item). A plain PAI
-        # `action: send` carries no token, so it still falls back to a draft.
-        if _sends_frozen() and not _approved_via_token(draft):
-            reason = _freeze_reason()
-            draft["send_blocked"] = reason
-            print(
-                f"[email-out] send requested but frozen — saving as draft "
-                f"({account}/{path.name}): {reason}",
-                flush=True,
-            )
-        else:
+        if _approved_via_token(draft):
             do_send = True
             draft.pop("send_blocked", None)
+        else:
+            mode = config.capability_modes().get("email_send", "no")
+            if mode == "yes":
+                do_send = True
+                draft.pop("send_blocked", None)
+            elif mode == "ask":
+                action: dict = {
+                    "from": account,
+                    "to": draft.get("to") or [],
+                    "cc": draft.get("cc") or [],
+                    "bcc": draft.get("bcc") or [],
+                    "content": draft.get("content") or "",
+                }
+                if draft.get("subject"):
+                    action["subject"] = draft["subject"]
+                if draft.get("in_reply_to"):
+                    action["in_reply_to"] = draft["in_reply_to"]
+                approvals_queue.stage_pending(
+                    "email", action,
+                    created_by=draft.get("created_by"),
+                    source_ref=str(path.relative_to(paths.PAI_ROOT)),
+                )
+                draft["draft_state"] = "pending_approval"
+                _atomic_dump(path, draft)
+                print(
+                    f"[email-out] send requested but capability is ask — queued for "
+                    f"owner approval ({account}/{path.name})",
+                    flush=True,
+                )
+                return
+            else:
+                blocked_reason = f"email sends are off (capabilities.email_send={mode})"
+                draft["send_blocked"] = blocked_reason
+                print(
+                    f"[email-out] send requested but capability is {mode} — saving as "
+                    f"draft ({account}/{path.name}): {blocked_reason}",
+                    flush=True,
+                )
     else:
         draft.pop("send_blocked", None)
 
@@ -373,10 +392,13 @@ async def _process(path: Path) -> None:
     if do_send:
         draft["sent_at"] = stamp
         _atomic_dump(path, draft)
+        _emit_sent(account, path)
         print(f"[email-out] sent via Mail.app: {account}/{path.name}", flush=True)
     else:
         draft["drafted_at"] = stamp
         _atomic_dump(path, draft)
+        if blocked_reason:
+            _emit_failed(account, path, blocked_reason)
         print(f"[email-out] drafted to Mail.app: {account}/{path.name}", flush=True)
 
 

@@ -1,63 +1,45 @@
 ---
 name: approvals
-description: Draft-and-approve — propose an outbound send and let the owner approve it before it leaves.
+description: Draft-and-approve — outbound sends under a capability in `ask` mode are queued automatically for the owner to approve, no different action from you.
 driver: approvals
 ---
 
 # Draft & approve
 
-When a send capability is in **`approve`** mode (see the `<capabilities>` block),
-you may **propose** a send but never send it yourself. You queue it; the owner
-approves it in the web console; the approvals driver delivers it.
+When a send capability is in **`ask`** mode (see the `<capabilities>` block), you
+send exactly as you normally would — `action: send` on an email draft, a bare
+line to an iMessage thread. The outbound driver detects the capability is
+gated and automatically stages your attempted send into the owner's approval
+queue instead of delivering it. You never call a separate tool for this.
 
 ## When to use
 
 You decided to send something (an email reply, a follow-up) and the
-`<capabilities>` block says **APPROVAL REQUIRED** for that channel. Do not write
-`action: send` and do not append a bare iMessage line — both are frozen and
-won't leave. Queue the action instead.
-
-## Procedure
-
-1. Compose the full message as you normally would.
-2. Queue it with `propose-send`:
-   ```
-   propose-send --channel email \
-     --from <your-account> --to <recipient> --subject "<subject>" \
-     --in-reply-to "<message-id>"   # for a reply; omit --to is fine for replies
-     --summary "<one line the owner sees in the queue>" \
-     --source-event email:new --source-ref <inbound path> \
-     --body -    # body on stdin
-   ```
-   or for iMessage:
-   ```
-   propose-send --channel imessage --thread <thread-slug> \
-     --summary "<one line the owner sees in the queue>" \
-     --source-event imessage:new \
-     --body -    # body on stdin
-   ```
-   It writes one record to `var/spool/approvals/` and prints its id. Nothing is
-   sent.
-3. Tell the owner you **queued it for approval** — never that it was sent.
+`<capabilities>` block says **APPROVAL REQUIRED** for that channel. Send
+normally. Tell the owner you sent it for approval — never that it was
+delivered outright; the driver, not you, is what queues it.
 
 ## Lifecycle
 
 `pending` → owner approves in the web console → `approved` → the approvals
 driver delivers it → `dispatched` (email hands off to the mature macmail send
 path) or `sent` (iMessage is delivered inline by this driver). Owner rejects →
-`rejected`. The driver emits `approvals:pending` when you queue one (so the
-owner is badged) and `approvals:dispatched|sent|failed` on the outcome.
+`rejected`, and you'll see the same failure signal you'd get from any other
+failed send (`email:draft_failed` / `imessage:send_failed`) — no new event
+kind to learn. The driver emits `approvals:pending` when a send is queued (so
+the owner is badged) and `approvals:dispatched|sent|rejected|failed` on the
+outcome.
 
 ## Pitfalls
 
-- **Never** set `action: send` yourself in approve mode — it's frozen and saved
-  as a Mail.app draft, not sent.
-- Don't claim a message was sent. In approve mode it is only *queued* until the
+- Don't claim a message was sent. In `ask` mode it is only *queued* until the
   owner acts.
+- The owner can edit the body before approving — what actually goes out may
+  differ slightly from what you sent.
 - Carries **email** and **imessage**.
 
 ## Verification
 
-`propose-send` prints `queued for approval: <id>` and the record path. The owner
-sees it in the web console's approval tray; the message leaves only after they
-approve.
+Check `email:draft_failed` / `imessage:send_failed` for a rejection reason, or
+`draft_state: pending_approval` on the original email draft yaml while it
+waits. The message leaves only after the owner approves it.

@@ -36,10 +36,13 @@ from typing import Optional
 
 import yaml
 
+from boot import config
 from boot import outbound_echo
 from boot import processes as P
 
 from boot import paths
+
+from drivers.approvals import queue as approvals_queue
 
 from tailer import Tailer
 
@@ -199,14 +202,35 @@ def _append_canonical(day_file: Path, text: str) -> str:
     return line
 
 
+def _emit_sent(thread: str, text: str, service: str) -> None:
+    P.emit_event({
+        "source": "imessage-out",
+        "kind": "sent",
+        "thread": thread,
+        "text": text,
+        "service": service,
+    })
+
+
 async def _process_send(path: Path, text: str) -> bool:
     """Send `text` out through the meta for `path`'s thread. Returns True
-    on success, False on permanent failure (note + event already emitted)."""
+    on success, False on permanent failure or a queued approval (note + event
+    already emitted; a queued approval is not a failure, but there is nothing
+    left for the tailer to do with this line either way)."""
     meta = _load_meta(path)
     if not meta or meta.get("channel") != "imessage":
         return False
     thread = path.parent.name
     if _sends_frozen():
+        mode = config.capability_modes().get("imessage_send", "no")
+        if mode == "ask":
+            approvals_queue.stage_pending("imessage", {"thread": thread, "text": text})
+            print(f"[imessage-out] queued for owner approval: {thread}: {text[:80]}", flush=True)
+            try:
+                _append_kernel_note(path, "queued for owner approval")
+            except Exception as note_err:
+                print(f"[imessage-out] could not append kernel note: {note_err}", flush=True)
+            return False
         reason = _freeze_reason()
         print(f"[imessage-out] send frozen for {thread}: {text[:80]}", flush=True)
         try:
@@ -227,6 +251,7 @@ async def _process_send(path: Path, text: str) -> bool:
         _emit_send_failed(thread, text, reason)
         return False
     print(f"[imessage-out] sent to {thread} via {service}: {text[:80]}", flush=True)
+    _emit_sent(thread, text, service)
     return True
 
 

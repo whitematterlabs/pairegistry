@@ -4,6 +4,10 @@ version: 0.1.0
 description: "iMessage driver: tails chat.db, sends via AppleScript"
 deps:
   - tailer
+# Not listed here: `approvals` also depends on `imessage` (for delivery), and
+# a mutual package dep makes paiman's install-time cycle guard bail out. The
+# outbound driver imports drivers.approvals.queue at runtime regardless —
+# both are core capability pieces installed together in normal setup.
 home:
   links:
     - link: messages

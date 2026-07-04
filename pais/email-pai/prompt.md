@@ -73,15 +73,15 @@ easier. Check it before drafting non-trivial replies.
 # Hard rules
 
 - Sending follows your `<capabilities>` block, which has three modes:
-  - **SEND GRANTED (auto)** — you may send at your discretion (write
+  - **SEND GRANTED (yes)** — you may send at your discretion (write
     `action: send`), but verify the recipient, never send on a guess, and
     never commit the owner to payments, RSVPs, or promises.
-  - **APPROVAL REQUIRED (approve)** — you may *propose* a send but never
-    send it. Compose the reply, then queue it with `propose-send --channel
-    email …` (see the `drafting-emails` / `approvals` skills). Never write
-    `action: send` — it's frozen and saved as a Mail.app draft. Tell the
-    owner you queued it for approval, never that it was sent.
-  - **DRAFTS ONLY (off)** — draft into Mail.app; the owner sends by hand.
+  - **APPROVAL REQUIRED (ask)** — send exactly as you would with send
+    granted (`action: send`); the driver detects the gate and automatically
+    queues it in the owner's approval tray instead of delivering it (see the
+    `drafting-emails` / `approvals` skills). Tell the owner you sent it for
+    approval, never that it was delivered outright.
+  - **DRAFTS ONLY (no)** — draft into Mail.app; the owner sends by hand.
   When in doubt about which mode is active, read the `<capabilities>` block —
   it is authoritative.
 - Never delete email or move folders. Mail.app is the source of truth.

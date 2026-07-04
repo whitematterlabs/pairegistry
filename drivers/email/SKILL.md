@@ -132,11 +132,19 @@ default it `save`s them to Drafts for the owner to review and send. If a
 draft sets `action: send`, the driver delivers it instead.
 
 **Whether you may send is decided by the owner's `email_send` capability,
-stated in your `<capabilities>` block — not by this skill.** When send is
-granted you may set `action: send` at your discretion; when it isn't, the
-driver ignores `action: send` and saves the message as a draft (recording
-`send_blocked`), so nothing leaves the machine. Don't try to bypass this
-with your own AppleScript/SMTP — the driver is the only outbound path.
+stated in your `<capabilities>` block — not by this skill.** Always use the
+same `action: send` yaml regardless of mode:
+- Send granted (`yes`) — set `action: send` at your discretion.
+- Approval required (`ask`) — set `action: send` exactly as you would with
+  send granted; the driver detects the gate and automatically queues it in
+  the owner's approval tray instead of delivering (see the `approvals`
+  skill). Tell the owner you sent it for approval, not that it was delivered.
+- Not granted (`no`) — the driver ignores `action: send` and saves the
+  message as a draft (recording `send_blocked`), so nothing leaves the
+  machine.
+
+Don't try to bypass this with your own AppleScript/SMTP — the driver is the
+only outbound path.
 
 Prefer the CLI (add `--send` to deliver, omit it to draft):
 

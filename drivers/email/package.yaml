@@ -5,7 +5,10 @@ description: Email driver — complete on-disk archive (nested YYYY/MM/DD) under
 deps:
   - tailer
   - draft-email
-  - propose-send
+# Not listed here: `approvals` also depends on `email` (for delivery), and a
+# mutual package dep makes paiman's install-time cycle guard bail out. The
+# outbound driver imports drivers.approvals.queue at runtime regardless —
+# both are core capability pieces installed together in normal setup.
 # One-time history population. Runs as an interactive setup step (TTY only,
 # offered default-yes, skippable) because it reads the Full-Disk-Access-gated
 # Mail.app Envelope Index and can outlast the 120s install-hook cap. It

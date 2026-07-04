@@ -233,6 +233,7 @@ def main(argv: list[str] | None = None) -> int:
         "cc": cc_addrs,
         "bcc": bcc_addrs,
         "content": _read_body(args),
+        "created_by": os.environ.get("PAI_SLUG") or os.environ.get("PAI_NAME") or "unknown",
     }
     if args.subject:
         draft["subject"] = args.subject

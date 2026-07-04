@@ -1,21 +1,21 @@
 # Event spec for the approvals (draft & approve) driver.
 #
 # Watches var/spool/approvals/*.yaml — the channel-agnostic queue of outbound
-# actions a PAI proposed (via `propose-send`) under a send capability in
-# `approve` mode. The owner approves/rejects each in the web console; this
-# driver delivers the approved ones through the channel's native send path.
+# sends an email/imessage outbound driver blocked under a send capability in
+# `ask` mode. The owner approves/rejects each in the web console; this driver
+# delivers the approved ones through the channel's native send path.
 #
 # Lifecycle (status field):
-#   pending    → awaiting the owner's decision (set by propose-send)
+#   pending    → awaiting the owner's decision (staged by the outbound driver)
 #   approved   → owner approved (set by the web console) — this driver acts
-#   rejected   → owner rejected — terminal, never sent
+#   rejected   → owner rejected — terminal; the originating channel is notified
 #   dispatched → handed to the channel's send path (email: a token'd send-draft
 #                the macmail-out driver delivers) — terminal for this driver
 #   sent       → delivered directly by this driver (channels it sends inline)
 #   failed     → delivery error — terminal, error explains why
 
 driver: approvals
-description: Owner-gated outbound delivery — proposed sends wait for approval.
+description: Owner-gated outbound delivery — blocked sends wait for approval.
 
 processes:
   - slug: approvals
@@ -24,13 +24,21 @@ processes:
 
 events:
   - kind: approvals:pending
-    description: A new proposed send was queued and awaits the owner's approval.
+    description: A blocked send was queued and awaits the owner's approval.
     emitted_by: drivers/approvals/driver.py
     raw_kind: pending
     payload:
       id: string
       channel: string
-      summary: string
+
+  - kind: approvals:rejected
+    description: The owner rejected a queued send.
+    emitted_by: drivers/approvals/driver.py
+    raw_kind: rejected
+    payload:
+      id: string
+      channel: string
+      reason: string
 
   - kind: approvals:dispatched
     description: An approved item was handed to the channel's native send path.

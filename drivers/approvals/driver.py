@@ -1,24 +1,24 @@
 """approvals driver — owner-gated outbound delivery (draft & approve).
 
-Watches `var/spool/approvals/*.yaml`. A PAI under a send capability in
-`approve` mode proposes a send with `propose-send` (status: pending); the
-owner approves it in the web console (status: approved); this driver then
-delivers it through the channel's native send path.
+Watches `var/spool/approvals/*.yaml`. A PAI under a send capability in `ask`
+mode sends normally; the outbound driver (email/imessage) detects the mode
+and stages a record here (status: pending) instead of delivering. The owner
+approves it in the web console (status: approved); this driver then delivers
+it through the channel's native send path.
 
 Trust model — PAIs are cooperative, not adversarial. The gate stops an
 eager PAI from sending on its own, not a PAI deliberately circumventing via
 raw shell (it runs as the same unix user). The mechanical backstop is the
-per-driver outbound *freeze*, which stays ON in approve mode so the PAI's own
-`action: send` / bare line never leaves. This driver carries an *approved*
-email through that freeze using a secret token it owns under
+per-driver outbound *freeze*/capability-mode check the outbound driver itself
+applies, so the PAI's own `action: send` / bare line never leaves. This
+driver carries an *approved* email through via a secret token it owns under
 `sys/drivers/approvals/grant.token` — written fresh each boot, never exposed
 to a PAI's prompt or home view. Only a record the owner moved to `approved`
-is ever delivered; a PAI is told (via the <capabilities> block) to propose,
-never to approve.
+is ever delivered.
 
 Email reuses the mature macmail-out path: this driver writes a normal
 send-draft carrying the token, and the email driver's send gate honors the
-token even while frozen. iMessage has no equivalent draft artifact (its
+token regardless of mode. iMessage has no equivalent draft artifact (its
 outbound driver tails day-files, not a drop directory), so it delivers
 inline: this driver sends via the same AppleScript helpers the imessage-out
 driver uses, then appends the canonical `[HH:MM] me: <text>` line itself.
@@ -31,14 +31,14 @@ import os
 import secrets
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
-import yaml
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 from boot import paths
 from boot import processes as P
+from drivers.approvals import queue as approvals_queue
+from drivers.email.macmail import outbound as email_outbound
 from drivers.imessage import outbound as imessage_outbound
 
 
@@ -57,26 +57,16 @@ TERMINAL = {"rejected", "dispatched", "sent", "failed"}
 _TOKEN = ""
 # Records we've already announced as pending, so a re-read doesn't re-notify.
 _announced: set[str] = set()
+# Records we've already told the originating channel about, so a re-read
+# doesn't re-notify the PAI a second time for the same rejection.
+_rejected_notified: set[str] = set()
+
+_atomic_dump = approvals_queue.atomic_dump
+_load = approvals_queue.load
 
 
 def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
-
-
-def _atomic_dump(path: Path, data: dict) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w") as f:
-        yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
-    os.replace(tmp, path)
-
-
-def _load(path: Path) -> Optional[dict]:
-    try:
-        with path.open() as f:
-            data = yaml.safe_load(f)
-    except (OSError, yaml.YAMLError):
-        return None
-    return data if isinstance(data, dict) else None
 
 
 def _ensure_token() -> str:
@@ -189,6 +179,38 @@ async def _deliver_imessage(path: Path, rec: dict) -> None:
     print(f"[approvals] {rec.get('id')} approved → sent to imessage:{thread}", flush=True)
 
 
+async def _notify_rejected(rec: dict) -> None:
+    """Tell the originating channel a queued send was rejected, so the PAI
+    hears about it the same way it hears about any other send failure — no
+    new event kind to learn."""
+    reason = str(rec.get("error") or "rejected by owner")
+    action = rec.get("action") or {}
+    channel = str(rec.get("channel") or "")
+    if channel == "imessage":
+        thread = str(action.get("thread") or "").strip()
+        text = str(action.get("text") or "")
+        if thread:
+            day_file = imessage_outbound.MESSAGES_ROOT / thread / f"{datetime.now().date().isoformat()}.md"
+            try:
+                imessage_outbound._append_kernel_note(day_file, f"send rejected by owner — {reason}")
+            except Exception as e:
+                print(f"[approvals] could not append rejection note: {e}", flush=True)
+            imessage_outbound._emit_send_failed(thread, text, reason)
+    elif channel == "email":
+        source_ref = rec.get("source_ref")
+        if source_ref:
+            draft_path = paths.PAI_ROOT / str(source_ref)
+            draft = _load(draft_path)
+            if draft is not None:
+                draft["draft_state"] = "failed"
+                draft["draft_error"] = f"rejected by owner — {reason}"
+                _atomic_dump(draft_path, draft)
+                account = str(draft.get("from") or "")
+                email_outbound._emit_failed(account, draft_path, f"rejected by owner — {reason}")
+    _emit("rejected", rec, reason=reason)
+    print(f"[approvals] {rec.get('id')} rejected by owner: {reason}", flush=True)
+
+
 async def _process(path: Path) -> None:
     if not _is_queue_record(path) or not path.exists():
         return
@@ -197,13 +219,18 @@ async def _process(path: Path) -> None:
         return
     rec.setdefault("id", path.stem)
     status = str(rec.get("status") or PENDING)
+    if status == "rejected":
+        if rec["id"] not in _rejected_notified:
+            _rejected_notified.add(rec["id"])
+            await _notify_rejected(rec)
+        return
     if status in TERMINAL:
         return
     if status == PENDING:
         # Announce once so the web surface can badge it. The owner decides.
         if rec["id"] not in _announced:
             _announced.add(rec["id"])
-            _emit("pending", rec, summary=rec.get("summary"))
+            _emit("pending", rec)
         return
     if status != APPROVED:
         return
