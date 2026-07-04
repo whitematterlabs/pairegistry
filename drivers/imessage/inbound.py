@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import pwd
 import select
 import sqlite3
 import threading
@@ -33,7 +34,11 @@ import yaml
 
 from boot import processes as P
 
-CHAT_DB = Path.home() / "Library" / "Messages" / "chat.db"
+# The real macOS user's home, not $HOME — the kernel overrides $HOME per-PAI
+# for sandboxing (see boot/nudge.py), so Path.home() would resolve into the
+# PAI-local sandbox instead of ~/Library/Messages.
+REAL_HOME = Path(pwd.getpwuid(os.getuid()).pw_dir)
+CHAT_DB = REAL_HOME / "Library" / "Messages" / "chat.db"
 CURSOR_DIR = P.HOME_DIR / "tmp" / "drivers" / "imessage_in"
 CURSOR_PATH = CURSOR_DIR / "cursor.yaml"
 

@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import os
 import plistlib
+import pwd
 import re
 import select
 import sqlite3
@@ -39,15 +40,20 @@ CURSOR_PATH = STATE_DIR / "cursor.yaml"
 
 MAC_EPOCH = datetime(2001, 1, 1, tzinfo=timezone.utc)
 
+# The real macOS user's home, not $HOME — the kernel overrides $HOME per-PAI
+# for sandboxing (see boot/nudge.py), so Path.home() would resolve into the
+# PAI-local sandbox instead of ~/Library/Group Containers.
+REAL_HOME = Path(pwd.getpwuid(os.getuid()).pw_dir)
+
 # Modern macOS stores delivered notifications here. Keep the alternatives
 # narrow and explicit: the group containers are privacy-protected, and some
 # Terminal contexts can stat a known child path even when directory listing is
 # denied.
 DB_CANDIDATES = (
-    Path.home() / "Library" / "Group Containers" / "group.com.apple.usernoted" / "db2" / "db",
-    Path.home() / "Library" / "Group Containers" / "group.com.apple.UserNotifications" / "db2" / "db",
-    Path.home() / "Library" / "Group Containers" / "group.com.apple.usernoted" / "Library" / "UserNotifications" / "db2" / "db",
-    Path.home() / "Library" / "Group Containers" / "group.com.apple.UserNotifications" / "Library" / "UserNotifications" / "db2" / "db",
+    REAL_HOME / "Library" / "Group Containers" / "group.com.apple.usernoted" / "db2" / "db",
+    REAL_HOME / "Library" / "Group Containers" / "group.com.apple.UserNotifications" / "db2" / "db",
+    REAL_HOME / "Library" / "Group Containers" / "group.com.apple.usernoted" / "Library" / "UserNotifications" / "db2" / "db",
+    REAL_HOME / "Library" / "Group Containers" / "group.com.apple.UserNotifications" / "Library" / "UserNotifications" / "db2" / "db",
 )
 
 # NOTE_WRITE covers in-place WAL appends. DELETE/RENAME cover checkpoints or

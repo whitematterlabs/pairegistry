@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import pwd
 import select
 import sqlite3
 import tempfile
@@ -36,7 +37,11 @@ from .. import shared
 from . import accounts as A
 from . import emlx as E
 
-ENVELOPE_DIR = Path.home() / "Library" / "Mail" / "V10" / "MailData"
+# The real macOS user's home, not $HOME — the kernel overrides $HOME per-PAI
+# for sandboxing (see boot/nudge.py), so Path.home() would resolve into the
+# PAI-local sandbox instead of ~/Library/Mail.
+REAL_HOME = Path(pwd.getpwuid(os.getuid()).pw_dir)
+ENVELOPE_DIR = REAL_HOME / "Library" / "Mail" / "V10" / "MailData"
 ENVELOPE_INDEX = ENVELOPE_DIR / "Envelope Index"
 
 CURSOR_DIR = P.HOME_DIR / "tmp" / "drivers" / "email"

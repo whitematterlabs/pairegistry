@@ -30,13 +30,16 @@ from __future__ import annotations
 import email
 import email.policy
 import email.utils
+import os
+import pwd
 from email.message import Message
 from pathlib import Path
 from typing import Optional
 
 from .. import shared
 
-MAIL_ROOT = Path.home() / "Library" / "Mail" / "V10"
+# The real macOS user's home, not $HOME — see inbound.py's REAL_HOME comment.
+MAIL_ROOT = Path(pwd.getpwuid(os.getuid()).pw_dir) / "Library" / "Mail" / "V10"
 
 
 def emlx_path(account_uuid: str, mailbox_name: str, rowid: int) -> Optional[Path]:
