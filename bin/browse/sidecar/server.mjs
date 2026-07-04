@@ -1,9 +1,10 @@
-// browse daemon — a persistent Playwright session driving PAI's own Chrome.
+// browse daemon — a persistent Playwright session driving the owner's Chrome.
 //
 // PAI invokes `browse` as one-shot CLI verbs. This daemon, spawned lazily by
 // browse.py on the first verb, owns a single headed Chrome (Playwright
 // launchPersistentContext, channel:'chrome' → the real Google Chrome, no
-// Chromium download) against a PAI-dedicated profile under $PAI_ROOT, plus a
+// Chromium download) against the owner's REAL Chrome profile — linked, never
+// copied — so logged-in cookies are always live (v1 takeover behavior), plus a
 // Page per PAI slug. Each verb is one JSON request over a unix socket; the
 // daemon answers with one JSON line. Node startup + browser launch is paid
 // once; verbs stay instant after that. Playwright gives us real keyboard/mouse
@@ -28,11 +29,17 @@ const REAL_HOME = os.userInfo().homedir;
 const PAI_ROOT = process.env.PAI_ROOT || path.join(REAL_HOME, '.pai');
 const STATE_DIR = path.join(PAI_ROOT, 'var', 'lib', 'browse');
 const SOCK = path.join(STATE_DIR, 'browse.sock');
-// PAI keeps its OWN Chrome profile, seeded once from the owner's real profile
-// so logged-in sessions carry over. After the seed the two diverge; re-seed by
-// deleting this dir. Playwright owns the browser process bound to this dir, so
-// there is no shared debug port and no foreign-Chrome guard to worry about.
-const PROFILE_DIR = path.join(STATE_DIR, 'chrome-cdp-profile');
+// browse drives the owner's REAL Chrome profile live. DATA_DIR is a throwaway
+// user-data-dir whose `Default` and `Local State` are SYMLINKS into the owner's
+// real Chrome profile — nothing is copied, so logged-in cookies are always
+// current. (The old approach seeded a one-time rsync copy; copying a live
+// SQLite cookie DB while Chrome held it open captured a torn, near-empty set →
+// logged out, and the seed never re-ran on retry.) A non-default DATA_DIR path
+// is required because Chrome 136+ refuses remote debugging on the real
+// default-profile path; the symlinks let Chrome use the real profile anyway.
+// Cost: PAI and the owner share one profile, so the owner's Chrome is quit
+// before PAI takes it over, and the two can't run at the same time.
+const DATA_DIR = path.join(STATE_DIR, 'cdp');
 const REAL_CHROME_PROFILE = path.join(
   REAL_HOME, 'Library', 'Application Support', 'Google', 'Chrome');
 const LOG = path.join(PAI_ROOT, 'var', 'log', 'browse-daemon.log');
@@ -42,65 +49,51 @@ function log(msg) {
   try { fs.appendFileSync(LOG, line); } catch { /* best-effort */ }
 }
 
-// ---------- profile seeding (ported from browse.py) ----------
+// ---------- real-profile attach (symlink, no copy) ----------
 
-function seedProfileIfNeeded() {
-  if (fs.existsSync(PROFILE_DIR)) return;
-  if (!fs.existsSync(REAL_CHROME_PROFILE)) {
-    log(`real Chrome profile not found at ${REAL_CHROME_PROFILE}; fresh profile`);
-    fs.mkdirSync(PROFILE_DIR, { recursive: true });
-    return;
-  }
-  log(`first-run: cloning Chrome profile → ${PROFILE_DIR} (preserves logins, ~1 min)`);
-  fs.mkdirSync(PROFILE_DIR, { recursive: true });
-  // rsync the bits that matter: top-level Local State (cookie crypto key +
-  // profile registry) and the Default subprofile (cookies, login data,
-  // bookmarks). Skip the gigabyte-scale Cache/ subdirs.
-  const args = [
-    '-a',
-    '--exclude=Default/Cache/',
-    '--exclude=Default/Code Cache/',
-    '--exclude=Default/GPUCache/',
-    '--exclude=Default/Service Worker/',
-    '--exclude=Default/File System/',
-    '--exclude=Default/DawnGraphiteCache/',
-    '--exclude=Default/DawnWebGPUCache/',
-    '--exclude=Default/Application Cache/',
-    '--include=Local State',
-    '--include=Default/***',
-    '--exclude=*',
-    `${REAL_CHROME_PROFILE}/`,
-    `${PROFILE_DIR}/`,
+function ensureRealProfileLinks() {
+  // DATA_DIR is a throwaway user-data-dir whose `Default` and `Local State` are
+  // symlinks into the owner's real Chrome profile, so Chrome reads/writes the
+  // real cookies and logins with nothing copied. Idempotent: re-point a link
+  // that's missing or stale, leave a correct one alone.
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  const links = [
+    ['Default', path.join(REAL_CHROME_PROFILE, 'Default')],
+    ['Local State', path.join(REAL_CHROME_PROFILE, 'Local State')],
   ];
-  const r = spawnSync('rsync', args, { timeout: 300000 });
-  if (r.status !== 0) {
-    log(`profile seed rsync rc=${r.status}; continuing with partial copy`);
+  for (const [name, target] of links) {
+    if (!fs.existsSync(target)) { log(`real profile missing ${target}; skipping link`); continue; }
+    const link = path.join(DATA_DIR, name);
+    let ok = false;
+    try { ok = fs.readlinkSync(link) === target; } catch { ok = false; }
+    if (ok) continue;
+    fs.rmSync(link, { recursive: true, force: true });
+    fs.symlinkSync(target, link);
+  }
+  // A PAI Chrome that crashed can leave a Singleton* lock in DATA_DIR that blocks
+  // relaunch. These belong to PAI's throwaway dir, not the owner's profile.
+  for (const lock of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) {
+    fs.rmSync(path.join(DATA_DIR, lock), { force: true });
   }
 }
 
-function disableAutofillPrefs() {
-  // The seeded profile carries the owner's saved addresses/passwords. On a
-  // controlled (React/Vue) form Chrome will autofill those over whatever a
-  // subagent typed the moment the field gains focus — clobbering values. Turn
-  // off autofill + password-manager fill. Cookies / logged-in sessions are
-  // untouched, so SSO still works. Written while Chrome is down; Chrome reads
-  // Preferences only at launch.
-  const prefsPath = path.join(PROFILE_DIR, 'Default', 'Preferences');
-  let prefs = {};
-  try {
-    if (fs.existsSync(prefsPath)) prefs = JSON.parse(fs.readFileSync(prefsPath, 'utf8'));
-  } catch { prefs = {}; }
-  prefs.autofill = prefs.autofill || {};
-  prefs.autofill.enabled = false;
-  prefs.autofill.profile_enabled = false;
-  prefs.autofill.credit_card_enabled = false;
-  prefs.credentials_enable_service = false;
-  prefs.credentials_enable_autosignin = false;
-  try {
-    fs.mkdirSync(path.dirname(prefsPath), { recursive: true });
-    fs.writeFileSync(prefsPath, JSON.stringify(prefs));
-  } catch (e) {
-    log(`could not disable autofill prefs: ${e}`);
+function chromeRunning() {
+  return spawnSync('pgrep', ['-x', 'Google Chrome']).status === 0;
+}
+
+function quitOwnerChrome() {
+  // PAI and the owner's normal Chrome would both write the same Default (via the
+  // symlink) and corrupt the cookie DB. Quit the owner's Chrome so PAI can take
+  // over its profile — the v1 takeover behavior. Blocks briefly during startup;
+  // nothing can proceed until Chrome is up anyway.
+  if (!chromeRunning()) return;
+  log('quitting owner Chrome to take over its profile…');
+  spawnSync('osascript', ['-e', 'tell application "Google Chrome" to quit']);
+  for (let i = 0; i < 20 && chromeRunning(); i++) spawnSync('sleep', ['0.5']);
+  if (chromeRunning()) {
+    log('Chrome would not quit; force-killing');
+    spawnSync('pkill', ['-x', 'Google Chrome']);
+    spawnSync('sleep', ['1']);
   }
 }
 
@@ -177,10 +170,10 @@ const DOM_TAGGER_JS = String.raw`
 // ---------- browser + page registry ----------
 
 function startBrowser() {
-  seedProfileIfNeeded();
-  disableAutofillPrefs();
-  log('launching persistent Chrome (channel:chrome)…');
-  return chromium.launchPersistentContext(PROFILE_DIR, {
+  quitOwnerChrome();
+  ensureRealProfileLinks();
+  log('launching owner Chrome under PAI control (channel:chrome, real profile)…');
+  return chromium.launchPersistentContext(DATA_DIR, {
     channel: 'chrome',
     headless: false,
     viewport: null,
@@ -471,6 +464,24 @@ function serve() {
     getContext().catch((e) => log(`initial browser launch failed: ${e}`));
   });
 }
+
+// The kernel supervisor sends SIGTERM (then SIGKILL after a grace period) to
+// stop this daemon — e.g. `paictl stop browse-daemon`, or the idle-timeout
+// deadline expiring. Node exiting on its own does not guarantee Playwright's
+// Chrome child exits cleanly, which is exactly the "orphaned Chrome" failure
+// mode this whole daemon redesign exists to close. Close the persistent
+// context (which closes Chrome) before exiting.
+async function shutdown(signal) {
+  log(`received ${signal}, shutting down`);
+  try {
+    if (contextAlive && currentContext) await currentContext.close();
+  } catch (e) {
+    log(`error closing browser context on ${signal}: ${e}`);
+  }
+  process.exit(0);
+}
+process.on('SIGTERM', () => { shutdown('SIGTERM'); });
+process.on('SIGINT', () => { shutdown('SIGINT'); });
 
 // Guard against a double lazy-spawn race: if a live daemon already holds the
 // socket, step aside. Otherwise take it over (unlink stale + bind).
