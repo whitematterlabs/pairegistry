@@ -17,7 +17,8 @@ import net from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { spawnSync } from 'node:child_process';
+import http from 'node:http';
+import { spawnSync, spawn } from 'node:child_process';
 import { chromium } from 'playwright-core';
 
 // The real macOS user's home, not $HOME — the kernel overrides $HOME per-PAI
@@ -42,6 +43,18 @@ const REAL_CHROME_PROFILE = path.join(
 // Written once the bulk profile has been seeded; cookies refresh independently.
 const SEED_MARKER = path.join(PROFILE_DIR, '.seed-ok');
 const LOG = path.join(PAI_ROOT, 'var', 'log', 'browse-daemon.log');
+
+// browse launches its OWN Chrome directly (the pre-Playwright "v1" CDP design)
+// and Playwright only ATTACHES over CDP for input. Launching the ordinary Chrome
+// binary ourselves — with none of Playwright's automation launch flags — is what
+// lets Chrome reach the real macOS "Chrome Safe Storage" Keychain key and decrypt
+// the owner's copied v10 cookies. Playwright's own launchPersistentContext put
+// Chrome on a launch path where it couldn't find the Keychain at all ("A keychain
+// cannot be found to store Chrome" modal), even with --use-mock-keychain stripped.
+const CDP_PORT = Number(process.env.BROWSE_CDP_PORT) || 9333;
+const CDP_BASE = `http://127.0.0.1:${CDP_PORT}`;
+const CHROME_BIN = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const CHROME_LAUNCH_TIMEOUT_MS = 20000;
 
 function log(msg) {
   const line = `[${new Date().toISOString()}] ${msg}\n`;
@@ -120,14 +133,66 @@ function refreshCookies() {
   log(`cookie refresh: ${n} cookies copied from owner profile`);
 }
 
-// Close a prior browse Chrome (matched by its own profile dir) so a fresh daemon
-// can refresh cookies and relaunch. Only ever targets browse's instance — the
-// owner's Chrome (different --user-data-dir) is left running.
-function closeOwnChrome() {
+// Kill browse's own Chrome (matched by its dedicated profile dir). Only ever
+// targets browse's instance — the owner's Chrome (different --user-data-dir) is
+// left running. Also used by the shutdown handlers so idle teardown doesn't
+// leave a detached Chrome behind.
+function killOwnChrome() {
   spawnSync('pkill', ['-f', `--user-data-dir=${PROFILE_DIR}`]);
   for (const lock of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) {
     fs.rmSync(path.join(PROFILE_DIR, lock), { force: true });
   }
+}
+
+// True iff a Chrome is answering the DevTools protocol on our CDP port.
+function cdpAlive() {
+  return new Promise((resolve) => {
+    const req = http.get(`${CDP_BASE}/json/version`, { timeout: 1000 }, (res) => {
+      res.resume();
+      resolve(res.statusCode === 200);
+    });
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+  });
+}
+
+// Close a prior browse Chrome so a fresh daemon can refresh cookies and relaunch,
+// then wait for it to actually release the CDP port before we spawn a new one
+// (pkill returns before Chrome has finished tearing down its listener).
+async function closeOwnChrome() {
+  killOwnChrome();
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline && (await cdpAlive())) {
+    await new Promise((r) => setTimeout(r, 150));
+  }
+}
+
+// Launch PAI's own Chrome directly (v1 design): the ordinary Chrome binary with a
+// dedicated remote-debugging port and profile, and NONE of Playwright's automation
+// launch flags — so Chrome uses the real macOS Keychain and the copied v10 cookies
+// decrypt. Detached (start_new_session equivalent) so a daemon restart doesn't tear
+// down mid-session; closeOwnChrome + the signal handlers clean it up deterministically.
+async function launchChromeDirect() {
+  if (await cdpAlive()) return;   // a prior browse Chrome already exposes CDP
+  if (!fs.existsSync(CHROME_BIN)) throw new Error(`Chrome not found at ${CHROME_BIN}`);
+  log(`launching browse Chrome directly (CDP ${CDP_PORT}, real Keychain)…`);
+  const child = spawn(CHROME_BIN, [
+    `--remote-debugging-port=${CDP_PORT}`,
+    '--remote-debugging-address=127.0.0.1',
+    '--remote-allow-origins=*',
+    `--user-data-dir=${PROFILE_DIR}`,
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--disable-features=AutofillServerCommunication',
+    'about:blank',
+  ], { detached: true, stdio: 'ignore' });
+  child.unref();
+  const deadline = Date.now() + CHROME_LAUNCH_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    if (await cdpAlive()) return;
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  throw new Error(`Chrome did not expose CDP on ${CDP_BASE} within ${CHROME_LAUNCH_TIMEOUT_MS}ms`);
 }
 
 function disableAutofillPrefs() {
@@ -227,25 +292,19 @@ const DOM_TAGGER_JS = String.raw`
 
 // ---------- browser + page registry ----------
 
-function startBrowser() {
-  closeOwnChrome();      // close a prior browse Chrome; leaves owner's running
-  seedBulkIfNeeded();    // one-time bookmarks/prefs/Local State clone
-  refreshCookies();      // pull current cookies from the owner profile each start
+async function startBrowser() {
+  await closeOwnChrome();  // close a prior browse Chrome; leaves owner's running
+  seedBulkIfNeeded();      // one-time bookmarks/prefs/Local State clone
+  refreshCookies();        // pull current cookies from the owner profile each start
   disableAutofillPrefs();
-  log('launching browse Chrome (own profile, channel:chrome)…');
-  return chromium.launchPersistentContext(PROFILE_DIR, {
-    channel: 'chrome',
-    headless: false,
-    viewport: null,
-    args: ['--no-first-run', '--no-default-browser-check'],
-    // CRITICAL: Playwright defaults to --use-mock-keychain and
-    // --password-store=basic, which force Chrome off the macOS Keychain. The
-    // copied cookies are v10 — encrypted with the real "Chrome Safe Storage"
-    // Keychain key (app-global on macOS, so a copy decrypts too). Under the mock
-    // keychain Chrome can't decrypt them and every site is logged out. Dropping
-    // both makes Chrome use the real Keychain so the copied cookies decrypt.
-    ignoreDefaultArgs: ['--use-mock-keychain', '--password-store=basic'],
-  });
+  await launchChromeDirect();  // v1-style direct spawn → real Keychain, CDP port
+  log('attaching Playwright over CDP…');
+  const browser = await chromium.connectOverCDP(CDP_BASE);
+  // A CDP-attached Chrome exposes its persistent profile as the default context;
+  // pages opened here carry the seeded cookies/logins. Fall back to a fresh
+  // context only if Chrome somehow reports none.
+  const context = browser.contexts()[0] || await browser.newContext();
+  return { browser, context };
 }
 
 // The owner closing the Chrome window (or a crash) closes the context, leaving
@@ -253,6 +312,7 @@ function startBrowser() {
 // demand — the daemon-level analogue of the old lazy `_ensure_chrome`. A single
 // in-flight `launching` promise prevents two concurrent verbs from each
 // spawning a Chrome window.
+let currentBrowser = null;
 let currentContext = null;
 let contextAlive = false;
 let launching = null;
@@ -262,12 +322,19 @@ function getContext() {
   if (!launching) {
     launching = (async () => {
       pages.clear();  // stale pages belonged to the dead context
-      const ctx = await startBrowser();
-      ctx.on('close', () => { contextAlive = false; currentContext = null; });
-      currentContext = ctx;
+      const { browser, context } = await startBrowser();
+      // Chrome closing (owner quit / crash) or the CDP link dropping disconnects
+      // the Playwright browser; getContext relaunches on the next verb.
+      browser.on('disconnected', () => {
+        contextAlive = false;
+        currentContext = null;
+        currentBrowser = null;
+      });
+      currentBrowser = browser;
+      currentContext = context;
       contextAlive = true;
       log('browser ready');
-      return ctx;
+      return context;
     })().finally(() => { launching = null; });
   }
   return launching;
@@ -530,6 +597,13 @@ function serve() {
     // the first verb isn't the one that pays the launch.
     getContext().catch((e) => log(`initial browser launch failed: ${e}`));
   });
+}
+
+// Chrome is spawned detached, so it survives a daemon crash but is NOT reaped
+// automatically when the kernel stops us for idle teardown. Kill it on a clean
+// shutdown so no orphan browse Chrome lingers.
+for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
+  process.on(sig, () => { try { killOwnChrome(); } catch { /* best-effort */ } process.exit(0); });
 }
 
 // Guard against a double lazy-spawn race: if a live daemon already holds the
