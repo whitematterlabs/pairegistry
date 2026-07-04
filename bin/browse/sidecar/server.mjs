@@ -28,11 +28,17 @@ const REAL_HOME = os.userInfo().homedir;
 const PAI_ROOT = process.env.PAI_ROOT || path.join(REAL_HOME, '.pai');
 const STATE_DIR = path.join(PAI_ROOT, 'var', 'lib', 'browse');
 const SOCK = path.join(STATE_DIR, 'browse.sock');
-// PAI keeps its OWN Chrome profile, seeded once from the owner's real profile
-// so logged-in sessions carry over. After the seed the two diverge; re-seed by
-// deleting this dir. Playwright owns the browser process bound to this dir, so
-// there is no shared debug port and no foreign-Chrome guard to worry about.
+// PAI keeps its OWN Chrome profile, an isolated COPY seeded from the owner's
+// real profile so logged-in sessions carry over. It NEVER points at the real
+// profile directly — Chrome purges cookies it can't decrypt, and with
+// secure_delete that would wipe the owner's real cookies. Only ever a copy, so
+// a bad launch can harm this dir alone. Re-seed by deleting it or touching
+// RESEED_TRIGGER.
 const PROFILE_DIR = path.join(STATE_DIR, 'chrome-cdp-profile');
+// Written only after a verified seed. Its absence (or a RESEED_TRIGGER) means
+// "(re)seed on next launch" — so a torn/partial seed never sticks forever.
+const SEED_MARKER = path.join(PROFILE_DIR, '.seed-ok');
+const RESEED_TRIGGER = path.join(STATE_DIR, 'reseed');
 const REAL_CHROME_PROFILE = path.join(
   REAL_HOME, 'Library', 'Application Support', 'Google', 'Chrome');
 const LOG = path.join(PAI_ROOT, 'var', 'log', 'browse-daemon.log');
@@ -44,18 +50,41 @@ function log(msg) {
 
 // ---------- profile seeding (ported from browse.py) ----------
 
+// Copy a live SQLite DB *consistently*. A plain rsync/cp of a DB Chrome holds
+// open can capture a torn, near-empty snapshot — that's what logged browse out
+// before (8 of 5261 cookies). The SQLite online-backup API reads a consistent
+// image even while Chrome is writing. Sidecars (-wal/-shm/-journal) are dropped
+// so Chrome can't replay a stale journal over the fresh snapshot.
+function sqliteBackup(src, dst) {
+  if (!fs.existsSync(src)) return false;
+  fs.mkdirSync(path.dirname(dst), { recursive: true });
+  const r = spawnSync('sqlite3', [src, `.backup ${dst}`], { timeout: 60000, encoding: 'utf8' });
+  if (r.status !== 0) {
+    log(`sqlite backup ${src} rc=${r.status}: ${(r.stderr || '').trim()}`);
+    return false;
+  }
+  for (const s of ['-wal', '-shm', '-journal']) fs.rmSync(dst + s, { force: true });
+  return true;
+}
+
 function seedProfileIfNeeded() {
-  if (fs.existsSync(PROFILE_DIR)) return;
+  if (fs.existsSync(SEED_MARKER) && !fs.existsSync(RESEED_TRIGGER)) return;
+  // No marker (fresh or prior torn seed) or an explicit reseed request → rebuild
+  // from the owner's CURRENT profile. Wipe any prior copy first.
+  fs.rmSync(RESEED_TRIGGER, { force: true });
+  fs.rmSync(PROFILE_DIR, { recursive: true, force: true });
+
   if (!fs.existsSync(REAL_CHROME_PROFILE)) {
     log(`real Chrome profile not found at ${REAL_CHROME_PROFILE}; fresh profile`);
     fs.mkdirSync(PROFILE_DIR, { recursive: true });
+    fs.writeFileSync(SEED_MARKER, '');
     return;
   }
-  log(`first-run: cloning Chrome profile → ${PROFILE_DIR} (preserves logins, ~1 min)`);
+  log(`seeding isolated Chrome profile → ${PROFILE_DIR} from owner profile`);
   fs.mkdirSync(PROFILE_DIR, { recursive: true });
-  // rsync the bits that matter: top-level Local State (cookie crypto key +
-  // profile registry) and the Default subprofile (cookies, login data,
-  // bookmarks). Skip the gigabyte-scale Cache/ subdirs.
+  // rsync the bulk (Local State cookie-crypto registry, bookmarks, prefs) minus
+  // the gigabyte caches. The cookie DBs get copied here too but torn — the
+  // online-backup pass below overwrites them with consistent snapshots.
   const args = [
     '-a',
     '--exclude=Default/Cache/',
@@ -76,6 +105,18 @@ function seedProfileIfNeeded() {
   if (r.status !== 0) {
     log(`profile seed rsync rc=${r.status}; continuing with partial copy`);
   }
+  // Consistent snapshots of the cookie stores (legacy + Network/ locations).
+  let cookieRows = 0;
+  for (const rel of ['Default/Cookies', 'Default/Network/Cookies']) {
+    const src = path.join(REAL_CHROME_PROFILE, rel);
+    const dst = path.join(PROFILE_DIR, rel);
+    if (sqliteBackup(src, dst)) {
+      const c = spawnSync('sqlite3', [dst, 'select count(*) from cookies;'], { encoding: 'utf8' });
+      cookieRows += parseInt((c.stdout || '0').trim(), 10) || 0;
+    }
+  }
+  log(`seed captured ${cookieRows} cookies`);
+  fs.writeFileSync(SEED_MARKER, '');
 }
 
 function disableAutofillPrefs() {
@@ -185,6 +226,13 @@ function startBrowser() {
     headless: false,
     viewport: null,
     args: ['--no-first-run', '--no-default-browser-check'],
+    // Playwright defaults to --use-mock-keychain and --password-store=basic,
+    // which force Chrome off the macOS Keychain. The seeded cookies are v10 —
+    // encrypted with the real "Chrome Safe Storage" Keychain key — so under the
+    // mock keychain none decrypt and every site is logged out. Drop both so the
+    // real Chrome binary uses the real Keychain and the copied cookies decrypt.
+    // Safe here because this is the isolated copy, never the owner's profile.
+    ignoreDefaultArgs: ['--use-mock-keychain', '--password-store=basic'],
   });
 }
 
