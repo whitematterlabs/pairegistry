@@ -29,6 +29,13 @@ won't leave. Queue the action instead.
      --source-event email:new --source-ref <inbound path> \
      --body -    # body on stdin
    ```
+   or for iMessage:
+   ```
+   propose-send --channel imessage --thread <thread-slug> \
+     --summary "<one line the owner sees in the queue>" \
+     --source-event imessage:new \
+     --body -    # body on stdin
+   ```
    It writes one record to `var/spool/approvals/` and prints its id. Nothing is
    sent.
 3. Tell the owner you **queued it for approval** — never that it was sent.
@@ -37,9 +44,9 @@ won't leave. Queue the action instead.
 
 `pending` → owner approves in the web console → `approved` → the approvals
 driver delivers it → `dispatched` (email hands off to the mature macmail send
-path) / `sent`. Owner rejects → `rejected`. The driver emits `approvals:pending`
-when you queue one (so the owner is badged) and `approvals:dispatched|sent|failed`
-on the outcome.
+path) or `sent` (iMessage is delivered inline by this driver). Owner rejects →
+`rejected`. The driver emits `approvals:pending` when you queue one (so the
+owner is badged) and `approvals:dispatched|sent|failed` on the outcome.
 
 ## Pitfalls
 
@@ -47,7 +54,7 @@ on the outcome.
   as a Mail.app draft, not sent.
 - Don't claim a message was sent. In approve mode it is only *queued* until the
   owner acts.
-- v1 carries **email**. iMessage proposes land once the iMessage adapter ships.
+- Carries **email** and **imessage**.
 
 ## Verification
 

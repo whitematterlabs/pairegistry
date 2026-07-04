@@ -6,12 +6,14 @@ A PAI holding a send capability in `approve` mode cannot send directly; it
 approves it in the web console; the approvals driver then delivers it through
 the channel's native send path. This command NEVER sends anything itself.
 
-v1 carries `email`. iMessage support lands with the approvals driver's
-iMessage adapter; the `--channel` flag is here so the shape is stable.
+Carries `email` and `imessage`.
 
   propose-send --channel email --from me@x.com --to bob@acme.com \
     --subject "Re: Q3 budget" --body - --summary "reply to bob re Q3 budget" \
     --source-event email:new --source-ref communication/email/.../msg.yaml
+
+  propose-send --channel imessage --thread bob --body - \
+    --summary "reply to bob" --source-event imessage:new
 """
 
 from __future__ import annotations
@@ -30,7 +32,7 @@ from boot import paths
 
 
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
-CHANNELS = ("email",)
+CHANNELS = ("email", "imessage")
 
 
 def _slug(value: str) -> str:
@@ -71,6 +73,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--cc", action="append", help="cc(s); repeatable or comma-separated")
     p.add_argument("--subject", default="")
     p.add_argument("--in-reply-to", dest="in_reply_to", default="", help="Message-ID for a reply")
+    # imessage
+    p.add_argument("--thread", default="", help="iMessage thread slug (home/messages/<slug>/)")
     # provenance (optional)
     p.add_argument("--source-event", dest="source_event", default="")
     p.add_argument("--source-ref", dest="source_ref", default="")
@@ -81,6 +85,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             p.error("--from is required for --channel email")
         if not _split(args.to) and not args.in_reply_to.strip():
             p.error("email needs --to (new message) or --in-reply-to (reply)")
+    elif args.channel == "imessage":
+        if not args.thread.strip():
+            p.error("--thread is required for --channel imessage")
     return args
 
 
@@ -99,6 +106,12 @@ def _build_record(args: argparse.Namespace) -> tuple[dict[str, Any], str]:
             action["in_reply_to"] = args.in_reply_to.strip()
         to = _split(args.to)
         label = args.subject or (to[0] if to else "email")
+    elif args.channel == "imessage":
+        action = {
+            "thread": args.thread.strip(),
+            "text": body,
+        }
+        label = args.thread.strip()
     else:  # pragma: no cover - guarded by choices
         raise SystemExit(f"propose-send: unsupported channel {args.channel!r}")
 

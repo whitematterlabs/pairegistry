@@ -18,7 +18,10 @@ never to approve.
 
 Email reuses the mature macmail-out path: this driver writes a normal
 send-draft carrying the token, and the email driver's send gate honors the
-token even while frozen. Channels added later (iMessage) deliver inline.
+token even while frozen. iMessage has no equivalent draft artifact (its
+outbound driver tails day-files, not a drop directory), so it delivers
+inline: this driver sends via the same AppleScript helpers the imessage-out
+driver uses, then appends the canonical `[HH:MM] me: <text>` line itself.
 """
 
 from __future__ import annotations
@@ -36,6 +39,7 @@ from watchdog.observers import Observer
 
 from boot import paths
 from boot import processes as P
+from drivers.imessage import outbound as imessage_outbound
 
 
 QUEUE_DIR = paths.var_spool_approvals()
@@ -151,6 +155,40 @@ async def _deliver_email(path: Path, rec: dict) -> None:
     )
 
 
+async def _deliver_imessage(path: Path, rec: dict) -> None:
+    action = rec.get("action") or {}
+    thread = str(action.get("thread") or "").strip()
+    text = str(action.get("text") or "")
+    if not thread:
+        _fail(path, rec, "imessage record missing `thread`")
+        return
+    if not text.strip():
+        _fail(path, rec, "imessage record has empty `text`")
+        return
+
+    thread_dir = imessage_outbound.MESSAGES_ROOT / thread
+    day_file = thread_dir / f"{datetime.now().date().isoformat()}.md"
+    meta = imessage_outbound._load_meta(day_file)
+    if not meta or meta.get("channel") != "imessage":
+        _fail(path, rec, f"no imessage thread {thread!r} (missing/invalid meta.yaml)")
+        return
+
+    try:
+        await imessage_outbound._send(meta, text)
+    except Exception as e:
+        _fail(path, rec, f"send failed: {e}")
+        return
+
+    day_file.parent.mkdir(parents=True, exist_ok=True)
+    imessage_outbound._append_canonical(day_file, text)
+
+    rec["status"] = "sent"
+    rec["dispatched_at"] = _now()
+    _atomic_dump(path, rec)
+    _emit("sent", rec)
+    print(f"[approvals] {rec.get('id')} approved → sent to imessage:{thread}", flush=True)
+
+
 async def _process(path: Path) -> None:
     if not _is_queue_record(path) or not path.exists():
         return
@@ -173,6 +211,8 @@ async def _process(path: Path) -> None:
     channel = str(rec.get("channel") or "")
     if channel == "email":
         await _deliver_email(path, rec)
+    elif channel == "imessage":
+        await _deliver_imessage(path, rec)
     else:
         _fail(path, rec, f"channel {channel!r} is not deliverable in approve mode yet")
 
