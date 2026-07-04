@@ -39,10 +39,12 @@ import os
 import pwd
 import shutil
 import socket
-import subprocess
 import sys
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
+
+import yaml
 
 
 def _real_home() -> Path:
@@ -60,7 +62,6 @@ PAI_ROOT = Path(os.environ.get("PAI_ROOT", str(REAL_HOME / ".pai")))
 STATE_DIR = PAI_ROOT / "var" / "lib" / "browse"
 SOCK_PATH = STATE_DIR / "browse.sock"
 SERVER_MJS = PAI_ROOT / "usr" / "libexec" / "browse" / "server.mjs"
-SPAWN_LOG = PAI_ROOT / "var" / "log" / "browse-daemon-spawn.log"
 
 # Generous: covers the one-time profile seed (rsync of the owner's Chrome
 # profile, up to a minute) that the daemon performs on the first verb. Routine
@@ -69,6 +70,16 @@ REQUEST_TIMEOUT_S = 300.0
 # The daemon binds its socket before launching the browser, so it answers a
 # connect within a couple of seconds of node start (node + playwright import).
 DAEMON_UP_TIMEOUT_S = 30.0
+
+# The daemon is a kernel-supervised singleton service (proc_watcher picks up
+# its spec.yaml the same way it does litellm-proxy), not a per-subagent child
+# — this is what makes repeated retries idempotent instead of piling up
+# orphaned Node/Chrome processes. See DAEMON_IDLE_MINUTES below for teardown.
+DAEMON_SLUG = "browse-daemon"
+# Refreshed on every successful verb; the kernel auto-stops (and Chrome with
+# it, via server.mjs's SIGTERM handler) once a browse session goes idle this
+# long, so an abandoned daemon doesn't run forever.
+DAEMON_IDLE_MINUTES = 30
 
 
 # ---------- slug ----------
@@ -116,31 +127,74 @@ def _daemon_alive() -> bool:
         return False
 
 
-def _ensure_daemon() -> None:
-    """Connect to the daemon; spawn it (detached) if dead. Mirrors the old lazy
-    Chrome launch — pay Node startup once, then verbs are instant."""
-    if _daemon_alive():
-        return
+def _spawn_daemon_proc() -> None:
+    """Register the daemon as a kernel-supervised proc, idempotently.
+
+    Writing /proc/browse-daemon/spec.yaml with a `run:` + `restart: always`
+    is enough — proc_watcher._maybe_supervise picks up the new spec.yaml via
+    its filesystem watch and calls supervisor.start() itself (same mechanism
+    paicron/litellm_proxy use). browse.py runs as a one-shot CLI outside the
+    kernel process, so it can't call supervisor.start() directly; it only
+    ever needs to write the proc file once. P.spawn() raises ProcessExists if
+    the dir is already there, which is exactly the idempotency this needs —
+    a concurrent `browse` invocation just falls through to the alive-poll
+    below instead of racing a second Popen.
+    """
+    from boot import processes as P
+
     if not SERVER_MJS.is_file():
         sys.exit(
             f"browse: daemon not installed at {SERVER_MJS}. Run "
             f"`paiman install bin/browse` to stage the Playwright sidecar."
         )
     node = _find_node()
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    SPAWN_LOG.parent.mkdir(parents=True, exist_ok=True)
-    env = {**os.environ, "PAI_ROOT": str(PAI_ROOT)}
-    logf = open(SPAWN_LOG, "ab")
+    deadline = (datetime.now() + timedelta(minutes=DAEMON_IDLE_MINUTES)).isoformat(
+        timespec="seconds"
+    )
+    spec = {
+        "kind": "infra",
+        "run": [node, str(SERVER_MJS)],
+        "restart": "always",
+        "deadline": deadline,
+    }
     try:
-        subprocess.Popen(
-            [node, str(SERVER_MJS)],
-            stdout=logf,
-            stderr=logf,
-            start_new_session=True,
-            env=env,
-        )
-    finally:
-        logf.close()
+        P.spawn(DAEMON_SLUG, spec)
+    except P.ProcessExists:
+        pass
+
+
+def _refresh_daemon_deadline() -> None:
+    """Push back the idle-timeout deadline on every successful verb.
+
+    Rewrites spec.yaml in place (proc_watcher's spec.yaml watch re-arms the
+    heap timer on write, exactly like a fresh spawn) so a daemon in active use
+    never expires mid-session, but one nobody is using gets torn down
+    (Chrome included — see server.mjs's SIGTERM handler) after
+    DAEMON_IDLE_MINUTES of inactivity. Best-effort: a failure here must not
+    break the verb that triggered it.
+    """
+    from boot import processes as P
+
+    try:
+        spec = P.read_spec(DAEMON_SLUG)
+    except P.ProcessNotFound:
+        return
+    spec["deadline"] = (
+        datetime.now() + timedelta(minutes=DAEMON_IDLE_MINUTES)
+    ).isoformat(timespec="seconds")
+    proc = P.PROC_DIR / DAEMON_SLUG
+    tmp = proc / "spec.yaml.tmp"
+    with tmp.open("w") as f:
+        yaml.safe_dump(spec, f, sort_keys=False)
+    tmp.replace(proc / "spec.yaml")
+
+
+def _ensure_daemon() -> None:
+    """Connect to the daemon; register+wait for it if dead. Mirrors the old
+    lazy Chrome launch — pay Node startup once, then verbs are instant."""
+    if _daemon_alive():
+        return
+    _spawn_daemon_proc()
     deadline = time.time() + DAEMON_UP_TIMEOUT_S
     while time.time() < deadline:
         if _daemon_alive():
@@ -148,7 +202,8 @@ def _ensure_daemon() -> None:
         time.sleep(0.3)
     sys.exit(
         f"browse: daemon did not come up within {DAEMON_UP_TIMEOUT_S:.0f}s. "
-        f"See {SPAWN_LOG} and {PAI_ROOT / 'var' / 'log' / 'browse-daemon.log'}."
+        f"See /proc/{DAEMON_SLUG}/log.md and "
+        f"{PAI_ROOT / 'var' / 'log' / 'browse-daemon.log'}."
     )
 
 
@@ -179,6 +234,7 @@ def _request(verb: str, **args) -> dict:
         sys.exit(f"browse: malformed daemon reply: {line[:200]!r}")
     if not reply.get("ok", False):
         sys.exit(f"browse: {reply.get('error', 'unknown daemon error')}")
+    _refresh_daemon_deadline()
     return reply
 
 
