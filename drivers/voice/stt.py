@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import os
 import subprocess
 from pathlib import Path
 
-PAI_ROOT = Path(os.environ.get("PAI_ROOT", str(Path.home() / ".pai")))
+from boot import paths
+
+PAI_ROOT = paths.PAI_ROOT
 LIBEXEC = PAI_ROOT / "usr" / "libexec" / "voice"
 BINARY = LIBEXEC / "whisper-cli"
 MODEL = LIBEXEC / "ggml-base.en.bin"

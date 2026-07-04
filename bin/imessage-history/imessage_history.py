@@ -6,9 +6,11 @@ replays through the driver, and never refuses to run while the live driver
 is up — it just opens chat.db with `query_only = ON` and prints what it sees.
 
 It exists because on a fresh OOBE the iMessage driver has backfilled nothing:
-the day-files under ~/communication/messages/ are empty for any message that
-predates the kernel's first boot. The "getting to know you" onboarding pass
-needs the owner's *last month* of conversation, so it reads chat.db directly.
+the day-files under the owner runtime messages tree
+(~/.pai/home/pai/messages/, or /home/pai/messages/ from a PAI shell) are empty
+for any message that predates the kernel's first boot. The "getting to know
+you" onboarding pass needs the owner's *last month* of conversation, so it
+reads chat.db directly.
 
 Reuses the iMessage inbound driver's building blocks (the bounded SQL, the
 attributedBody typedstream decoder, the mac-epoch date conversions) rather

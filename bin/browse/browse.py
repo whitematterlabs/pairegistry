@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import pwd
 import shutil
 import socket
 import subprocess
@@ -43,7 +44,19 @@ import sys
 import time
 from pathlib import Path
 
-PAI_ROOT = Path(os.environ.get("PAI_ROOT", str(Path.home() / ".pai")))
+
+def _real_home() -> Path:
+    """The macOS account home, not $HOME.
+
+    The kernel sets $HOME to each PAI's stitched sandbox, so Path.home() would
+    point runtime fallbacks and nvm discovery at /home/<pai> instead of the
+    owner's actual host account.
+    """
+    return Path(pwd.getpwuid(os.getuid()).pw_dir)
+
+
+REAL_HOME = _real_home()
+PAI_ROOT = Path(os.environ.get("PAI_ROOT", str(REAL_HOME / ".pai")))
 STATE_DIR = PAI_ROOT / "var" / "lib" / "browse"
 SOCK_PATH = STATE_DIR / "browse.sock"
 SERVER_MJS = PAI_ROOT / "usr" / "libexec" / "browse" / "server.mjs"
@@ -77,7 +90,7 @@ def _find_node() -> str:
     if found:
         return found
     candidates = ["/opt/homebrew/bin/node", "/usr/local/bin/node"]
-    nvm = Path.home() / ".nvm" / "versions" / "node"
+    nvm = REAL_HOME / ".nvm" / "versions" / "node"
     if nvm.is_dir():
         versions = sorted(nvm.glob("*/bin/node"))
         if versions:

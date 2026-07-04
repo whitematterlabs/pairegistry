@@ -18,12 +18,14 @@ import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaile
 import { Boom } from '@hapi/boom';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import { fileURLToPath } from 'url';
 import pino from 'pino';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const PAI_ROOT = process.env.PAI_ROOT || path.join(process.env.HOME, '.pai');
+const REAL_HOME = os.userInfo().homedir;
+const PAI_ROOT = process.env.PAI_ROOT || path.join(REAL_HOME, '.pai');
 const AUTH_DIR = path.join(PAI_ROOT, 'sys', 'drivers', 'whatsapp', 'auth');
 fs.mkdirSync(AUTH_DIR, { recursive: true });
 

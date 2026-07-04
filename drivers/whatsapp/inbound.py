@@ -25,7 +25,7 @@ from boot import processes as P
 from boot import paths
 
 # ── paths ──────────────────────────────────────────────────────────
-PAI_ROOT = Path(os.environ.get("PAI_ROOT", str(Path.home() / ".pai")))
+PAI_ROOT = paths.PAI_ROOT
 BRIDGE_JS = PAI_ROOT / "usr" / "libexec" / "whatsapp" / "bridge.js"
 MESSAGES_ROOT = paths.var_spool_communication() / "whatsapp"
 PEOPLE_ROOT = paths.var_lib_memory() / "people"

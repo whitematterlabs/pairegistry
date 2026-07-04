@@ -22,14 +22,14 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from boot import paths
 from boot import processes as P
 
-PAI_ROOT = Path(os.environ.get("PAI_ROOT", str(Path.home() / ".pai")))
+PAI_ROOT = paths.PAI_ROOT
 
 # Two candidate binary locations: the post-install staged copy (preferred)
 # and the bundle-local dev build.

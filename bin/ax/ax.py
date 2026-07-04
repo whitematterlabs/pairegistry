@@ -33,7 +33,9 @@ import sys
 import uuid
 from pathlib import Path
 
-PAI_ROOT = Path(os.environ.get("PAI_ROOT", str(Path.home() / ".pai")))
+from boot import paths
+
+PAI_ROOT = paths.PAI_ROOT
 SOCKET_PATH = PAI_ROOT / "var" / "run" / "ax" / "axd.sock"
 AXD_BIN = PAI_ROOT / "usr" / "libexec" / "ax" / "axd"
 

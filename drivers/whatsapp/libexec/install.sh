@@ -23,7 +23,28 @@ set -euo pipefail
 # Locate this script's dir (the bridge source lives alongside it) regardless of cwd.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-PAI_ROOT="${PAI_ROOT:-$HOME/.pai}"
+real_home() {
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - <<'PY'
+import os
+import pwd
+print(pwd.getpwuid(os.getuid()).pw_dir)
+PY
+    return
+  fi
+  if command -v dscl >/dev/null 2>&1; then
+    dscl . -read "/Users/$(id -un)" NFSHomeDirectory | awk '{print $2}'
+    return
+  fi
+  echo "real_home: could not resolve OS account home" >&2
+  return 1
+}
+REAL_HOME="$(real_home)" || exit 1
+if [[ -z "$REAL_HOME" ]]; then
+    echo "whatsapp/install.sh: could not resolve OS account home." >&2
+    exit 1
+fi
+PAI_ROOT="${PAI_ROOT:-$REAL_HOME/.pai}"
 DEST_DIR="$PAI_ROOT/usr/libexec/whatsapp"
 VENV_PY="$PAI_ROOT/usr/lib/venv/bin/python"
 

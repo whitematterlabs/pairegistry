@@ -15,9 +15,10 @@ module touches them.
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 import requests
+
+from boot import paths
 
 
 # ── ElevenLabs (TTS) ─────────────────────────────────────────────────────────
@@ -39,9 +40,8 @@ def _reload_dotenv() -> None:
     """
     from dotenv import load_dotenv
 
-    pai_root = Path(os.environ.get("PAI_ROOT", str(Path.home() / ".pai")))
-    load_dotenv(pai_root / ".env.local")
-    load_dotenv(pai_root / ".env")
+    load_dotenv(paths.PAI_ROOT / ".env.local")
+    load_dotenv(paths.PAI_ROOT / ".env")
 
 
 def synthesize(

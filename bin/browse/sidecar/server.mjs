@@ -20,7 +20,12 @@ import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { chromium } from 'playwright-core';
 
-const PAI_ROOT = process.env.PAI_ROOT || path.join(os.homedir(), '.pai');
+// The real macOS user's home, not $HOME — the kernel overrides $HOME per-PAI
+// for sandboxing, so os.homedir() (which honors $HOME) would resolve into the
+// PAI-local sandbox home instead of the owner's real ~/Library. os.userInfo()
+// queries the OS user database (getpwuid) directly, ignoring $HOME.
+const REAL_HOME = os.userInfo().homedir;
+const PAI_ROOT = process.env.PAI_ROOT || path.join(REAL_HOME, '.pai');
 const STATE_DIR = path.join(PAI_ROOT, 'var', 'lib', 'browse');
 const SOCK = path.join(STATE_DIR, 'browse.sock');
 // PAI keeps its OWN Chrome profile, seeded once from the owner's real profile
@@ -29,7 +34,7 @@ const SOCK = path.join(STATE_DIR, 'browse.sock');
 // there is no shared debug port and no foreign-Chrome guard to worry about.
 const PROFILE_DIR = path.join(STATE_DIR, 'chrome-cdp-profile');
 const REAL_CHROME_PROFILE = path.join(
-  os.homedir(), 'Library', 'Application Support', 'Google', 'Chrome');
+  REAL_HOME, 'Library', 'Application Support', 'Google', 'Chrome');
 const LOG = path.join(PAI_ROOT, 'var', 'log', 'browse-daemon.log');
 
 function log(msg) {

@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import AXSwift
+import Darwin
 
 // MARK: - Accessibility grant check
 //
@@ -47,8 +48,23 @@ signal(SIGINT, SIG_IGN)
 WorkspaceWatcher.shared.start()
 ForegroundWatcher.shared.start()
 
-let paiRoot = ProcessInfo.processInfo.environment["PAI_ROOT"]
-    ?? (NSHomeDirectory() + "/.pai")
+func realHome() -> String? {
+    guard let passwd = getpwuid(getuid()), let home = passwd.pointee.pw_dir else {
+        return nil
+    }
+    return String(cString: home)
+}
+
+let paiRoot: String
+if let envRoot = ProcessInfo.processInfo.environment["PAI_ROOT"], !envRoot.isEmpty {
+    paiRoot = envRoot
+} else if let home = realHome() {
+    paiRoot = home + "/.pai"
+} else {
+    FileHandle.standardError.write(
+        Data("axd: could not resolve real OS home and PAI_ROOT is unset — exiting\n".utf8))
+    exit(1)
+}
 let socketPath = paiRoot + "/var/run/ax/axd.sock"
 
 let rpc = RPCServer(socketPath: socketPath)

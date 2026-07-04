@@ -5,7 +5,28 @@
 # Idempotent: uv pip no-ops when the deps are already satisfied.
 set -euo pipefail
 
-PAI_ROOT="${PAI_ROOT:-$HOME/.pai}"
+real_home() {
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - <<'PY'
+import os
+import pwd
+print(pwd.getpwuid(os.getuid()).pw_dir)
+PY
+    return
+  fi
+  if command -v dscl >/dev/null 2>&1; then
+    dscl . -read "/Users/$(id -un)" NFSHomeDirectory | awk '{print $2}'
+    return
+  fi
+  echo "real_home: could not resolve OS account home" >&2
+  return 1
+}
+REAL_HOME="$(real_home)" || exit 1
+if [[ -z "$REAL_HOME" ]]; then
+  echo "[voice_cloud/install] ERROR: could not resolve OS account home." >&2
+  exit 1
+fi
+PAI_ROOT="${PAI_ROOT:-$REAL_HOME/.pai}"
 VENV_PY="$PAI_ROOT/usr/lib/venv/bin/python"
 
 PY_DEPS=(requests python-dotenv)

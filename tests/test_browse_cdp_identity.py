@@ -38,6 +38,15 @@ def test_daemon_paths_live_under_pai_root():
     assert browse.SERVER_MJS == browse.PAI_ROOT / "usr" / "libexec" / "browse" / "server.mjs"
 
 
+def test_default_pai_root_ignores_sandbox_home(monkeypatch):
+    monkeypatch.delenv("PAI_ROOT", raising=False)
+    monkeypatch.setenv("HOME", "/tmp/pai-sandbox-home")
+
+    mod = _load_browse()
+
+    assert mod.PAI_ROOT == mod.REAL_HOME / ".pai"
+
+
 # ---------- node discovery ----------
 
 def test_find_node_prefers_path(monkeypatch):

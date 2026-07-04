@@ -19,15 +19,36 @@
 # ROWID to sys/drivers/email/backfill_progress.yaml) and idempotent (a
 # completed run re-processes zero rows). If the 300s setup cap kills it midway,
 # just run it again — it resumes from the checkpoint:
-#   cd ~/.pai && usr/bin/python -m drivers.email.macmail.backfill
+#   cd "$PAI_ROOT" && usr/bin/python -m drivers.email.macmail.backfill
 
 set -euo pipefail
 
-PAI_ROOT="${PAI_ROOT:-$HOME/.pai}"
+real_home() {
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - <<'PY'
+import os
+import pwd
+print(pwd.getpwuid(os.getuid()).pw_dir)
+PY
+    return
+  fi
+  if command -v dscl >/dev/null 2>&1; then
+    dscl . -read "/Users/$(id -un)" NFSHomeDirectory | awk '{print $2}'
+    return
+  fi
+  echo "real_home: could not resolve OS account home" >&2
+  return 1
+}
+REAL_HOME="$(real_home)" || exit 1
+if [[ -z "$REAL_HOME" ]]; then
+  echo "email: could not resolve OS account home." >&2
+  exit 1
+fi
+PAI_ROOT="${PAI_ROOT:-$REAL_HOME/.pai}"
 cd "$PAI_ROOT"
 
 PY="usr/bin/python"
-ENVELOPE="$HOME/Library/Mail/V10/MailData/Envelope Index"
+ENVELOPE="$REAL_HOME/Library/Mail/V10/MailData/Envelope Index"
 
 # --- Full Disk Access gate -------------------------------------------------
 # Without FDA the TCC layer makes the DB unreadable; bail cleanly (exit 0) so
@@ -36,7 +57,7 @@ if [ ! -r "$ENVELOPE" ]; then
   echo "email: cannot read Mail's Envelope Index (Full Disk Access needed)." >&2
   echo "        Grant your terminal Full Disk Access in System Settings →" >&2
   echo "        Privacy & Security → Full Disk Access, then run:" >&2
-  echo "          cd ~/.pai && usr/bin/python -m drivers.email.macmail.backfill" >&2
+  echo "          cd \"$PAI_ROOT\" && usr/bin/python -m drivers.email.macmail.backfill" >&2
   exit 0
 fi
 

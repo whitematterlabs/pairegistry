@@ -253,7 +253,7 @@ By signal type:
 | SQLite changes | `sqlite3` update hooks via `sqlite3_update_hook` (in C extensions) or `watchdog` on the DB file's `-wal` | `SELECT … WHERE id > cursor` in a poll loop |
 | HTTP / external services | webhook → server in driver, OR provider's streaming/long-poll endpoint (Gmail push, IMAP IDLE, etc.) | scheduled `requests.get` |
 | macOS app state | `NSDistributedNotificationCenter`, `CFNotificationCenter`, `NSWorkspace` notifications, AX observers | re-querying a UI tree every second |
-| iMessage (`chat.db`) | `watchdog.Observer` on `~/Library/Messages/chat.db-wal` + `chat.db-shm` | `SELECT MAX(ROWID) FROM message` in a loop |
+| iMessage (`chat.db`) | `watchdog.Observer` on the real macOS user's `Library/Messages/chat.db-wal` + `chat.db-shm` | `SELECT MAX(ROWID) FROM message` in a loop |
 
 If the only available interface is polling (third-party API with no
 push, sqlite without WAL, etc.), the rule is: **slowest interval
@@ -265,12 +265,17 @@ free.
 
 ```python
 import asyncio
+import os
+import pwd
 from pathlib import Path
 from boot import processes as P
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
-WATCH_PATH = Path.home() / "Library" / "Messages" / "chat.db-wal"
+# The kernel overrides $HOME per PAI, so never use Path.home() for host
+# ~/Library data. Resolve the real macOS account home via getpwuid.
+REAL_HOME = Path(pwd.getpwuid(os.getuid()).pw_dir)
+WATCH_PATH = REAL_HOME / "Library" / "Messages" / "chat.db-wal"
 
 async def run() -> None:
     print("[mydriver] starting", flush=True)
@@ -385,10 +390,10 @@ Rules:
    custom installs.
 
    ```python
-   import os, shutil
-   from pathlib import Path
+   import shutil
+   from boot import paths
 
-   PAI_ROOT = Path(os.environ.get("PAI_ROOT", str(Path.home() / ".pai")))
+   PAI_ROOT = paths.PAI_ROOT
    BRIDGE_JS = PAI_ROOT / "usr" / "libexec" / "whatsapp" / "bridge.js"
    NODE_BIN = shutil.which("node")
 

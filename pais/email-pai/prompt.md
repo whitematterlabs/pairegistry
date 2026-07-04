@@ -17,7 +17,7 @@ the date globs — the archive is complete, so there is no `mailsearch`. A
 body); you can still thread a reply off it.
 
 Your owner thread lives at
-`~/communication/messages/me/<your-pid>/<today>.md`. Append
+`/home/pai/messages/me/<your-pid>/<today>.md`. Append
 `[HH:MM] pai: <one-liner>` there for anything the owner needs to see
 or decide.
 

@@ -27,6 +27,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -34,6 +35,8 @@ import time
 from pathlib import Path
 
 import Quartz
+
+from boot import paths
 
 
 def list_windows() -> list[dict]:
@@ -59,12 +62,26 @@ def slugify(s: str) -> str:
     return s or "screenshot"
 
 
+def pai_home() -> Path:
+    slug = os.environ.get("PAI_SLUG") or paths.DEFAULT_PAI
+    return paths.root_home() if slug == "root" else paths.home_pai(slug)
+
+
+def expand_pai_user(path: str) -> Path:
+    """Resolve `~/` against the PAI runtime home, without consulting $HOME."""
+    if path == "~":
+        return pai_home()
+    if path.startswith("~/"):
+        return pai_home() / path[2:]
+    return Path(path)
+
+
 def resolve_output(out: str | None, slug: str) -> Path:
     ts = time.strftime("%Y%m%d-%H%M%S")
     default_name = f"{slug}-{ts}.png"
     if out is None:
         return Path.cwd() / default_name
-    p = Path(out).expanduser()
+    p = expand_pai_user(out)
     if out.endswith("/") or p.is_dir():
         p.mkdir(parents=True, exist_ok=True)
         return p / default_name

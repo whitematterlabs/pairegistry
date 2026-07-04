@@ -12,11 +12,11 @@ wake hit. Concurrent wake hits during transcription are queued.
 from __future__ import annotations
 
 import asyncio
-import os
 import wave
 from datetime import datetime
 from pathlib import Path
 
+from boot import paths
 from boot import processes as P
 
 # Heavy native deps (numpy, sounddevice, openwakeword/onnxruntime, whisper.cpp)
@@ -29,7 +29,7 @@ import numpy as np
 from . import stt
 from .wake import SAMPLE_RATE, WAKE_BLOCK, VAD_FRAME, WakeDetector, SilenceDetector
 
-PAI_ROOT = Path(os.environ.get("PAI_ROOT", str(Path.home() / ".pai")))
+PAI_ROOT = paths.PAI_ROOT
 CAPTURES_DIR = PAI_ROOT / "sys" / "drivers" / "voice" / "captures"
 
 WAKE_MODEL = "alexa"
