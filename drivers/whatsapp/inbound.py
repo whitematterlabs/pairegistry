@@ -1,12 +1,18 @@
-"""WhatsApp inbound driver.
+"""WhatsApp inbound + outbound supervisor.
 
 Supervises a Node.js Baileys bridge as a subprocess. The bridge speaks
-JSON-per-line over stdout. Auth state persists under
+JSON-per-line over stdio — stdout for inbound events, stdin for outbound
+send commands. Auth state persists under
 /Users/arda/.pai/sys/drivers/whatsapp/auth/ — first run emits a QR code for pairing,
 subsequent runs reconnect with saved creds.
 
-This driver is receive-only: it records inbound messages and emits
-events. It has no send path.
+Inbound records messages and emits events. Outbound is owner-gated (see
+`outbound.py`): because a WhatsApp send is socket-bound — it must go
+through the live `currentSock` this bridge owns — the outbound tailer
+does NOT run as a separate process. It shares this process's bridge via a
+`BridgeClient`, handing send commands to the bridge's stdin and awaiting
+the matching `send_result` on stdout. That single-owner constraint is the
+deliberate divergence from imessage's two-process (in/out) layout.
 """
 
 from __future__ import annotations
@@ -23,6 +29,66 @@ from pathlib import Path
 
 from boot import processes as P
 from boot import paths
+
+from drivers.whatsapp import outbound as _outbound
+
+
+# ── bridge client — shared send channel ────────────────────────────
+class BridgeClient:
+    """Owns the current bridge stdin and correlates send commands with
+    their `send_result` replies.
+
+    A single socket-owning process (this one) means one client shared by
+    the outbound tailer. `_run_bridge` swaps `stdin` on every (re)launch
+    and rejects every in-flight future when the bridge exits, so a send
+    issued against a dead bridge fails fast instead of hanging."""
+
+    def __init__(self) -> None:
+        self.stdin: asyncio.StreamWriter | None = None
+        self.pending: dict[str, asyncio.Future] = {}
+        self._seq = 0
+
+    def _next_id(self) -> str:
+        self._seq += 1
+        return f"s{self._seq}"
+
+    async def send(self, jid: str, text: str, timeout: float = 30.0) -> None:
+        """Send one message via the bridge; raise on any failure.
+
+        Raises RuntimeError if the bridge is disconnected, the write fails,
+        the reply times out, or the bridge reports the send failed."""
+        stdin = self.stdin
+        if stdin is None:
+            raise RuntimeError("bridge not connected")
+        msg_id = self._next_id()
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future = loop.create_future()
+        self.pending[msg_id] = fut
+        cmd = json.dumps({"type": "send", "id": msg_id, "jid": jid, "text": text}) + "\n"
+        try:
+            stdin.write(cmd.encode("utf-8"))
+            await stdin.drain()
+        except Exception as e:
+            self.pending.pop(msg_id, None)
+            raise RuntimeError(f"bridge write failed: {e}") from e
+        try:
+            result = await asyncio.wait_for(fut, timeout)
+        except asyncio.TimeoutError:
+            self.pending.pop(msg_id, None)
+            raise RuntimeError("send timed out waiting for bridge")
+        if not result.get("ok"):
+            raise RuntimeError(result.get("error") or "send failed")
+
+    def resolve(self, msg_id: str, result: dict) -> None:
+        fut = self.pending.pop(msg_id, None)
+        if fut is not None and not fut.done():
+            fut.set_result(result)
+
+    def reject_all(self, reason: str) -> None:
+        for fut in list(self.pending.values()):
+            if not fut.done():
+                fut.set_exception(RuntimeError(reason))
+        self.pending.clear()
 
 # ── paths ──────────────────────────────────────────────────────────
 PAI_ROOT = paths.PAI_ROOT
@@ -162,7 +228,7 @@ def _reap_stale_bridges() -> None:
             print(f"[whatsapp-in] reap SIGKILL {pid}: {e!r}", flush=True)
 
 
-async def _run_bridge() -> None:
+async def _run_bridge(client: BridgeClient) -> None:
     backoff = 1
     max_backoff = 60
 
@@ -180,14 +246,17 @@ async def _run_bridge() -> None:
         print(f"[whatsapp-in] starting bridge (backoff={backoff}s)", flush=True)
         proc = await asyncio.create_subprocess_exec(
             node_bin, str(BRIDGE_JS),
-            stdin=asyncio.subprocess.DEVNULL,
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env={**os.environ, "PAI_ROOT": str(PAI_ROOT)},
         )
+        # Publish this launch's stdin so the outbound tailer's sends reach
+        # the live socket. Cleared below when the bridge exits.
+        client.stdin = proc.stdin
 
         try:
-            await _read_bridge_stdout(proc)
+            await _read_bridge_stdout(proc, client)
         except asyncio.CancelledError:
             proc.terminate()
             try:
@@ -197,6 +266,11 @@ async def _run_bridge() -> None:
             raise
         except Exception as e:
             print(f"[whatsapp-in] bridge read error: {e!r}", flush=True)
+        finally:
+            # Bridge is gone: no send can complete, so fail every in-flight
+            # future rather than let it hang until timeout.
+            client.stdin = None
+            client.reject_all("bridge disconnected")
 
         print(f"[whatsapp-in] bridge exited (rc={proc.returncode}), restarting in {backoff}s", flush=True)
         await asyncio.sleep(backoff)
@@ -206,7 +280,7 @@ async def _run_bridge() -> None:
 HISTORY_QUIESCE_SECONDS = 3.0
 
 
-async def _read_bridge_stdout(proc: asyncio.subprocess.Process) -> None:
+async def _read_bridge_stdout(proc: asyncio.subprocess.Process, client: BridgeClient) -> None:
     assert proc.stdout is not None
 
     backlog_messages: list[dict] = []
@@ -232,6 +306,12 @@ async def _read_bridge_stdout(proc: asyncio.subprocess.Process) -> None:
             continue
 
         msg_type = data.get("type", "")
+
+        if msg_type == "send_result":
+            msg_id = data.get("id")
+            if isinstance(msg_id, str):
+                client.resolve(msg_id, data)
+            continue
 
         if msg_type == "message" and data.get("direction") == "in":
             phone = data.get("from", "")
@@ -335,8 +415,15 @@ def _emit_backlog(messages: list[dict]) -> None:
 async def run() -> None:
     print("[whatsapp-in] starting", flush=True)
 
+    client = BridgeClient()
     try:
-        await _run_bridge()
+        # The bridge (inbound + the socket the outbound tailer sends over) and
+        # the outbound tailer share one process: a WhatsApp send is socket-
+        # bound, so there is a single owner. No separate `whatsapp-out` process.
+        await asyncio.gather(
+            _run_bridge(client),
+            _outbound.run(client),
+        )
     except asyncio.CancelledError:
         raise
     finally:

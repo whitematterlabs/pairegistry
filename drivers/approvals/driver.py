@@ -22,6 +22,12 @@ token regardless of mode. iMessage has no equivalent draft artifact (its
 outbound driver tails day-files, not a drop directory), so it delivers
 inline: this driver sends via the same AppleScript helpers the imessage-out
 driver uses, then appends the canonical `[HH:MM] me: <text>` line itself.
+
+WhatsApp is like email, not iMessage: its send is socket-bound and only the
+whatsapp bridge process can reach the socket. So this driver can't deliver
+inline — it hands off email-style, dropping a trusted token'd file under the
+thread's `.outbox/` (via `whatsapp.outbound.stage_approved_handoff`) that the
+whatsapp process ingests and delivers, bypassing the freeze.
 """
 
 from __future__ import annotations
@@ -183,6 +189,43 @@ async def _deliver_imessage(path: Path, rec: dict) -> None:
     print(f"[approvals] {rec.get('id')} approved → sent to imessage:{thread}", flush=True)
 
 
+async def _deliver_whatsapp(path: Path, rec: dict) -> None:
+    """Email-style hand-off — this driver can't reach the WhatsApp socket, so
+    it drops a trusted token'd file the whatsapp process delivers async."""
+    action = rec.get("action") or {}
+    thread = str(action.get("thread") or "").strip()
+    text = str(action.get("text") or "")
+    if not thread:
+        _fail(path, rec, "whatsapp record missing `thread`")
+        return
+    if not text.strip():
+        _fail(path, rec, "whatsapp record has empty `text`")
+        return
+
+    try:
+        from drivers.whatsapp import outbound as whatsapp_outbound
+    except Exception as e:  # noqa: BLE001 — whatsapp driver may not be installed
+        _fail(path, rec, f"whatsapp driver unavailable: {e}")
+        return
+
+    handoff = whatsapp_outbound.stage_approved_handoff(thread, text)
+
+    rec["status"] = "dispatched"
+    rec["dispatched_at"] = _now()
+    try:
+        rec["handoff_ref"] = str(handoff.relative_to(paths.PAI_ROOT))
+    except ValueError:
+        rec["handoff_ref"] = str(handoff)
+    _atomic_dump(path, rec)
+    # No delivery-confirmation event: the whatsapp process's own outbound send
+    # nudges the PAI (via whatsapp-out:sent) when the message actually leaves.
+    print(
+        f"[approvals] {rec.get('id')} approved → handed to whatsapp driver "
+        f"({handoff.name})",
+        flush=True,
+    )
+
+
 async def _notify_rejected(rec: dict) -> None:
     """Tell the originating channel a queued send was rejected, so the PAI
     hears about it the same way it hears about any other send failure — no
@@ -200,6 +243,21 @@ async def _notify_rejected(rec: dict) -> None:
             except Exception as e:
                 print(f"[approvals] could not append rejection note: {e}", flush=True)
             imessage_outbound._emit_send_failed(thread, text, reason)
+    elif channel == "whatsapp":
+        thread = str(action.get("thread") or "").strip()
+        text = str(action.get("text") or "")
+        if thread:
+            try:
+                from drivers.whatsapp import outbound as whatsapp_outbound
+            except Exception as e:  # noqa: BLE001 — driver may not be installed
+                print(f"[approvals] whatsapp unavailable for rejection notice: {e}", flush=True)
+            else:
+                day_file = whatsapp_outbound.MESSAGES_ROOT / thread / f"{datetime.now().date().isoformat()}.md"
+                try:
+                    whatsapp_outbound._append_kernel_note(day_file, f"send rejected by owner — {reason}")
+                except Exception as e:
+                    print(f"[approvals] could not append rejection note: {e}", flush=True)
+                whatsapp_outbound._emit_send_failed(thread, text, reason)
     elif channel == "email":
         source_ref = rec.get("source_ref")
         if source_ref:
@@ -244,6 +302,8 @@ async def _process(path: Path) -> None:
         await _deliver_email(path, rec)
     elif channel == "imessage":
         await _deliver_imessage(path, rec)
+    elif channel == "whatsapp":
+        await _deliver_whatsapp(path, rec)
     else:
         _fail(path, rec, f"channel {channel!r} is not deliverable in approve mode yet")
 

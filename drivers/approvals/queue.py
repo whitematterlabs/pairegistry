@@ -64,9 +64,9 @@ def stage_pending(
 ) -> Path:
     """Write a `pending` approval record for a send an outbound driver just
     blocked because the capability is in `ask` mode. Never called by a PAI
-    directly — only by `email`/`imessage` outbound drivers, on the PAI's
-    behalf, when it attempted a normal send. The owner approves/rejects it in
-    the web console; the approvals driver then delivers or reports back.
+    directly — only by `email`/`imessage`/`whatsapp` outbound drivers, on the
+    PAI's behalf, when it attempted a normal send. The owner approves/rejects
+    it in the web console; the approvals driver then delivers or reports back.
 
     `source_ref` (email only) is the PAI_ROOT-relative path of the original
     draft yaml, so a rejection can be written back onto it (`draft_state:
@@ -77,6 +77,8 @@ def stage_pending(
         label = action.get("subject") or (to[0] if to else "") or "email"
     elif channel == "imessage":
         label = action.get("thread") or "imessage"
+    elif channel == "whatsapp":
+        label = action.get("thread") or "whatsapp"
     else:
         label = channel
     ident = time.strftime("%Y%m%d-%H%M%S") + "-" + _slug(str(label))

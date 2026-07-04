@@ -1,17 +1,26 @@
 #!/Users/arda/.pai/usr/bin/env node
 
 /**
- * WhatsApp Baileys bridge — receive-only, JSON-per-line over stdout.
+ * WhatsApp Baileys bridge — bidirectional, JSON-per-line over stdio.
  *
- * Writes JSON events to stdout. There is no send path: the bridge does
- * not read commands from stdin. Auth state persists under
+ * Writes JSON events to stdout and reads commands from stdin (one JSON
+ * object per line). Auth state persists under
  * /Users/arda/.pai/sys/drivers/whatsapp/auth/.
  *
  * Protocol (stdout → driver reads):
  *   {"type":"message","direction":"in","from":"+15551234567","body":"hey","timestamp":"..."}
  *   {"type":"qr","qr":"BASE64-QR-STRING"}
  *   {"type":"status","state":"open"|"connecting"|"close"}
+ *   {"type":"send_result","id":"s1","ok":true}
+ *   {"type":"send_result","id":"s1","ok":false,"error":"not connected"}
  *   {"type":"error","error":"..."}
+ *
+ * Protocol (stdin ← driver writes):
+ *   {"type":"send","id":"s1","jid":"15551234567@s.whatsapp.net","text":"hi"}
+ *
+ * Sends are socket-bound: they must go through the live `currentSock`, which
+ * only this process owns — hence the outbound driver runs in-process with
+ * inbound and hands send commands here over stdin rather than sending itself.
  */
 
 import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
@@ -19,6 +28,7 @@ import { Boom } from '@hapi/boom';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import readline from 'readline';
 import { fileURLToPath } from 'url';
 import pino from 'pino';
 
@@ -171,6 +181,45 @@ async function extractIn(sock, msg, { history = false } = {}) {
     history,
   };
 }
+
+// ── stdin command channel — outbound sends ─────────────────────────
+// The Python outbound driver writes one JSON command per line. Only
+// `type:"send"` is understood; every send is answered with exactly one
+// `send_result` carrying the same `id`, so the driver can await it.
+async function handleSend(cmd) {
+  const { id, jid, text } = cmd;
+  if (!currentSock) {
+    emit({ type: 'send_result', id, ok: false, error: 'not connected' });
+    return;
+  }
+  if (!jid || typeof text !== 'string') {
+    emit({ type: 'send_result', id, ok: false, error: 'missing jid or text' });
+    return;
+  }
+  try {
+    await currentSock.sendMessage(jid, { text });
+    emit({ type: 'send_result', id, ok: true });
+  } catch (err) {
+    emit({ type: 'send_result', id, ok: false, error: err?.message || String(err) });
+  }
+}
+
+const rl = readline.createInterface({ input: process.stdin });
+rl.on('line', (line) => {
+  const trimmed = line.trim();
+  if (!trimmed) return;
+  let cmd;
+  try {
+    cmd = JSON.parse(trimmed);
+  } catch (_) {
+    return;
+  }
+  if (cmd?.type === 'send') {
+    handleSend(cmd).catch((err) => {
+      emit({ type: 'send_result', id: cmd?.id, ok: false, error: err?.message || String(err) });
+    });
+  }
+});
 
 // SIGTERM references currentSock so it keeps working across in-process
 // reconnects.

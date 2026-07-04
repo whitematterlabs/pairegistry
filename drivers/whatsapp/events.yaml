@@ -1,6 +1,11 @@
 driver: whatsapp
-description: Inbound (receive-only) WhatsApp messaging via Baileys bridge.
+description: Inbound and owner-gated outbound WhatsApp messaging via Baileys bridge.
 
+# One process only. A WhatsApp send is socket-bound (must go through the live
+# `currentSock` the bridge owns), so the outbound tailer runs in-process with
+# inbound and shares its socket — the deliberate divergence from imessage's
+# separate whatsapp-out process. The `whatsapp-out:*` events below are emitted
+# from inside the whatsapp-in process.
 processes:
   - slug: whatsapp-in
     module: drivers.whatsapp.inbound
@@ -32,3 +37,25 @@ events:
           day_files:
             - string
       total: int
+
+  - kind: whatsapp-out:sent
+    description: An outbound WhatsApp message was delivered via the socket.
+      Emitted for a direct (`yes`-mode) send and for an owner-approved
+      (`ask`-mode) send delivered via the trusted .outbox handoff.
+    emitted_by: drivers/whatsapp/outbound.py
+    raw_kind: sent
+    payload:
+      thread: string
+      text: string
+
+  - kind: whatsapp-out:send_failed
+    description: An outbound message couldn't be delivered — sends frozen
+      (no grant), recipient couldn't be resolved, the bridge was
+      disconnected, or the owner rejected a queued approval. The line is
+      already in the thread day-file but was never sent.
+    emitted_by: drivers/whatsapp/outbound.py
+    raw_kind: send_failed
+    payload:
+      thread: string
+      text: string
+      reason: string
