@@ -11,10 +11,10 @@ sends. This includes `me:` lines the kernel writes when chat.db echoes
 back a message Arda sent from his phone: those lines are the record of
 the send, not a request to re-send.
 
-New thread dirs — when `communication/messages/{slug}/` appears with no
+New thread dirs — when `/home/pai/messages/{slug}/` appears with no
 meta.yaml, we materialize one from `memory/people/{slug}/about.yaml` (or,
 for a raw phone/email slug, from the slug itself). PAI's workflow
-collapses to `mkdir messages/{slug} && echo "text" >> messages/{slug}/$(date +%F).md`.
+collapses to `mkdir /home/pai/messages/{slug} && echo "text" >> /home/pai/messages/{slug}/$(date +%F).md`.
 
 Tries iMessage first, falls back to SMS if iMessage errors (covers
 Android contacts when "Send as SMS" isn't doing the fallback itself).

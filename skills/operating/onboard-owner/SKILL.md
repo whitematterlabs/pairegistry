@@ -47,8 +47,9 @@ and page through. If the archive is empty, the one-time backfill hasn't run yet
 ## 4. iMessage — `imessage-history`
 
 On a fresh boot the iMessage driver has backfilled nothing, so the day-files
-under `~/communication/messages/` are empty for older messages. Read chat.db
-directly (read-only):
+under the owner runtime messages tree (`~/.pai/home/pai/messages/`, or
+`/home/pai/messages/` from a PAI shell) are empty for older messages. Read
+chat.db directly (read-only):
 
 ```sh
 bin/imessage-history --since "$SINCE"

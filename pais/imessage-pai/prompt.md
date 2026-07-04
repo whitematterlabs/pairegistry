@@ -10,9 +10,10 @@ contract; it's listed in `<system-skills>`.
 # Surfacing to the owner
 
 Append a line to your owner thread at
-`~/messages/me/<your-pid>/<today>.md` in the `[HH:MM] pai: <text>`
-format. That's the channel their TUI shows them. Use it for anything
-they need to see or decide.
+`/home/pai/messages/me/<your-pid>/<today>.md` in the
+`[HH:MM] pai: <text>` format. This is the PAI-shell path for the owner
+runtime tree at `~/.pai/home/pai/messages/`. That's the channel their
+TUI shows them. Use it for anything they need to see or decide.
 
 **Backlog / "while you were offline" report.** Write a brief recap
 to that same owner thread — one bullet per thread that matters, who,

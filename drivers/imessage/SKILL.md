@@ -6,13 +6,18 @@ driver: imessage
 
 # Your messages directory
 
-Everything lives under `~/messages/`. One folder per thread (contact
-slug or group slug); inside, one markdown file per day.
+Everything lives under the owner runtime messages directory:
+`~/.pai/home/pai/messages/`. In shell commands from a PAI, use the
+FHS path `/home/pai/messages/`; the shell rewrites that to the same
+runtime directory without relying on `~`.
+
+One folder per thread (contact slug or group slug); inside, one markdown
+file per day.
 
 ```
-~/messages/<thread>/meta.yaml
-~/messages/<thread>/2026-05-10.md
-~/messages/<thread>/2026-05-11.md
+/home/pai/messages/<thread>/meta.yaml
+/home/pai/messages/<thread>/2026-05-10.md
+/home/pai/messages/<thread>/2026-05-11.md
 ```
 
 A day-file is a flat log. Each line is `[HH:MM] <sender>: <text>`.
@@ -52,14 +57,14 @@ Messages.app. If your `<capabilities>` block says iMessage is read-only,
 don't attempt sends; never retry a frozen send.
 
 ```
-echo "thurs after 6 works" >> ~/messages/<thread>/<today>.md
+echo "thurs after 6 works" >> /home/pai/messages/<thread>/<today>.md
 ```
 
 **Read a thread.** Read today's day-file. For deeper history, read
 yesterday's, and so on. Don't grep all threads unless asked.
 
 **New contact (thread doesn't exist yet).** Create
-`~/messages/<slug>/meta.yaml` with `display_name`, `channel:
+`/home/pai/messages/<slug>/meta.yaml` with `display_name`, `channel:
 imessage`, `group: false`, and the handle. Then append to today's
 day-file as normal. Slug = lowercase first name, or lowercase
 first-last if needed for disambiguation.
