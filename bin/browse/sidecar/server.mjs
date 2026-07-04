@@ -215,7 +215,11 @@ function startBrowser() {
     channel: 'chrome',
     headless: false,
     viewport: null,
-    args: ['--no-first-run', '--no-default-browser-check'],
+    // --restore-last-session reopens the owner's windows/tabs from before the
+    // takeover, so after the one-time quit+relaunch it's just their Chrome again
+    // (dock icon opens windows in this same instance) with browse working in its
+    // own tab alongside — not a stripped, foreign-feeling window.
+    args: ['--no-first-run', '--no-default-browser-check', '--restore-last-session'],
     // CRITICAL: Playwright defaults to --use-mock-keychain and
     // --password-store=basic, which force Chrome off the macOS Keychain. The
     // owner's cookies are v10 — encrypted with the real "Chrome Safe Storage"
