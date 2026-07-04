@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""memorize — ask librarian-pai to commit a fact to memory on behalf of the caller."""
+"""memorize — ask librarian to commit a fact to memory on behalf of the caller."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from boot import processes as P
 
 def _resolve_librarian_pid() -> int | None:
     for slug, spec in P._iter_pai_specs():
-        if slug == "librarian-pai":
+        if slug == "librarian":
             pid = spec.get("pid")
             if isinstance(pid, int):
                 return pid
@@ -23,7 +23,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="memorize",
         description=(
-            "Ask librarian-pai to commit a fact to memory on behalf of the "
+            "Ask librarian to commit a fact to memory on behalf of the "
             "calling PAI. Use plain memorize by default; reserve "
             "memorize --private for classified or very sensitive information."
         ),
@@ -58,7 +58,7 @@ def main(argv: list[str] | None = None) -> int:
     librarian_pid = _resolve_librarian_pid()
     if librarian_pid is None:
         print(
-            "error: librarian-pai is not in the fleet — run `paiadd librarian-pai`",
+            "error: librarian is not in the fleet — run `paiadd librarian`",
             file=sys.stderr,
         )
         return 1

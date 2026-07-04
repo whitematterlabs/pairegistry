@@ -1,5 +1,5 @@
 name: memorize
 kind: bin
 version: 0.1.0
-description: Ask librarian-pai to commit a fact to memory; private only for classified or very sensitive isolated facts.
+description: Ask librarian to commit a fact to memory; private only for classified or very sensitive isolated facts.
 entrypoint: memorize.py

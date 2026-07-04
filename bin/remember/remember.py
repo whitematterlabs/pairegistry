@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""remember - ask librarian-pai to retrieve memory/context for the caller."""
+"""remember - ask librarian to retrieve memory/context for the caller."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from boot import processes as P
 
 def _resolve_librarian_pid() -> int | None:
     for slug, spec in P._iter_pai_specs():
-        if slug == "librarian-pai":
+        if slug == "librarian":
             pid = spec.get("pid")
             if isinstance(pid, int):
                 return pid
@@ -24,14 +24,14 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="remember",
         description=(
-            "Ask librarian-pai to search memory/context and reply to the "
+            "Ask librarian to search memory/context and reply to the "
             "calling PAI. The answer arrives asynchronously via send-message."
         ),
     )
     parser.add_argument(
         "query",
         nargs="+",
-        help="question or context request to send to librarian-pai",
+        help="question or context request to send to librarian",
     )
     args = parser.parse_args(argv)
 
@@ -51,7 +51,7 @@ def main(argv: list[str] | None = None) -> int:
     librarian_pid = _resolve_librarian_pid()
     if librarian_pid is None:
         print(
-            "error: librarian-pai is not in the fleet — run `paiadd librarian-pai`",
+            "error: librarian is not in the fleet — run `paiadd librarian`",
             file=sys.stderr,
         )
         return 1

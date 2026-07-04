@@ -1,4 +1,4 @@
-name: librarian-pai
+name: librarian
 kind: pai
 version: 0.1.0
 description: Nightly librarian — handles memorize writes, remember lookups, and durable shared/private memory indexes.
@@ -14,10 +14,10 @@ hooks:
   # spec; otherwise it replaces (stable slug, never a dated duplicate).
   #
   # Schedule-only (no --run): on fire, the kernel nudges the parent PAI
-  # (librarian-pai) directly with reason "schedule fired". There is no CLI
+  # (librarian) directly with reason "schedule fired". There is no CLI
   # that emits a raw bus event, so the old `--run "send_message emit
   # librarian:consolidate"` could never work (rc=127/rc=2). The --description
   # carries the intent into the wake context; the prompt treats a scheduled
   # wake as the nightly consolidation run.
   boot:
-    - 'bin/paicron ensure --slug librarian-nightly --parent-slug librarian-pai --schedule "0 3 * * *" --description "nightly memory consolidation run"'
+    - 'bin/paicron ensure --slug librarian-nightly --parent-slug librarian --schedule "0 3 * * *" --description "nightly memory consolidation run"'

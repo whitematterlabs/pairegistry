@@ -114,4 +114,4 @@ Don't paste the whole email into chat as the final result unless the owner
 asks for text only.
 
 Memory: see the `## Memory` section below — it covers when to `memorize`
-and what's owned by `librarian-pai`.
+and what's owned by `librarian`.
