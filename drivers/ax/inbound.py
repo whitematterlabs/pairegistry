@@ -20,6 +20,7 @@ Requires the Accessibility TCC grant for `axd` (System Settings → Privacy
 
 from __future__ import annotations
 
+import os
 import asyncio
 import json
 from datetime import datetime
