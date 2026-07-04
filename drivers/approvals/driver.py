@@ -137,7 +137,9 @@ async def _deliver_email(path: Path, rec: dict) -> None:
     rec["dispatched_at"] = _now()
     rec["draft_ref"] = str(draft_path.relative_to(paths.PAI_ROOT))
     _atomic_dump(path, rec)
-    _emit("dispatched", rec, draft_ref=rec["draft_ref"])
+    # No delivery-confirmation event: the email driver's own outbound send
+    # nudges the PAI when the message actually leaves. A second "approval
+    # dispatched" nudge here is redundant.
     print(
         f"[approvals] {rec.get('id')} approved → handed to email driver "
         f"({draft_path.name})",
@@ -175,7 +177,9 @@ async def _deliver_imessage(path: Path, rec: dict) -> None:
     rec["status"] = "sent"
     rec["dispatched_at"] = _now()
     _atomic_dump(path, rec)
-    _emit("sent", rec)
+    # No delivery-confirmation event: the appended `me:` line echoes back
+    # through chat.db and nudges the PAI as an outbound message. A second
+    # "approval sent" nudge here is redundant.
     print(f"[approvals] {rec.get('id')} approved → sent to imessage:{thread}", flush=True)
 
 

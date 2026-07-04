@@ -40,22 +40,12 @@ events:
       channel: string
       reason: string
 
-  - kind: approvals:dispatched
-    description: An approved item was handed to the channel's native send path.
-    emitted_by: drivers/approvals/driver.py
-    raw_kind: dispatched
-    payload:
-      id: string
-      channel: string
-      draft_ref: string|null
-
-  - kind: approvals:sent
-    description: An approved item was delivered inline by this driver.
-    emitted_by: drivers/approvals/driver.py
-    raw_kind: sent
-    payload:
-      id: string
-      channel: string
+  # Delivery is intentionally silent (no dispatched/sent event): the channel's
+  # own outbound send already nudges the PAI when the message leaves (email
+  # via the send-draft the macmail-out driver delivers; imessage via the
+  # appended `me:` line echoing back through chat.db). A separate approval
+  # confirmation here would double-nudge. The record's status still advances
+  # to `dispatched`/`sent` on disk for the web console and audit trail.
 
   - kind: approvals:failed
     description: An approved item could not be delivered.
