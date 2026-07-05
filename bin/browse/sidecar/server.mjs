@@ -60,6 +60,16 @@ const CDP_PORT = Number(process.env.BROWSE_CDP_PORT) || 9333;
 const CDP_BASE = `http://127.0.0.1:${CDP_PORT}`;
 const CHROME_BIN = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const CHROME_LAUNCH_TIMEOUT_MS = 20000;
+// Cold-boot keychain-readiness gate. After a fresh reboot the login keychain
+// isn't findable for ~1-3 min; Chrome launched in that window can't reach its
+// "Chrome Safe Storage" key, launches keyless, and PURGES every v10 cookie
+// (browse comes up permanently logged out). We probe the same login keychain
+// Chrome needs — `security find-generic-password -s "Chrome Safe Storage"` —
+// and don't launch until the key is readable. See reference_browse_keychain_session.
+const KEYCHAIN_PROBE_TIMEOUT_MS = 3000;    // per-probe hard timeout (never hang)
+const KEYCHAIN_READY_TIMEOUT_MS = 180000;  // cap total wait before launching anyway
+// Cap is 180s — comfortably under browse.py's REQUEST_TIMEOUT_S (300) so the first
+// cold-boot verb can wait through the window without the CLI request timing out.
 
 function log(msg) {
   const line = `[${new Date().toISOString()}] ${msg}\n`;
@@ -162,6 +172,40 @@ function cdpAlive() {
   });
 }
 
+// Non-interactive read of Chrome's "Chrome Safe Storage" Keychain key. Returns
+// true only once the login keychain is available (exit 0 + a non-empty key);
+// exits 44 ("item could not be found") while the keychain isn't findable yet.
+// The per-probe timeout guarantees this can never block the daemon.
+function keychainReady() {
+  const res = spawnSync(
+    'security', ['find-generic-password', '-w', '-s', 'Chrome Safe Storage'],
+    { timeout: KEYCHAIN_PROBE_TIMEOUT_MS, encoding: 'utf8' });
+  return res.status === 0 && (res.stdout || '').trim().length > 0;
+}
+
+// Gate: block until the Safe Storage key is readable (so Chrome can decrypt the
+// copied v10 cookies instead of purging them), or give up after the cap and let
+// the launch proceed degraded — the seeded-vs-loaded canary catches that case.
+async function waitForKeychainReady() {
+  if (keychainReady()) return true;
+  log('keychain not ready (Chrome Safe Storage key unreadable — likely cold boot); ' +
+      'waiting before launching Chrome so cookies are not purged…');
+  const deadline = Date.now() + KEYCHAIN_READY_TIMEOUT_MS;
+  let backoff = 500;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, backoff));
+    if (keychainReady()) {
+      log('keychain ready — launching Chrome');
+      return true;
+    }
+    backoff = Math.min(backoff * 2, 10000);
+  }
+  log(`WARNING: keychain still not ready after ${KEYCHAIN_READY_TIMEOUT_MS}ms — ` +
+      'launching Chrome anyway (DEGRADED: cookies may be purged; watch the canary ' +
+      `and ${CHROME_LOG}).`);
+  return false;
+}
+
 // Close a prior browse Chrome so a fresh daemon can refresh cookies and relaunch,
 // then wait for it to actually release the CDP port before we spawn a new one
 // (pkill returns before Chrome has finished tearing down its listener).
@@ -181,6 +225,11 @@ async function closeOwnChrome() {
 async function launchChromeDirect() {
   if (await cdpAlive()) return;   // a prior browse Chrome already exposes CDP
   if (!fs.existsSync(CHROME_BIN)) throw new Error(`Chrome not found at ${CHROME_BIN}`);
+  // Cold-boot gate: don't launch against the real cookies until the Safe Storage
+  // key is readable, or we launch keyless and purge every cookie. Placed after the
+  // cdpAlive early-return (skip the probe when Chrome is already healthy) and before
+  // building chromeArgs — covers both the eager warmup and disconnect-driven relaunch.
+  await waitForKeychainReady();
   log(`launching browse Chrome directly (CDP ${CDP_PORT}); Chrome stderr → ${CHROME_LOG}`);
   const chromeArgs = [
     `--remote-debugging-port=${CDP_PORT}`,
