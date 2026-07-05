@@ -131,6 +131,7 @@ function refreshCookies() {
     if (sqliteBackup(src, dst)) n += cookieRows(dst);
   }
   log(`cookie refresh: ${n} cookies copied from owner profile`);
+  return n;
 }
 
 // Kill browse's own Chrome (matched by its dedicated profile dir). Only ever
@@ -175,8 +176,8 @@ async function closeOwnChrome() {
 async function launchChromeDirect() {
   if (await cdpAlive()) return;   // a prior browse Chrome already exposes CDP
   if (!fs.existsSync(CHROME_BIN)) throw new Error(`Chrome not found at ${CHROME_BIN}`);
-  log(`launching browse Chrome directly (CDP ${CDP_PORT}, real Keychain)…`);
-  const child = spawn(CHROME_BIN, [
+  log(`launching browse Chrome via launchctl asuser (CDP ${CDP_PORT}, Aqua session Keychain)…`);
+  const chromeArgs = [
     `--remote-debugging-port=${CDP_PORT}`,
     '--remote-debugging-address=127.0.0.1',
     '--remote-allow-origins=*',
@@ -185,7 +186,22 @@ async function launchChromeDirect() {
     '--no-default-browser-check',
     '--disable-features=AutofillServerCommunication',
     'about:blank',
-  ], { detached: true, stdio: 'ignore' });
+  ];
+  // Launching the real Chrome binary with no automation flags is necessary but
+  // NOT sufficient to reach the "Chrome Safe Storage" Keychain key: macOS gates
+  // login-keychain access by *audit session*, and only the console Aqua session
+  // holds the unlocked login keychain. The kernel (and so this daemon) often runs
+  // in a login(1)-minted session that ISN'T the console session — every terminal
+  // tab mints its own, and only some are the console one. In that case Chrome
+  // can't decrypt the owner's v10 cookies and PURGES them, serving a logged-out
+  // browser. `launchctl asuser <uid>` re-homes Chrome into the per-user Aqua
+  // domain (no root needed for the same console user), so it always reaches the
+  // real Keychain regardless of which session started the kernel. See
+  // reference_browse_keychain_session.
+  const uid = String(os.userInfo().uid);
+  const child = spawn(
+    '/bin/launchctl', ['asuser', uid, CHROME_BIN, ...chromeArgs],
+    { detached: true, stdio: 'ignore' });
   child.unref();
   const deadline = Date.now() + CHROME_LAUNCH_TIMEOUT_MS;
   while (Date.now() < deadline) {
@@ -295,15 +311,31 @@ const DOM_TAGGER_JS = String.raw`
 async function startBrowser() {
   await closeOwnChrome();  // close a prior browse Chrome; leaves owner's running
   seedBulkIfNeeded();      // one-time bookmarks/prefs/Local State clone
-  refreshCookies();        // pull current cookies from the owner profile each start
+  const seeded = refreshCookies();  // pull current cookies from the owner profile
   disableAutofillPrefs();
-  await launchChromeDirect();  // v1-style direct spawn → real Keychain, CDP port
+  await launchChromeDirect();  // asuser spawn → Aqua-session Keychain, CDP port
   log('attaching Playwright over CDP…');
   const browser = await chromium.connectOverCDP(CDP_BASE);
   // A CDP-attached Chrome exposes its persistent profile as the default context;
   // pages opened here carry the seeded cookies/logins. Fall back to a fresh
   // context only if Chrome somehow reports none.
   const context = browser.contexts()[0] || await browser.newContext();
+  // Keychain canary: if we seeded a real cookie set but Chrome loaded almost
+  // none, it couldn't decrypt the v10 cookies (wrong audit session / no Keychain)
+  // and purged them. That used to fail silently as a logged-out browser; surface
+  // it loudly instead. Threshold is generous — a genuine keychain failure drops
+  // the count to ~0, not "somewhat fewer".
+  try {
+    const loaded = (await context.cookies()).length;
+    if (seeded >= 50 && loaded < seeded * 0.25) {
+      log(`WARNING: keychain decrypt likely FAILED — seeded ${seeded} cookies but ` +
+          `Chrome loaded only ${loaded}. browse is logged out. The kernel is in a ` +
+          `security session without login-keychain access; restart PAI from the ` +
+          `console GUI session (see reference_browse_keychain_session).`);
+    }
+  } catch (e) {
+    log(`keychain canary check skipped: ${e}`);
+  }
   return { browser, context };
 }
 
