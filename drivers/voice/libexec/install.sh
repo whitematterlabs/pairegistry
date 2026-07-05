@@ -66,7 +66,13 @@ brew_install portaudio   # sounddevice runtime dep
 brew_install ffmpeg      # transcode browser webm/opus → 16kHz WAV for local PTT
 
 # ── Python deps into FHS venv ────────────────────────────────────────
-PY_DEPS=(openwakeword onnxruntime sounddevice webrtcvad "setuptools<81" numpy soundfile)
+# onnxruntime is CAPPED below 1.27: 1.27.0 changed an operator implementation
+# that silently breaks openWakeWord 0.6.0's ONNX graphs — the melspectrogram/
+# embedding/classifier still run but produce dead outputs, so the wake word
+# never fires (verified: TTS "Alexa" scores 1.0000 on ort 1.25/1.26, 0.0001 on
+# 1.27). 1.25/1.26 both ship cp314 wheels. tflite-runtime is Linux-only, so
+# onnx is the only path on macOS — hence the hard cap here.
+PY_DEPS=(openwakeword "onnxruntime>=1.25,<1.27" sounddevice webrtcvad "setuptools<81" numpy soundfile)
 if [[ -x "$VENV_PY" ]]; then
   echo "[voice/install] installing Python deps into FHS venv: ${PY_DEPS[*]}"
   uv pip install --python "$VENV_PY" "${PY_DEPS[@]}"
