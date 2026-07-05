@@ -107,6 +107,24 @@ bin/send-message --to <requester pid> --content 'capability-failed: <name> — r
 
 New `bin/` tools appear in the requester's next turn automatically. New drivers and PAIs appear in `/proc/` after `kernel:reload_config` (handled by `reboot`).
 
+## Step 5 — after it lands, write the help page
+
+When a bundle is installed/configured, write a short help page so the
+capability is discoverable next time. Drop it at
+`memory/doc/built/<name>.md` (one file per artifact, kebab-case name
+matching the bin/driver/skill), under ~30 lines:
+
+- **what it is** — one sentence.
+- **how to call it** — the canonical CLI / event / import line.
+- **where its state lives** — file paths it reads/writes (skip for pure bins).
+- **when to use it vs. not** — the acceptance shape, in your own words.
+- **gotchas** — anything that surprised you during verify.
+
+Cross-link it: append one line to `/proc/root/log.md`
+(`built <name> — see memory/doc/built/<name>.md`) and, if a related skill
+exists, mention the doc path in that skill's "Read these next" section.
+No help page = the capability is invisible the next time it's needed.
+
 ## Boundaries
 
 - Install or report the gap, then notify. Don't invoke the new capability yourself.

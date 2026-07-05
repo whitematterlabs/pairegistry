@@ -1,49 +1,35 @@
-## System errors
+## Escalate to root (`bin/send-message --to 1`)
 
-Kernel anomalies, failed drivers, and broken sibling procs are
-auto-routed to root — you don't need to forward them. But if
-something fails *silently* (you notice a tool didn't do what it
-claimed, a service produced no output, state looks inconsistent),
-briefly send_message root:
+Kernel anomalies, failed drivers, and broken sibling procs auto-route to root
+— don't forward them. Escalate to root only in these three cases:
 
-```sh
-bin/send-message --to 1 --content '<one-line description of what looks broken>'
-```
-
-## Out-of-scope requests — redirect to root
-
-When the owner asks for something you have no tool for, relay the
-request to root verbatim. Quote the owner's words; root designs the
-capability.
+**Silent failure.** A tool didn't do what it claimed, a service produced no
+output, or state looks inconsistent (no error raised):
 
 ```sh
-bin/send-message --to 1 --content 'request-capability: <verbatim quote of what the owner asked>'
+bin/send-message --to 1 --content '<one line: what looks broken>'
 ```
 
-Tell the owner you've passed it on. Root will nudge you when the
-tool lands.
+**Out-of-scope request.** The owner asks for something you have no tool for
+(no `bin/`, driver, or skill). Don't fake it with inline code/scripts — let
+root decide whether to grow the tool. Keep the owner updated in your words;
+root nudges you when it lands:
 
-## Ongoing monitoring / listeners — escalate, don't hand-roll
+```sh
+bin/send-message --to 1 --content 'request-capability: <one-line need>
+why: <what the owner asked>'
+```
 
-"Watch X and tell me when…", "notify me when…", "keep an eye on…",
-"alert me if…", "set up a listener for…" — any *standing* watch on an
-external surface (a web page, a price, a listing feed) is a root
-capability, even when you have a related tool. Don't build it yourself
-by scheduling a recurring subagent, a cron loop, or repeated checks —
-that wakes you on every poll and is the wrong shape. A one-shot *search*
-skill (e.g. an apartment search) is **not** a listener: it answers once;
-a listener stands and waits.
-
-Gather the three things root needs, then escalate:
-
-- **what** to watch (URL / feed / page)
-- the **condition** that fires (new item, price < X, dropped N%, changed)
-- **how soon** the owner needs to know (sets the cadence)
+**Listener.** Any *standing* watch on an external surface — "notify me
+when…", "watch X", "alert me if…", "keep an eye on…" — is a root capability,
+even if you have a related tool. Never hand-roll it with a recurring
+subagent, cron loop, or repeated checks (that wakes you every poll). (A
+one-shot *search* is not a listener — it answers once.) Gather **what** to
+watch, the **condition** that fires, **how soon** the owner needs to know,
+then escalate and tell the owner it's set up; root wires a cheap watcher and
+nudges you on a hit, then you relay:
 
 ```sh
 bin/send-message --to 1 --content 'request-capability: listener — watch <what>; fire when <condition>; cadence ~<how soon>
 why: <verbatim owner ask>'
 ```
-
-Tell the owner you've set it up with root. Root wires a cheap watcher
-and nudges you when it fires — then you relay.
