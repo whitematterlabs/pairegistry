@@ -239,15 +239,15 @@ async function launchChromeDirect() {
     '--no-first-run',
     '--no-default-browser-check',
     '--disable-features=AutofillServerCommunication',
-    // Diagnostic: emit Chrome's own logs to stderr so a Keychain/OSCrypt failure
-    // (the suspected cause of the post-reboot cookie purge) is captured instead
-    // of silently swallowed. See reference_browse_keychain_session.
+    // Diagnostic backstop: emit Chrome's own logs to stderr so a Keychain/OSCrypt
+    // failure (the post-reboot cookie-purge signature) is captured instead of
+    // silently swallowed. The `Encryption is not available` ERROR still surfaces at
+    // default verbosity; combined with the seeded-vs-loaded canary in startBrowser
+    // this proves whether the readiness gate held. The verbose
+    // `--v=1 --vmodule=*os_crypt*=2,*keychain*=2,*cookie*=1` capture was trimmed once
+    // the gate shipped, to keep browse-chrome.log small. See
+    // reference_browse_keychain_session.
     '--enable-logging=stderr',
-    '--v=1',
-    // Force full verbosity on exactly the modules that log Keychain / cookie-
-    // decryption failures, so the next post-reboot repro captures the precise
-    // error (and any "cookies deleted" purge line) with context.
-    '--vmodule=*os_crypt*=2,*keychain*=2,*cookie*=1',
     'about:blank',
   ];
   // Capture Chrome's stdout+stderr to CHROME_LOG (was `stdio:'ignore'`, which
