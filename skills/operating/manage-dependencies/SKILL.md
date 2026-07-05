@@ -1,7 +1,7 @@
 ---
 name: manage-dependencies
 visible_to: [root]
-description: Use when installing, removing, or searching paiman bundles where bundle-to-bundle `deps:` come into play — what gets pulled in automatically, what blocks an uninstall, when something falls through to pip. For the full paiman command surface, see `kernel-tools`; this skill is only about deps.
+description: Use when installing, removing, or searching paiman bundles where bundle-to-bundle `deps:` matter — what auto-installs, what blocks an uninstall, when it falls through to pip. Full paiman command surface: see `kernel-tools`.
 ---
 
 # Manage bundle dependencies

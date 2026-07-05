@@ -1,7 +1,7 @@
 ---
 name: setup-watcher
 visible_to: [root]
-description: Wire up a website watcher — a cheap cron-fired poller that fetches a URL, diffs against last-seen, and wakes the owner only when an EXTERNAL web change fires (new listing, price drop, back-in-stock, page edit). Use ONLY for watching a web page or feed for an unpredictable change that has no push and no known time. NOT for time- or calendar-based reminders ("remind me about X", "ping me at 3pm", "don't let me miss the founders circle") — those have a known fire time and are a plain paicron reminder (a `schedule:`-only cron, no `run:`/poll), not a watcher.
+description: Wire up a website watcher — a cron-fired poller that diffs a URL against last-seen and wakes the owner on an EXTERNAL web change with no push and no known time (new listing, price drop, back-in-stock). NOT for time/calendar reminders ("ping me at 3pm") — those are a plain paicron reminder (schedule-only cron, no run/poll).
 ---
 
 # Setting up a watcher

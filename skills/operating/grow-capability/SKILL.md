@@ -1,7 +1,7 @@
 ---
 name: grow-capability
 visible_to: [root]
-description: Classify a capability request (own initiative or a child PAI's `request-capability:` send_message), pick the right bundle kind, install existing registry bundles when available, and notify the requester. Single source of truth for the bin / driver / skill / subagent / pai / prompt taxonomy.
+description: Classify a capability request (own initiative or a child's `request-capability:` send_message), pick the bundle kind, install existing registry bundles, notify the requester. Source of truth for the bin/driver/skill/subagent/pai/prompt taxonomy.
 ---
 
 # Growing a capability

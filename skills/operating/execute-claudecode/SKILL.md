@@ -1,7 +1,7 @@
 ---
 name: execute-claudecode
 visible_to: [root]
-description: Shell out to `claude -p` (ClaudeCode headless) to build an artifact. This is the canonical build mechanism — whenever you'd reach for multi-step bash, heredoc'd Python, or a "quick helper," fire a claudecode subprocess with a brief instead. The intelligence and exploration loop live inside the subprocess; you write the brief, fire it, ship.
+description: Shell out to `claude -p` (ClaudeCode headless) to build an artifact — the canonical build mechanism whenever you'd reach for multi-step bash, heredoc'd Python, or a "quick helper." The exploration loop lives inside the subprocess; you write the brief, fire it, ship.
 ---
 
 # Executing claudecode

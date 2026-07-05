@@ -1,5 +1,6 @@
 ---
 name: author-skill
+visible_to: [root]
 description: Use when writing a new SKILL.md (own initiative or via skill `grow-capability` with kind=skill). Covers description-line discipline, body shape, and when NOT to make a skill.
 ---
 

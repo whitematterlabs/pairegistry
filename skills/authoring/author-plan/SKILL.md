@@ -1,5 +1,6 @@
 ---
 name: author-plan
+visible_to: [root]
 description: Draft a checkpointed multi-step plan at ~/workspace/plans/<slug>/ that sibling skill execute-plan will consume. Four required sections, per-step verify lines, explicit approval gate via status.md.
 ---
 

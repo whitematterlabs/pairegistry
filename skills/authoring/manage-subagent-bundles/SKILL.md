@@ -1,6 +1,7 @@
 ---
 name: manage-subagent-bundles
-description: Use when authoring or curating reusable `kind: subagent` bundles at /usr/lib/subagents/ (e.g. `scout`, `browse`). Read before scaffolding a new specialist role. For wiring an existing bundle into a parent, use manage-dependencies. For coding work, do NOT author a bundle — use the `execute-claudecode` skill.
+visible_to: [root]
+description: Use when authoring or curating reusable `kind: subagent` bundles at /usr/lib/subagents/ (e.g. scout, browse). For wiring an existing bundle into a parent, see manage-dependencies; for coding work use execute-claudecode instead.
 ---
 
 # Manage subagent bundles

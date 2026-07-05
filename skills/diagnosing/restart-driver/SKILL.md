@@ -1,6 +1,7 @@
 ---
 name: restart-driver
-description: Root-only. Bounce a crashed kernel-owned driver (NOT a PAI). Use when a driver slug has `failed` status with a transient cause.
+visible_to: [root]
+description: Bounce a crashed kernel-owned driver (NOT a PAI). Use when a driver slug has `failed` status with a transient cause.
 ---
 
 # Restart a driver
