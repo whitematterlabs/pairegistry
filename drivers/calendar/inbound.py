@@ -263,9 +263,25 @@ class _ChangeWatcher:
             observer, "changed:", "EKEventStoreChangedNotification", self._store,
         )
         rl = NSRunLoop.currentRunLoop()
+        # Bound the loop so it cannot busy-spin. With a live EKEventStore
+        # observer attached, `runUntilDate_` returns *immediately* instead of
+        # blocking for the slice (observed: the loop then pins a core at ~100%
+        # marshalling the two ObjC calls per iteration through PyObjC — the
+        # actual cold-boot spin). A bare runloop with no store blocks fine,
+        # which is why it only shows up once EventKit is wired up. Whatever
+        # CoreFoundation is doing internally, we refuse to iterate faster than
+        # RUNLOOP_SLICE: if runUntilDate_ returned early, wait out the rest of
+        # the slice on the stop event (so cancellation stays instant). Pending
+        # EKEventStoreChangedNotifications queue on the mach port and are
+        # serviced on the next slice — coalescing bursts, not dropping them.
+        RUNLOOP_SLICE = 1.0
         try:
             while not self._stop.is_set():
-                rl.runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(1.0))
+                t0 = time.monotonic()
+                rl.runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(RUNLOOP_SLICE))
+                elapsed = time.monotonic() - t0
+                if elapsed < RUNLOOP_SLICE:
+                    self._stop.wait(RUNLOOP_SLICE - elapsed)
         finally:
             NSNotificationCenter.defaultCenter().removeObserver_(observer)
 
