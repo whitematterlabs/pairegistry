@@ -31,6 +31,7 @@ import hashlib
 import json
 import os
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
@@ -49,6 +50,18 @@ HORIZON_DAYS = 3
 # Slow safety-net refresh when no EKEventStoreChangedNotification has
 # fired. Notifications are usually instant, so this is purely a backstop.
 REFRESH_FALLBACK_SECONDS = 300
+
+# Floor between EventKit snapshots. On a *cold* boot CalendarDaemon streams
+# the whole store in from iCloud/Exchange and fires EKEventStoreChangedNotification
+# in a sustained storm — hundreds of notifications, most yielding an empty diff.
+# Without a floor the loop runs a full snapshot per notification back-to-back and
+# pins a core at ~100% for the duration of the warmup. This caps snapshots to one
+# per interval; a storm collapses to ~one refresh every few seconds.
+MIN_REFRESH_INTERVAL = 3.0
+
+# After a wake, wait this long for the burst to finish arriving before snapshotting,
+# so a multi-notification change (iCloud reconcile) coalesces into a single diff.
+SETTLE_DELAY = 0.5
 
 
 def _load_state() -> dict:
@@ -174,6 +187,44 @@ def _request_access(store) -> bool:
     return granted["v"]
 
 
+_OBSERVER_CLASS = None
+
+
+def _observer_class():
+    """Lazily define (once per process) the NSObject subclass that observes
+    EKEventStoreChangedNotification.
+
+    An Objective-C class name is registered in a *process-global* runtime
+    table, so defining the subclass a second time raises
+    ``objc.error: <name> is overriding existing Objective-C class``. The
+    watcher thread is (re)started on every driver stop+start, so the class
+    definition MUST NOT live inside the thread body — otherwise the second
+    and every later start crashes the runloop thread before it can register
+    the observer, silently deafening the driver to real-time changes (only
+    the slow fallback survives). Define once, cache, reuse.
+
+    The per-instance callback can't be closed over (the class is shared), so
+    it's stashed as a plain Python attribute on the instance — PyObjC allows
+    this on Python-defined subclasses.
+    """
+    global _OBSERVER_CLASS
+    if _OBSERVER_CLASS is None:
+        from Foundation import NSObject
+
+        class _CalendarChangeObserver(NSObject):
+            def changed_(self, _note):
+                cb = getattr(self, "_on_change", None)
+                if cb is None:
+                    return
+                try:
+                    cb()
+                except Exception as exc:
+                    print(f"[calendar-in] on_change error: {exc!r}", flush=True)
+
+        _OBSERVER_CLASS = _CalendarChangeObserver
+    return _OBSERVER_CLASS
+
+
 class _ChangeWatcher:
     """Background NSRunLoop thread observing EKEventStoreChangedNotification.
 
@@ -199,22 +250,14 @@ class _ChangeWatcher:
     def _run(self) -> None:
         try:
             from Foundation import (
-                NSObject, NSNotificationCenter, NSRunLoop, NSDate,
+                NSNotificationCenter, NSRunLoop, NSDate,
             )
         except ImportError as e:
             print(f"[calendar-in] runloop thread: PyObjC missing ({e})", flush=True)
             return
 
-        on_change = self._on_change
-
-        class _Observer(NSObject):
-            def changed_(self, _note):
-                try:
-                    on_change()
-                except Exception as exc:
-                    print(f"[calendar-in] on_change error: {exc!r}", flush=True)
-
-        observer = _Observer.alloc().init()
+        observer = _observer_class().alloc().init()
+        observer._on_change = self._on_change
         self._observer = observer
         NSNotificationCenter.defaultCenter().addObserver_selector_name_object_(
             observer, "changed:", "EKEventStoreChangedNotification", self._store,
@@ -279,6 +322,13 @@ async def run() -> None:
             state.update(snap)
             await asyncio.to_thread(_save_state, state)
 
+    def _drain() -> None:
+        while not queue.empty():
+            try:
+                queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
     # Initial diff against whatever we cached last run. On first boot
     # state.json is empty, so the full upcoming window lands in the `new`
     # list of a single `calendar:changes` event — one nudge, full context.
@@ -287,23 +337,39 @@ async def run() -> None:
     except Exception as e:
         print(f"[calendar-in] initial refresh error: {e!r}", flush=True)
 
+    last_refresh = time.monotonic()
+    absorbed = 0  # notifications swallowed by the rate floor since last log
     try:
         while True:
             try:
                 await asyncio.wait_for(queue.get(), timeout=REFRESH_FALLBACK_SECONDS)
             except asyncio.TimeoutError:
                 pass
-            # Coalesce bursts: EventKit can fire several notifications back-to-back
-            # while iCloud reconciles; one snapshot+diff covers them all.
-            while not queue.empty():
-                try:
-                    queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    break
+            # Let a burst finish landing before we snapshot: EventKit fires
+            # several notifications back-to-back while iCloud reconciles.
+            await asyncio.sleep(SETTLE_DELAY)
+            _drain()
+            # Rate floor: on a cold boot the store streams in as a sustained
+            # notification storm. Without this, each notification triggers a
+            # full EventKit snapshot back-to-back and pins a core at ~100%.
+            # Cap snapshots to one per MIN_REFRESH_INTERVAL; keep draining
+            # wakeups that arrive while we wait out the floor.
+            since = time.monotonic() - last_refresh
+            if since < MIN_REFRESH_INTERVAL:
+                absorbed += 1
+                await asyncio.sleep(MIN_REFRESH_INTERVAL - since)
+                _drain()
+            if absorbed and absorbed % 50 == 0:
+                print(
+                    f"[calendar-in] rate floor active: absorbed {absorbed} "
+                    "back-to-back change bursts (cold-boot storm)",
+                    flush=True,
+                )
             try:
                 await _refresh()
             except Exception as e:
                 print(f"[calendar-in] refresh error: {e!r}", flush=True)
+            last_refresh = time.monotonic()
     except asyncio.CancelledError:
         raise
     finally:
