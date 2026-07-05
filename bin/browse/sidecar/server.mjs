@@ -43,6 +43,11 @@ const REAL_CHROME_PROFILE = path.join(
 // Written once the bulk profile has been seeded; cookies refresh independently.
 const SEED_MARKER = path.join(PROFILE_DIR, '.seed-ok');
 const LOG = path.join(PAI_ROOT, 'var', 'log', 'browse-daemon.log');
+// Chrome's OWN stderr (OSCrypt / "Chrome Safe Storage" Keychain errors surface
+// here). Under var/log so it survives `pai update` (which only swaps the release
+// dir). We stopped discarding Chrome's output so a cookie purge that otherwise
+// only shows as a logged-out browser can be traced to the exact Keychain failure.
+const CHROME_LOG = path.join(PAI_ROOT, 'var', 'log', 'browse-chrome.log');
 
 // browse launches its OWN Chrome directly (the pre-Playwright "v1" CDP design)
 // and Playwright only ATTACHES over CDP for input. Launching the ordinary Chrome
@@ -176,7 +181,7 @@ async function closeOwnChrome() {
 async function launchChromeDirect() {
   if (await cdpAlive()) return;   // a prior browse Chrome already exposes CDP
   if (!fs.existsSync(CHROME_BIN)) throw new Error(`Chrome not found at ${CHROME_BIN}`);
-  log(`launching browse Chrome via launchctl asuser (CDP ${CDP_PORT}, Aqua session Keychain)…`);
+  log(`launching browse Chrome directly (CDP ${CDP_PORT}); Chrome stderr → ${CHROME_LOG}`);
   const chromeArgs = [
     `--remote-debugging-port=${CDP_PORT}`,
     '--remote-debugging-address=127.0.0.1',
@@ -185,24 +190,27 @@ async function launchChromeDirect() {
     '--no-first-run',
     '--no-default-browser-check',
     '--disable-features=AutofillServerCommunication',
+    // Diagnostic: emit Chrome's own logs to stderr so a Keychain/OSCrypt failure
+    // (the suspected cause of the post-reboot cookie purge) is captured instead
+    // of silently swallowed. See reference_browse_keychain_session.
+    '--enable-logging=stderr',
+    '--v=1',
+    // Force full verbosity on exactly the modules that log Keychain / cookie-
+    // decryption failures, so the next post-reboot repro captures the precise
+    // error (and any "cookies deleted" purge line) with context.
+    '--vmodule=*os_crypt*=2,*keychain*=2,*cookie*=1',
     'about:blank',
   ];
-  // Launching the real Chrome binary with no automation flags is necessary but
-  // NOT sufficient to reach the "Chrome Safe Storage" Keychain key: macOS gates
-  // login-keychain access by *audit session*, and only the console Aqua session
-  // holds the unlocked login keychain. The kernel (and so this daemon) often runs
-  // in a login(1)-minted session that ISN'T the console session — every terminal
-  // tab mints its own, and only some are the console one. In that case Chrome
-  // can't decrypt the owner's v10 cookies and PURGES them, serving a logged-out
-  // browser. `launchctl asuser <uid>` re-homes Chrome into the per-user Aqua
-  // domain (no root needed for the same console user), so it always reaches the
-  // real Keychain regardless of which session started the kernel. See
-  // reference_browse_keychain_session.
-  const uid = String(os.userInfo().uid);
-  const child = spawn(
-    '/bin/launchctl', ['asuser', uid, CHROME_BIN, ...chromeArgs],
-    { detached: true, stdio: 'ignore' });
+  // Capture Chrome's stdout+stderr to CHROME_LOG (was `stdio:'ignore'`, which
+  // threw away the exact Keychain error). A per-launch dated marker lets us line
+  // the Chrome log up against browse-daemon.log timestamps.
+  const chromeLogFd = fs.openSync(CHROME_LOG, 'a');
+  fs.writeSync(chromeLogFd,
+    `\n===== browse Chrome launch ${new Date().toISOString()} (CDP ${CDP_PORT}) =====\n`);
+  const child = spawn(CHROME_BIN, chromeArgs,
+    { detached: true, stdio: ['ignore', chromeLogFd, chromeLogFd] });
   child.unref();
+  fs.closeSync(chromeLogFd);   // child keeps the dup'd fd; safe to close ours
   const deadline = Date.now() + CHROME_LAUNCH_TIMEOUT_MS;
   while (Date.now() < deadline) {
     if (await cdpAlive()) return;
@@ -320,18 +328,18 @@ async function startBrowser() {
   // pages opened here carry the seeded cookies/logins. Fall back to a fresh
   // context only if Chrome somehow reports none.
   const context = browser.contexts()[0] || await browser.newContext();
-  // Keychain canary: if we seeded a real cookie set but Chrome loaded almost
-  // none, it couldn't decrypt the v10 cookies (wrong audit session / no Keychain)
-  // and purged them. That used to fail silently as a logged-out browser; surface
-  // it loudly instead. Threshold is generous — a genuine keychain failure drops
-  // the count to ~0, not "somewhat fewer".
+  // Keychain canary (diagnostic only — no behavior change): if we seeded a real
+  // cookie set but Chrome loaded almost none, it couldn't decrypt the v10 cookies
+  // and purged them. Log it so the failure is visible in browse-daemon.log and we
+  // know to read CHROME_LOG for Chrome's exact Keychain error. Threshold is
+  // generous — a genuine failure drops the count to ~0, not "somewhat fewer".
   try {
     const loaded = (await context.cookies()).length;
     if (seeded >= 50 && loaded < seeded * 0.25) {
       log(`WARNING: keychain decrypt likely FAILED — seeded ${seeded} cookies but ` +
-          `Chrome loaded only ${loaded}. browse is logged out. The kernel is in a ` +
-          `security session without login-keychain access; restart PAI from the ` +
-          `console GUI session (see reference_browse_keychain_session).`);
+          `Chrome loaded only ${loaded}. browse is logged out; the copied v10 cookies ` +
+          `could not be decrypted. Read ${CHROME_LOG} for Chrome's exact ` +
+          `"Chrome Safe Storage" Keychain error (root cause still unconfirmed).`);
     }
   } catch (e) {
     log(`keychain canary check skipped: ${e}`);
