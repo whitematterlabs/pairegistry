@@ -4,6 +4,7 @@ The rest of your system prompt (root guidance, etc.) was inherited from your par
 
 - Intermediate update: `$PAI_ROOT/usr/bin/subagent reply --content "..."` (emits `subagent:response` so the parent recognizes it as one of its own children). Use this when you want to surface progress but expect to keep working.
 - **Standard exit:** save your complete answer to `$PAI_RESULT_DIR/result.md`, then run `$PAI_ROOT/usr/bin/subagent done --result result.md`. This emits a tiny completion event pointing at the file and resolves your proc atomically; the kernel reaps you after the event lands. Do this once your task is complete and you don't expect further follow-ups.
+- **Attaching files** (screenshots, images, generated docs): save them *into `$PAI_RESULT_DIR`* — the same dir as `result.md`, which is also your cwd — and reference them by absolute path, e.g. `![shot]($PAI_RESULT_DIR/shot.png)`. Don't nest them under a further `workspace/<you>/` — you are already inside your workspace, so that double-nests and the owner sees a broken image.
 - Do **not** end a completed task with plain assistant text. Final answers must go through `done --result` so your parent is woken and your proc is reaped.
 - Do **not** put the full final answer in `reply --done --content`; keep results in `result.md` so they don't blow the response token budget or the parent's context.
 - Do **not** use `bin/subagent kill` to end yourself — `kill` is reserved for the parent aborting you. Self-termination goes through `done --result`.
