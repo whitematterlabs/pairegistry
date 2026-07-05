@@ -177,9 +177,16 @@ function cdpAlive() {
 // exits 44 ("item could not be found") while the keychain isn't findable yet.
 // The per-probe timeout guarantees this can never block the daemon.
 function keychainReady() {
+  // CRITICAL: force HOME=REAL_HOME. The kernel overrides $HOME per-PAI for
+  // sandboxing, and `security` resolves the keychain search list from
+  // $HOME/Library/Keychains — under the sandbox home there is no login keychain,
+  // so the probe would return exit 44 ("not found") forever and the gate would
+  // never let Chrome launch. REAL_HOME (os.userInfo, ignores $HOME) points the
+  // probe at the owner's real login keychain, the same one Chrome ultimately uses.
   const res = spawnSync(
     'security', ['find-generic-password', '-w', '-s', 'Chrome Safe Storage'],
-    { timeout: KEYCHAIN_PROBE_TIMEOUT_MS, encoding: 'utf8' });
+    { timeout: KEYCHAIN_PROBE_TIMEOUT_MS, encoding: 'utf8',
+      env: { ...process.env, HOME: REAL_HOME } });
   return res.status === 0 && (res.stdout || '').trim().length > 0;
 }
 
@@ -256,8 +263,17 @@ async function launchChromeDirect() {
   const chromeLogFd = fs.openSync(CHROME_LOG, 'a');
   fs.writeSync(chromeLogFd,
     `\n===== browse Chrome launch ${new Date().toISOString()} (CDP ${CDP_PORT}) =====\n`);
+  // CRITICAL: force HOME=REAL_HOME for Chrome too. The kernel overrides $HOME
+  // per-PAI for sandboxing; Chrome resolves the login keychain (its "Chrome Safe
+  // Storage" key) from $HOME/Library/Keychains just like the `security` probe, so
+  // under the sandbox home it logs "Encryption is not available" and PURGES every
+  // v10 cookie — browse comes up logged out. Verified in isolation: sandbox $HOME →
+  // Encryption-not-available + 0 cookies; REAL_HOME → decrypts cleanly. This makes
+  // Chrome hit the SAME real keychain the readiness gate probes, so the gate is
+  // valid. The profile is an absolute --user-data-dir, so $HOME doesn't relocate it.
   const child = spawn(CHROME_BIN, chromeArgs,
-    { detached: true, stdio: ['ignore', chromeLogFd, chromeLogFd] });
+    { detached: true, stdio: ['ignore', chromeLogFd, chromeLogFd],
+      env: { ...process.env, HOME: REAL_HOME } });
   child.unref();
   fs.closeSync(chromeLogFd);   // child keeps the dup'd fd; safe to close ours
   const deadline = Date.now() + CHROME_LAUNCH_TIMEOUT_MS;
