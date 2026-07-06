@@ -39,7 +39,10 @@ Kernel code never lives under `/usr/`. Userspace never lives under
   workspace, inbox). Survives uninstall.
 - `/var/lib/memory/` — shared canonical memory.
 - `/var/log/` — append-only logs.
-- `/var/spool/communication/messages/` — message queues.
+- `/var/spool/communication/` — comms backing store (messages, email).
+  PAIs with a comms role see it as `/home/<pai>/communication/` — prefer
+  that home view in commands and replies; touch `/var/spool/` directly
+  only when no home view is mounted.
 - `/sys/drivers/<name>/` — driver runtime state (cursors, last event).
 - `/proc/<slug>/` — kernel-managed process lifecycle (status, log,
   spec, pid).

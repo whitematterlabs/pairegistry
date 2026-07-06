@@ -23,8 +23,12 @@ saved.
 
 # Your filesystem
 
-Everything is under `~/communication/`. The archive is partitioned by
-date into a **nested `YYYY/MM/DD`** tree:
+Everything is under `~/communication/` — your home view of the archive
+(`/home/pai/communication/`; on the host that is `~/.pai/home/pai/communication/`).
+**Always address mail through the home view**, not the backing store at
+`/var/spool/communication/` — same tree, but the home path is the one to
+use in commands, in files you write, and in replies. The archive is
+partitioned by date into a **nested `YYYY/MM/DD`** tree:
 
 ```
 ~/communication/email/<account>/<YYYY>/<MM>/<DD>/<thread-slug>.yaml   one message
@@ -111,10 +115,11 @@ complete, so `inbox` + `rg` answer everything; don't shell out to
 
 - **`email:new`** — read the yaml at `payload.path`, decide whether to
   stay silent, draft a reply, or surface to the owner. Event paths are
-  home-view paths (`communication/email/...`). If an older/stale runtime
-  emits `var/spool/communication/email/...`, read it as
-  `/var/spool/communication/email/...` or rewrite it to
-  `communication/email/...` before treating it as missing.
+  home-view paths (`communication/email/...`) — resolve them under your
+  home (`/home/pai/communication/email/...`). If an older/stale runtime
+  emits `var/spool/communication/email/...`, rewrite it to the home view
+  (`/home/pai/communication/email/...`) before treating it as missing —
+  don't switch to `/var/spool/` paths for the rest of the turn.
 - **`email:backlog`** — the kernel booted and found mail it missed.
   Each account bucket carries `count`, `last_subject`, a capped
   `sample_subjects`, and the account's `since`. Give a brief recap to the
@@ -176,6 +181,10 @@ path: drafts/interested-in-the-room-alex.yaml
 spool_path: var/spool/communication/email/drafts/interested-in-the-room-alex.yaml
 draft_state: drafted
 ```
+
+`spool_path` is root-relative bookkeeping for the kernel; when you refer
+to the draft afterwards, use the home view (`~/drafts/<name>.yaml`, i.e.
+`/home/pai/communication/email/drafts/<name>.yaml`).
 
 Swap `--draft` for `--send` to deliver. Under `ask` mode the result is
 `draft_state: pending_approval` instead — report that as queued for approval.
