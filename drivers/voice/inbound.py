@@ -12,6 +12,7 @@ wake hit. Concurrent wake hits during transcription are queued.
 from __future__ import annotations
 
 import asyncio
+import re
 import wave
 from datetime import datetime
 from pathlib import Path
@@ -67,6 +68,50 @@ def _write_wav(path: Path, frames: list[np.ndarray]) -> None:
         w.writeframes(audio.tobytes())
 
 
+def _is_noise_transcript(text: str) -> bool:
+    """True when whisper produced no real speech — empty, or only bracketed/
+    parenthesized non-speech markers like "[BLANK_AUDIO]", "[silence]",
+    "(wind blowing)". Those come from a false wake trigger on ambient noise;
+    they must not emit an utterance, nudge the PAI, or leave an owner bubble."""
+    stripped = (text or "").strip()
+    if not stripped:
+        return True
+    without_markers = re.sub(r"[\[(][^\])]*[\])]", "", stripped).strip()
+    return not without_markers
+
+
+def _owner_pai_slug() -> str | None:
+    """The fallback (owner-facing) PAI — its transcript is the console's main
+    conversation, where a spoken phrase belongs as a `me:` bubble. Read-only
+    and tolerant; None if config is missing/unreadable."""
+    try:
+        from boot import config
+
+        return next((name for name in config.load_config() if config.is_fallback(name)), None)
+    except Exception:
+        return None
+
+
+def _echo_owner_bubble(text: str) -> None:
+    """Mirror the heard phrase into the owner PAI's day-file as `[HH:MM] me:
+    <text>` so the web console renders it as an owner message bubble (the hub
+    watches the me-thread dir and rebroadcasts on change). Display-only:
+    appending here does NOT nudge the kernel, so the `voice:utterance` event
+    stays the sole trigger — the PAI responds once, not twice. Best-effort; a
+    failure must never drop the utterance itself."""
+    try:
+        slug = _owner_pai_slug()
+        if not slug:
+            return
+        day = paths.me_thread_today(slug)
+        day.parent.mkdir(parents=True, exist_ok=True)
+        line = f"[{datetime.now().strftime('%H:%M')}] me: {text}\n"
+        with day.open("a", encoding="utf-8") as f:
+            f.write(line)
+    except Exception as e:
+        print(f"[voice-in] owner-bubble echo failed: {e}", flush=True)
+
+
 async def _transcribe_and_emit(wav_path: Path, wake_word: str, duration_ms: int, captured_at: str) -> None:
     try:
         text = await asyncio.to_thread(stt.transcribe, wav_path)
@@ -74,9 +119,14 @@ async def _transcribe_and_emit(wav_path: Path, wake_word: str, duration_ms: int,
         print(f"[voice-in] STT failed: {e}", flush=True)
         P.emit_event({"source": "voice", "kind": "wake_failed", "reason": f"stt: {e}"})
         return
-    if not text:
-        print("[voice-in] empty transcript; dropping", flush=True)
+    text = (text or "").strip()
+    if _is_noise_transcript(text):
+        print(f"[voice-in] non-speech transcript ({text!r}); dropping", flush=True)
         return
+    # Echo as an owner bubble BEFORE emitting: the PAI's nudge (fired by the
+    # event below) reads its transcript for context, so the `me:` line should
+    # already be there when it wakes.
+    _echo_owner_bubble(text)
     P.emit_event({
         "source": "voice",
         "kind": "utterance",
