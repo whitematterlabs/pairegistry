@@ -23,8 +23,9 @@ saved.
 
 # Your filesystem
 
-Everything is under `~/communication/` — your home view of the archive
-(`/home/pai/communication/`; on the host that is `~/.pai/home/pai/communication/`).
+Everything is under `~/communication/` — your home view of the archive.
+In shell commands use the FHS path `/home/pai/communication/...` (the
+shell rewrites it to the runtime directory without relying on `~`).
 **Always address mail through the home view**, not the backing store at
 `/var/spool/communication/` — same tree, but the home path is the one to
 use in commands, in files you write, and in replies. The archive is
