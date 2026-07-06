@@ -282,9 +282,14 @@ async def _process(path: Path) -> None:
     rec.setdefault("id", path.stem)
     status = str(rec.get("status") or PENDING)
     if status == "rejected":
-        if rec["id"] not in _rejected_notified:
+        # `notified_at` persists the told-the-PAI fact in the record itself —
+        # the in-memory set alone resets on every kernel restart, and rejected
+        # records stay in the spool, so the boot scan would re-notify forever.
+        if not rec.get("notified_at") and rec["id"] not in _rejected_notified:
             _rejected_notified.add(rec["id"])
             await _notify_rejected(rec)
+            rec["notified_at"] = _now()
+            _atomic_dump(path, rec)
         return
     if status in TERMINAL:
         return
