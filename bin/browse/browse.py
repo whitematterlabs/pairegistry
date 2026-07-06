@@ -135,10 +135,15 @@ def _spawn_daemon_proc() -> None:
     its filesystem watch and calls supervisor.start() itself (same mechanism
     paicron/litellm_proxy use). browse.py runs as a one-shot CLI outside the
     kernel process, so it can't call supervisor.start() directly; it only
-    ever needs to write the proc file once. P.spawn() raises ProcessExists if
-    the dir is already there, which is exactly the idempotency this needs —
-    a concurrent `browse` invocation just falls through to the alive-poll
-    below instead of racing a second Popen.
+    ever needs to write the proc file once. An existing proc in an *active*
+    status means a concurrent `browse` invocation got there first — fall
+    through to the alive-poll below instead of racing a second Popen.
+
+    A proc dir left in a *terminal* status must be reaped first, not treated
+    as "already starting": the kernel:restart shutdown sweep resolves
+    `restart: always` procs to `stopped` and boot does not resurrect them, so
+    without the reap every verb after a kernel restart would wait on a socket
+    nobody will ever create (same fix as `paicron ensure`).
     """
     from boot import processes as P
 
@@ -157,6 +162,12 @@ def _spawn_daemon_proc() -> None:
         "restart": "always",
         "deadline": deadline,
     }
+    try:
+        status = P.read_status(DAEMON_SLUG)
+    except P.ProcessNotFound:
+        status = None
+    if status is not None and status in P.TERMINAL_STATUSES:
+        shutil.rmtree(P.PROC_DIR / DAEMON_SLUG, ignore_errors=True)
     try:
         P.spawn(DAEMON_SLUG, spec)
     except P.ProcessExists:
