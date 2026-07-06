@@ -92,8 +92,14 @@ def resolve_slug(
         except yaml.YAMLError:
             continue
 
-        if chat_guid and meta.get("chat_guid") == chat_guid:
-            return thread_dir.name
+        # chat_guid is only set for group messages. A group message must
+        # never fall back to handle matching: that routes it into the
+        # sender's 1:1 thread (or another group sharing a member). Match
+        # groups by chat_guid alone; ingest() creates the thread if none.
+        if chat_guid:
+            if meta.get("chat_guid") == chat_guid:
+                return thread_dir.name
+            continue
 
         handles = meta.get("handles") or []
         if norm_handle and norm_handle in (_normalize_handle(h) for h in handles):
