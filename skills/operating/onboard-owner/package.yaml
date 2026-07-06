@@ -2,5 +2,5 @@ name: onboard-owner
 kind: skill
 topic: operating
 version: 0.1.0
-description: "First-run getting-to-know-you pass. Skim the owner's last month of mail, iMessage, contacts, and calendar; synthesize var/lib/owner/profile.md; end the turn with a digest the owner can correct. The kernel injects this on first wake and clears the flag once the profile exists."
+description: "First-run getting-to-know-you pass. Fan subagents out across the owner's mail, iMessage, contacts, calendar, filesystem, and LinkedIn in parallel; synthesize var/lib/owner/profile.md from their reports; end the turn with a digest the owner can correct. The kernel injects this on first wake and clears the flag once the profile exists."
 entrypoint: SKILL.md
