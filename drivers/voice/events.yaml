@@ -1,5 +1,11 @@
 driver: voice
-description: Local wake-word + STT inbound. PAIs reply by running `say` directly in their shell — there is no outbound driver. No cloud.
+description: >
+  Local wake-word + STT inbound. PAIs reply by running `say` directly in their
+  shell — there is no outbound driver. No cloud. After the PAI finishes talking,
+  the console arms a wake-free follow-up window (/sys/drivers/voice/followup);
+  the next utterance is captured on speech onset alone, so a conversation needs
+  the wake word only once. Events from a follow-up capture carry
+  wake_word: "followup".
 
 processes:
   - slug: voice-in

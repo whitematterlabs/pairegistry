@@ -41,6 +41,33 @@ class WakeDetector:
         return None
 
 
+class OnsetDetector:
+    """webrtcvad-backed speech-onset detector for the follow-up window.
+
+    Call `feed(frame_bytes_30ms)` per 30ms frame; returns True once sustained
+    speech (>= speech_ms of consecutive voiced frames) is heard. Sustained,
+    not single-frame, so a chair creak doesn't open a wake-free capture.
+    """
+
+    def __init__(self, aggressiveness: int = 2, speech_ms: int = 150):
+        import webrtcvad
+        self.vad = webrtcvad.Vad(aggressiveness)
+        self.speech_ms = speech_ms
+        self.voiced_ms = 0
+
+    def reset(self) -> None:
+        self.voiced_ms = 0
+
+    def feed(self, frame_bytes: bytes) -> bool:
+        if len(frame_bytes) != VAD_FRAME * 2:
+            return False
+        if self.vad.is_speech(frame_bytes, SAMPLE_RATE):
+            self.voiced_ms += VAD_FRAME_MS
+        else:
+            self.voiced_ms = 0
+        return self.voiced_ms >= self.speech_ms
+
+
 class SilenceDetector:
     """webrtcvad-backed end-of-utterance detector.
 

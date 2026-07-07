@@ -4,6 +4,13 @@ Listens to the default mic, detects a wake word with openWakeWord, captures
 the trailing utterance until VAD reports silence (or 15s cap), runs whisper.cpp
 on the captured WAV, and emits a `voice:utterance` event.
 
+Follow-up mode: after the PAI finishes talking (the console's read-aloud
+playback ends), the web backend arms a short wake-free window by writing an
+epoch deadline to /sys/drivers/voice/followup. While armed, sustained speech
+onset opens a capture directly — the owner answers without repeating the wake
+word. The file is one-shot (consumed on capture); each spoken reply re-arms it,
+so a multi-turn voice conversation needs the wake word only once.
+
 Concurrency: wake detection runs on the audio thread. STT runs in a worker
 thread (via asyncio.to_thread) so a long transcription doesn't block the next
 wake hit. Concurrent wake hits during transcription are queued.
@@ -13,7 +20,9 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 import wave
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 
@@ -28,10 +37,15 @@ from boot import processes as P
 import numpy as np
 
 from . import stt
-from .wake import SAMPLE_RATE, WAKE_BLOCK, VAD_FRAME, WakeDetector, SilenceDetector
+from .wake import SAMPLE_RATE, WAKE_BLOCK, VAD_FRAME, WakeDetector, SilenceDetector, OnsetDetector
 
 PAI_ROOT = paths.PAI_ROOT
 CAPTURES_DIR = PAI_ROOT / "sys" / "drivers" / "voice" / "captures"
+# Follow-up window control file: the web console arms it (writes an epoch
+# deadline) when the PAI's read-aloud reply finishes playing, so the owner can
+# answer without repeating the wake word. One-shot — consumed (unlinked) the
+# moment speech onset opens a capture.
+FOLLOWUP_FILE = PAI_ROOT / "sys" / "drivers" / "voice" / "followup"
 
 WAKE_MODEL = "alexa"
 WAKE_THRESHOLD = 0.7        # default 0.5 false-fires on ambient noise
@@ -40,6 +54,20 @@ MIN_UTTERANCE_S = 0.5       # drop captures shorter than this (likely false trig
 MIN_PEAK_RMS = 80           # int16 peak-RMS floor over a 250ms window
 MAX_UTTERANCE_S = 15
 SILENCE_TAIL_MS = 1000
+FOLLOWUP_ONSET_MS = 150     # sustained speech needed to open a wake-free capture
+FOLLOWUP_PREROLL_FRAMES = 6 # ~480ms of audio kept so onset detection doesn't clip the first word
+
+
+def _followup_armed() -> bool:
+    """True while the console-armed follow-up deadline is in the future."""
+    try:
+        return time.time() < float(FOLLOWUP_FILE.read_text().strip())
+    except (FileNotFoundError, ValueError, OSError):
+        return False
+
+
+def _disarm_followup() -> None:
+    FOLLOWUP_FILE.unlink(missing_ok=True)
 
 
 def _peak_rms(frames: list[np.ndarray], window_ms: int = 250) -> float:
@@ -170,7 +198,10 @@ async def _audio_loop() -> None:
     capture_started_at: float | None = None
     capture_iso: str = ""
     cooldown_until: float = 0.0
+    trigger = WAKE_MODEL  # what opened the live capture: wake model name or "followup"
     silence = SilenceDetector(aggressiveness=2, silence_ms=SILENCE_TAIL_MS)
+    onset = OnsetDetector(aggressiveness=2, speech_ms=FOLLOWUP_ONSET_MS)
+    followup_preroll: deque[np.ndarray] = deque(maxlen=FOLLOWUP_PREROLL_FRAMES)
 
     with stream:
         print(f"[voice-in] listening on default input device, "
@@ -182,12 +213,48 @@ async def _audio_loop() -> None:
             if not capturing:
                 if now < cooldown_until:
                     continue
+
+                # Follow-up window: after the PAI finishes talking, the console
+                # arms FOLLOWUP_FILE so the very next utterance opens a capture
+                # on speech onset alone — no wake word. The wake word still
+                # works during the window (checked below if onset hasn't fired).
+                if _followup_armed():
+                    followup_preroll.append(frame)
+                    buf = frame.tobytes()
+                    onset_hit = False
+                    for off in range(0, len(buf) - VAD_FRAME * 2 + 1, VAD_FRAME * 2):
+                        if onset.feed(buf[off:off + VAD_FRAME * 2]):
+                            onset_hit = True
+                            break
+                    if onset_hit:
+                        _disarm_followup()
+                        print("[voice-in] follow-up speech onset — capturing (no wake word)", flush=True)
+                        capturing = True
+                        captured = list(followup_preroll)
+                        followup_preroll.clear()
+                        onset.reset()
+                        trigger = "followup"
+                        capture_started_at = now
+                        capture_iso = datetime.now().isoformat(timespec="seconds")
+                        P.emit_event({
+                            "source": "voice",
+                            "kind": "listening",
+                            "wake_word": trigger,
+                            "captured_at": capture_iso,
+                        })
+                        silence.reset()
+                        continue
+                elif followup_preroll:
+                    followup_preroll.clear()
+                    onset.reset()
+
                 hit = await asyncio.to_thread(wake.feed, frame)
                 if hit is None:
                     continue
                 print(f"[voice-in] wake hit: {hit.model} score={hit.score:.2f}", flush=True)
                 capturing = True
                 captured = [frame]
+                trigger = hit.model
                 capture_started_at = now
                 capture_iso = datetime.now().isoformat(timespec="seconds")
                 # Fire the instant the wake word lands, before any capture/STT —
@@ -227,6 +294,7 @@ async def _audio_loop() -> None:
                     wake.model.reset()
                 except Exception:
                     pass
+                onset.reset()
                 if elapsed < MIN_UTTERANCE_S or rms < MIN_PEAK_RMS:
                     print(f"[voice-in] dropping false trigger "
                           f"(elapsed={elapsed:.2f}s peak_rms={rms:.0f})", flush=True)
@@ -235,7 +303,7 @@ async def _audio_loop() -> None:
                     _write_wav(wav_path, captured)
                     duration_ms = int(elapsed * 1000)
                     asyncio.create_task(
-                        _transcribe_and_emit(wav_path, WAKE_MODEL, duration_ms, capture_iso)
+                        _transcribe_and_emit(wav_path, trigger, duration_ms, capture_iso)
                     )
 
                 capturing = False
