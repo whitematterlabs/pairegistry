@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -30,6 +31,11 @@ UPDATE_READY_NOTICE = "*** PAI is ready to update! ***"
 # path (dev checkout) to the download-and-swap path below.
 DEFAULT_RELEASE_BASE = "https://github.com/whitematterlabs/pai/releases/latest/download"
 
+# Kernel pid handed across a console self re-exec (see _console_reexec_argv).
+# exec keeps our children but drops the Popen handle, so the pid rides the
+# environment for the fresh image to keep tearing the kernel down on exit.
+_ADOPT_KERNEL_ENV = "PAI_ADOPT_KERNEL_PID"
+
 
 @dataclass(frozen=True)
 class UpdateStatus:
@@ -42,8 +48,76 @@ class UpdateStatus:
     remote_url: str | None
 
 
+def _console_reexec_argv(port: int) -> list[str]:
+    """argv for the console's self re-exec after `pai update` (see
+    hub._maybe_restart_console). Module form through the stable interpreter and
+    `usr/src` path — both refreshed in place by paifs-init — so the fresh image
+    loads the new release. Always --no-open: the owner's tab reconnects over
+    SSE on its own."""
+    return [sys.executable, "-m", "bin.pai", "start", "--port", str(port), "--no-open"]
+
+
+def _pid_if_alive(raw: str | None) -> int | None:
+    if not raw:
+        return None
+    try:
+        pid = int(raw)
+    except ValueError:
+        return None
+    if pid <= 0:  # negative pids address process *groups* in os.kill
+        return None
+    try:
+        os.kill(pid, 0)
+    except (ProcessLookupError, PermissionError, OverflowError):
+        return None
+    return pid
+
+
+def _wait_for_exit(pid: int, timeout: float) -> bool:
+    """Wait (bounded) for `pid` to exit, reaping it when it is our child."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            reaped, _ = os.waitpid(pid, os.WNOHANG)
+            if reaped == pid:
+                return True
+        except ChildProcessError:
+            # Not our child (or already reaped) — probe liveness directly.
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.1)
+
+
+def _terminate_adopted_kernel(pid: int) -> None:
+    """Tear down a kernel inherited across a console self re-exec: same
+    TERM-the-group → bounded wait → KILL ladder as the Popen path below, from
+    a bare pid."""
+    try:
+        pgid = os.getpgid(pid)
+    except (ProcessLookupError, PermissionError):
+        return
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        return
+    if not _wait_for_exit(pid, 5):
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        _wait_for_exit(pid, 5)
+
+
 def cmd_start(args: argparse.Namespace) -> int:
-    _check_for_update_on_start()
+    adopted_raw = os.environ.pop(_ADOPT_KERNEL_ENV, None)
+    if adopted_raw is None:
+        # A self re-exec is mid-update — the check would just re-announce the
+        # release we are re-exec'ing into (and stall the rebind on the network).
+        _check_for_update_on_start()
 
     missing = check_layout(PAI_ROOT)
     if missing:
@@ -61,6 +135,10 @@ def cmd_start(args: argparse.Namespace) -> int:
     log_path = PAI_ROOT / "var" / "log" / "kernel" / "kernel.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_fp = log_path.open("a", buffering=1, encoding="utf-8")
+    # After a self re-exec the real kernel is the adopted pid; spawning anyway
+    # is a free liveness backstop — the duplicate loses the kernel.pid flock
+    # and exits immediately, but if the adopted kernel died it takes over.
+    adopted = _pid_if_alive(adopted_raw)
     kernel = subprocess.Popen(
         [sys.executable, "-u", "-m", "boot.entry"],
         start_new_session=True,
@@ -68,9 +146,27 @@ def cmd_start(args: argparse.Namespace) -> int:
         stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL,
     )
+
+    def restart_console() -> None:
+        # `pai update` swapped the installed release: the kernel re-execs itself
+        # on `kernel:restart`, but this parent still serves the old pai_web code
+        # with paths into the wiped release dir. Replace the process image so
+        # the console rebinds on the new build; the live kernel rides the
+        # environment so the fresh image still owns its teardown.
+        live = kernel.pid if kernel.poll() is None else adopted
+        if live is not None:
+            os.environ[_ADOPT_KERNEL_ENV] = str(live)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.execv(sys.executable, _console_reexec_argv(args.port))
+
     try:
         from usr.libexec.web.pai_web.server import run as web_run
-        web_run(port=args.port, open_browser=not args.no_open)
+        web_run(
+            port=args.port,
+            open_browser=not args.no_open,
+            console_restart=restart_console,
+        )
     finally:
         if kernel.poll() is None:
             # Signal the kernel's whole process group, not just the leader —
@@ -94,6 +190,12 @@ def cmd_start(args: argparse.Namespace) -> int:
                     except ProcessLookupError:
                         pass
                 kernel.wait()
+        if adopted is not None and adopted != kernel.pid:
+            _terminate_adopted_kernel(adopted)
+    if adopted is not None:
+        # Re-exec'd lineage: the spawned duplicate lost the flock and exited 1
+        # by design; that is not this surface's exit status.
+        return 0
     return kernel.returncode or 0
 
 
@@ -250,6 +352,51 @@ def _reprovision_after_update(repo: Path, *, no_web: bool) -> int:
     print("==> paifs-init")
     _run_checked([uv, "run", "paifs-init", "--no-setup"], cwd=repo)
     return 0
+
+
+def _kernel_is_running() -> bool:
+    """True if a kernel currently holds its pid flock. Non-blocking probe that
+    always releases — mirrors sbin/reboot so `update` can decide whether a
+    restart is even applicable."""
+    import fcntl
+
+    lock = PAI_ROOT / "run" / "kernel.pid"
+    if not lock.exists():
+        return False
+    try:
+        fd = os.open(lock, os.O_RDWR)
+    except OSError:
+        return False
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True  # someone holds it → a kernel is up
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return False
+    finally:
+        os.close(fd)
+
+
+def _restart_kernel_after_update(new_ver: str, *, no_restart: bool) -> None:
+    """Make the update fully live: tell the running kernel to re-exec into the
+    freshly-repointed build. Without this the kernel keeps running the old build
+    until a manual `sbin/reboot`, which is exactly how new-web/old-kernel skew
+    (silent split-brain) happened. `--no-restart` opts out to stage a build."""
+    if no_restart:
+        print("pai update: staged; kernel NOT restarted (--no-restart). "
+              "run `sbin/reboot` to go live.")
+        return
+    if not _kernel_is_running():
+        return
+    try:
+        from boot.processes import emit_event
+
+        emit_event({"kind": "kernel:restart", "source": "update"})
+        print(f"pai update: restarting kernel into {new_ver}")
+    except Exception as e:  # never fail the update over the restart nudge
+        print(f"pai update: could not signal kernel restart ({e!r}); "
+              "run `sbin/reboot` to go live.", file=sys.stderr)
 
 
 # ---------- tarball (end-user) update path ----------
@@ -439,7 +586,7 @@ def _download_and_extract(base: str, ver: str, expected_sha: str = "") -> tuple[
 
 def _cmd_update_tarball(args: argparse.Namespace, current_ver: str) -> int:
     if args.rollback:
-        return _rollback_tarball(current_ver)
+        return _rollback_tarball(current_ver, no_restart=args.no_restart)
 
     base = _release_base()
     try:
@@ -485,10 +632,11 @@ def _cmd_update_tarball(args: argparse.Namespace, current_ver: str) -> int:
     _write_sha_marker(sha)
     _gc_versions(keep=2)
     print(f"pai update: now on {latest}")
+    _restart_kernel_after_update(latest, no_restart=args.no_restart)
     return 0
 
 
-def _rollback_tarball(current_ver: str) -> int:
+def _rollback_tarball(current_ver: str, *, no_restart: bool = False) -> int:
     candidates = [v for v in _installed_versions() if v != current_ver]
     if not candidates:
         print("pai update: no prior version to roll back to", file=sys.stderr)
@@ -505,6 +653,7 @@ def _rollback_tarball(current_ver: str) -> int:
     # re-syncs rather than trusting a sha from the rolled-forward version.
     _clear_sha_marker()
     print(f"pai update: rolled back to {prior}")
+    _restart_kernel_after_update(prior, no_restart=no_restart)
     return 0
 
 
@@ -545,7 +694,12 @@ def cmd_update(args: argparse.Namespace) -> int:
     if args.no_reprovision:
         print("pai update: skipped reprovision")
         return 0
-    return _reprovision_after_update(REPO_ROOT, no_web=args.no_web)
+    rc = _reprovision_after_update(REPO_ROOT, no_web=args.no_web)
+    if rc == 0:
+        # A dev checkout runs its source in place; a git pull already swapped the
+        # files, so a re-exec is what actually adopts them.
+        _restart_kernel_after_update("dev", no_restart=args.no_restart)
+    return rc
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -601,6 +755,12 @@ def main(argv: list[str] | None = None) -> int:
         "--rollback",
         action="store_true",
         help="(tarball installs) repoint to the previous installed version",
+    )
+    update.add_argument(
+        "--no-restart",
+        action="store_true",
+        help="stage the new build without rebooting the running kernel "
+        "(the kernel keeps running the old build until `sbin/reboot`)",
     )
     update.set_defaults(func=cmd_update)
 

@@ -70,6 +70,13 @@ deliberate and minimal.
 
 For any async delegation, send and end your turn — don't poll.
 
+Subagents you'll reuse across tasks — a worker you keep feeding instructions,
+especially under overclock — spawn with `--suicide-allowed no`: the child
+cannot end itself, replies with results, and stays alive for the next
+`bin/send-message` until you `bin/subagent kill` it. Kill it when the work is
+truly done; a forgotten no-suicide child is a leak. Default spawns (one task,
+one result) end themselves — leave the flag alone for those.
+
 # Email
 
 The `email` driver owns a complete on-disk archive plus `inbox`/`rg` search
