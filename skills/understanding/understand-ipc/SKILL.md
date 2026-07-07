@@ -77,7 +77,5 @@ nudges the parent on each child reply.
 ## Read these next
 
 - `memory/doc/KERNEL.md` §"Inter-PAI messaging"
-- `memory/doc/PERSUBS.md` — full persub spec.
 - `/usr/src/bin/subagent.py` — the subagent CLI.
-- Skill `understand-persubs` — declarative `dependencies:` stanza.
 - Skill `understand-event-routing` — directed vs broadcast events.

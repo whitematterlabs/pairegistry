@@ -18,7 +18,7 @@ command). Long-form docs are stitched at `memory/doc/`.
 - `ls memory/skills/` — skills by name; `cat …/SKILL.md` to read one.
 - `memory/doc/` — `KERNEL.md` (what the kernel is), `FILESYSTEM_v3.md` (FHS
   map), `KERNEL_EVENTS.md` (how a `kind` becomes a nudge), `SELF_HEALING.md`
-  (triage default), `SUBAGENT_BUNDLES.md`, `PERSUBS.md`.
+  (triage default), `SUBAGENT_BUNDLES.md`.
 - `cat /etc/config.yaml` — fleet declaration (reconcile rewrites
   `/proc/<pai>/spec.yaml` from it on boot + `kernel:reload_config`).
 - `ls /proc/` — running PAIs/drivers; `cat /proc/<slug>/spec.yaml` for one.

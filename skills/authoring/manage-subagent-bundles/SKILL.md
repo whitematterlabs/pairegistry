@@ -71,7 +71,7 @@ prompt: usr/lib/subagents/<name>/prompt.md
 
 ## Iterating on a live bundle
 
-Persub specs are captured at spawn time — editing `package.yaml` / `prompt.md` does not retroactively patch running persubs. To pick up changes, restart the parent (reconcile respawns from the new bundle). For details, see `memory/doc/PERSUBS.md`.
+Subagent specs are captured at spawn time — editing `package.yaml` / `prompt.md` does not retroactively patch a running subagent. Respawn it to pick up bundle changes.
 
 ## Inspect
 

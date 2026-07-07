@@ -94,16 +94,10 @@ no separate reload CLI — reconcile runs at every boot.
 ## subagent — child PAI lifecycle
 
 ```sh
-# Ephemeral (one-task)
-subagent spawn --slug <name> --prompt "..."
+subagent spawn --slug <name> --prompt "..."   # optionally --package <name>
 subagent reply --content "..."        # from inside the child
-subagent kill --slug <name>           # end an ephemeral child
-
-# Persistent (persub) — see memory/doc/PERSUBS.md
-subagent spawn --persistent --slug <name> [--prompt "..."]
+subagent kill --slug <name>           # end a child
 ```
-
-`subagent kill` is **rejected** for persubs.
 
 ## Standard flow — bringing a new capability online
 

@@ -42,4 +42,4 @@ Raw files behind those (when paictl is not enough):
 - *Who handles event X?* — grep `wake_on:` in `/etc/config.yaml` for a glob over X's `kind`. Zero matches → entries with `fallback: true`; still zero → root.
 - *Which driver emits this kind?* — `grep -rn "kind:" /usr/lib/drivers/*/events.yaml | grep <kind>`.
 - *Why is this PAI stuck?* — `paictl status <name>` + `paictl logs <name>`. Terminal status with `active=yes` means it crashed and was not respawned; nudge or `paictl stop && paictl start`.
-- *Going deeper?* — `memory/doc/KERNEL.md` (lifecycle, reconcile), `memory/doc/FILESYSTEM_v3.md` (layout), `memory/doc/PERSUBS.md` (persistent subagents).
+- *Going deeper?* — `memory/doc/KERNEL.md` (lifecycle, reconcile), `memory/doc/FILESYSTEM_v3.md` (layout).
