@@ -11,6 +11,7 @@ pin the two footguns we closed:
 """
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 
@@ -19,6 +20,7 @@ PAI_SRC = ROOT.parent / "pai" / "src"
 sys.path[:0] = [str(PAI_SRC), str(ROOT), str(ROOT / "lib")]
 
 import pytest  # noqa: E402
+import yaml  # noqa: E402
 
 from drivers.imessage import outbound as im  # noqa: E402
 from drivers.whatsapp import outbound as wa  # noqa: E402
@@ -70,3 +72,81 @@ def test_freeze_reason_names_config_mode_when_file_absent(mod, flag, tmp_path, m
     _stub(mod, flag, "no", tmp_path / "outbound.freeze", monkeypatch)  # file absent
     reason = mod._freeze_reason()
     assert flag in reason and "mode=no" in reason
+
+
+# ── WhatsApp approved-handoff outbox (relocated off the tailer's watched tree) ──
+# The old design opened a second recursive watchdog Observer on the tailer's own
+# MESSAGES_ROOT; macOS FSEvents rejects a duplicate recursive watch on the same
+# path ("already scheduled"), killing the outbox emitter thread so live approved
+# sends were only ever delivered by the one-time boot scan. Handoffs now land in
+# a flat sys/drivers/whatsapp/outbox/ dir, watched non-recursively — no overlap.
+
+class _FakeClient:
+    def __init__(self):
+        self.sent = []
+
+    async def send(self, jid, text):
+        self.sent.append((jid, text))
+
+
+def _setup_outbox(tmp_path, monkeypatch, token="tok-abc"):
+    outbox = tmp_path / "outbox"
+    tokfile = tmp_path / "grant.token"
+    tokfile.write_text(token + "\n")
+    monkeypatch.setattr(wa, "OUTBOX_ROOT", outbox)
+    monkeypatch.setattr(wa, "GRANT_TOKEN_PATH", tokfile)
+    return outbox, token
+
+
+def test_stage_and_scan_roundtrip(tmp_path, monkeypatch):
+    outbox, token = _setup_outbox(tmp_path, monkeypatch)
+    p = wa.stage_approved_handoff("habib", "hello there")
+    assert p.parent == outbox                       # flat, driver-internal dir
+    assert wa._is_outbox_file(p)
+    assert wa._scan_outbox() == [p]
+    assert yaml.safe_load(p.read_text()) == {
+        "slug": "habib", "text": "hello there", "token": token,
+    }
+
+
+def test_is_outbox_file_rejects_old_spool_location(tmp_path, monkeypatch):
+    _setup_outbox(tmp_path, monkeypatch)
+    stale = wa.MESSAGES_ROOT / "habib" / ".outbox" / "x.yaml"
+    assert not wa._is_outbox_file(stale)
+
+
+def test_process_outbox_rejects_bad_token(tmp_path, monkeypatch):
+    outbox, _ = _setup_outbox(tmp_path, monkeypatch)
+    outbox.mkdir(parents=True)
+    bad = outbox / "20260101-000000-x.yaml"
+    bad.write_text(yaml.safe_dump({"slug": "habib", "text": "hi", "token": "WRONG"}))
+    client = _FakeClient()
+    asyncio.run(wa._process_outbox(bad, client))
+    assert not bad.exists()          # untrusted handoff is dropped
+    assert client.sent == []         # and never sent
+
+
+def test_process_outbox_skips_missing_slug(tmp_path, monkeypatch):
+    outbox, token = _setup_outbox(tmp_path, monkeypatch)
+    outbox.mkdir(parents=True)
+    f = outbox / "20260101-000000-x.yaml"
+    f.write_text(yaml.safe_dump({"text": "hi", "token": token}))  # slug absent
+    client = _FakeClient()
+    asyncio.run(wa._process_outbox(f, client))
+    assert not f.exists()
+    assert client.sent == []
+
+
+def test_process_outbox_delivers_valid_handoff(tmp_path, monkeypatch):
+    _setup_outbox(tmp_path, monkeypatch)
+    monkeypatch.setattr(wa, "MESSAGES_ROOT", tmp_path / "spool")
+    monkeypatch.setattr(wa, "_materialize_meta", lambda d: True)
+    monkeypatch.setattr(wa, "_load_meta", lambda d: {"channel": "whatsapp"})
+    monkeypatch.setattr(wa, "_resolve_jid", lambda meta, slug: "123@s.whatsapp.net")
+    monkeypatch.setattr(wa, "_append_canonical", lambda day, text: f"[00:00] me: {text}")
+    monkeypatch.setattr(wa, "_emit_sent", lambda *a, **k: None)
+    p = wa.stage_approved_handoff("habib", "approved msg")
+    client = _FakeClient()
+    asyncio.run(wa._process_outbox(p, client))
+    assert client.sent == [("123@s.whatsapp.net", "approved msg")]
+    assert not p.exists()            # delivered handoff removed

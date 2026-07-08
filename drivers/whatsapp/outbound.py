@@ -18,8 +18,12 @@ owns. So this tailer does NOT run as a separate `whatsapp-out` process; it
 runs in-process with inbound and sends through a shared `BridgeClient`
 (passed into `run`). And an `ask`-mode approval can't be delivered inline by
 the approvals driver (it can't reach the socket) — instead the approvals
-driver drops a trusted, token'd handoff file under `<thread>/.outbox/*.yaml`
-that this tailer ingests and delivers, bypassing the freeze.
+driver drops a trusted, token'd handoff file under the driver-internal
+`sys/drivers/whatsapp/outbox/*.yaml` that this tailer ingests and delivers,
+bypassing the freeze. That drop dir is deliberately *outside* the message
+spool (and thus out of any PAI's home view) and off the tailer's watched
+tree — a second recursive watch on the same path as the tailer collides at
+the macOS FSEvents layer ("already scheduled"), silently killing the watcher.
 
 Recipient resolution: whatsapp meta.yaml is minimal (`{channel: whatsapp}`).
 The JID is resolved at send time — a bare-digit slug maps to
@@ -67,8 +71,11 @@ FREEZE_PATH = STATE_DIR / "outbound.freeze"
 # so it can't forge an approved send.
 GRANT_TOKEN_PATH = paths.PAI_ROOT / "sys" / "drivers" / "approvals" / "grant.token"
 
-# Trusted handoff files the approvals driver drops for approved sends.
-OUTBOX_DIRNAME = ".outbox"
+# Trusted handoff files the approvals driver drops for approved sends. A flat,
+# driver-internal dir under sys/ — off the tailer's watched message tree (so the
+# outbox watcher's FSEvents watch can't collide with the tailer's) and out of
+# every PAI's home view (trust still rests on the grant token, not the path).
+OUTBOX_ROOT = STATE_DIR / "outbox"
 
 # Bracketed prefix — log entries (inbound, canonical me:, kernel notes).
 # Never treated as send requests; only bare lines are.
@@ -310,9 +317,9 @@ async def _process_send(path: Path, text: str, client: "BridgeClient") -> bool:
 
 # ── approved-handoff ingestion (email-style trust boundary) ─────────
 # The approvals driver can't reach the socket, so an owner-approved send is
-# delivered by dropping a token'd file under <thread>/.outbox/. This tailer
-# verifies the token against the approvals grant, then delivers bypassing the
-# freeze — the mode gate has already been satisfied by the owner's approval.
+# delivered by dropping a token'd file under sys/drivers/whatsapp/outbox/. This
+# watcher verifies the token against the approvals grant, then delivers bypassing
+# the freeze — the mode gate has already been satisfied by the owner's approval.
 
 def _grant_token() -> str:
     try:
@@ -333,26 +340,22 @@ def stage_approved_handoff(slug: str, text: str) -> Path:
 
     Imported and called by the approvals driver (a different process) once the
     owner approves a queued whatsapp send. It carries the approvals grant token
-    so the whatsapp tailer trusts it through the freeze. Pure Python, no socket
+    so the whatsapp tailer trusts it through the freeze, plus the thread `slug`
+    (the flat drop dir no longer encodes it in the path). Pure Python, no socket
     — safe to call cross-process."""
-    outbox = MESSAGES_ROOT / slug / OUTBOX_DIRNAME
-    outbox.mkdir(parents=True, exist_ok=True)
+    OUTBOX_ROOT.mkdir(parents=True, exist_ok=True)
     ident = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-    path = outbox / f"{ident}.yaml"
+    path = OUTBOX_ROOT / f"{ident}.yaml"
     n = 1
     while path.exists():
-        path = outbox / f"{ident}-{n}.yaml"
+        path = OUTBOX_ROOT / f"{ident}-{n}.yaml"
         n += 1
-    approvals_queue.atomic_dump(path, {"text": text, "token": _grant_token()})
+    approvals_queue.atomic_dump(path, {"slug": slug, "text": text, "token": _grant_token()})
     return path
 
 
 def _is_outbox_file(path: Path) -> bool:
-    return (
-        path.suffix == ".yaml"
-        and path.parent.name == OUTBOX_DIRNAME
-        and path.parent.parent.parent == MESSAGES_ROOT
-    )
+    return path.suffix == ".yaml" and path.parent == OUTBOX_ROOT
 
 
 async def _process_outbox(path: Path, client: "BridgeClient") -> None:
@@ -375,9 +378,9 @@ async def _process_outbox(path: Path, client: "BridgeClient") -> None:
             pass
         return
 
-    slug = path.parent.parent.name
+    slug = str(rec.get("slug") or "").strip()
     text = str(rec.get("text") or "")
-    if not text.strip():
+    if not slug or not text.strip():
         try:
             path.unlink()
         except OSError:
@@ -454,21 +457,25 @@ class _OutboxHandler(FileSystemEventHandler):
 
 
 def _scan_outbox() -> list[Path]:
-    if not MESSAGES_ROOT.exists():
+    if not OUTBOX_ROOT.exists():
         return []
-    return sorted(MESSAGES_ROOT.glob(f"*/{OUTBOX_DIRNAME}/*.yaml"))
+    return sorted(OUTBOX_ROOT.glob("*.yaml"))
 
 
 async def _run_outbox_watcher(client: "BridgeClient") -> None:
-    """Watch every thread's .outbox/ for approved handoff files."""
-    MESSAGES_ROOT.mkdir(parents=True, exist_ok=True)
+    """Watch sys/drivers/whatsapp/outbox/ for approved handoff files.
+
+    A flat, non-recursive watch on a dir off the tailer's message tree — a
+    second recursive watch on the tailer's own root collides at the macOS
+    FSEvents layer and kills this watcher's emitter thread."""
+    OUTBOX_ROOT.mkdir(parents=True, exist_ok=True)
     loop = asyncio.get_running_loop()
     queue: "asyncio.Queue[Path]" = asyncio.Queue()
 
     observer = Observer()
-    observer.schedule(_OutboxHandler(loop, queue), str(MESSAGES_ROOT), recursive=True)
+    observer.schedule(_OutboxHandler(loop, queue), str(OUTBOX_ROOT), recursive=False)
     observer.start()
-    print(f"[whatsapp-out] watching {MESSAGES_ROOT}/*/{OUTBOX_DIRNAME} for approved sends", flush=True)
+    print(f"[whatsapp-out] watching {OUTBOX_ROOT} for approved sends", flush=True)
 
     # Boot scan: deliver anything already dropped while we were down.
     for f in _scan_outbox():
