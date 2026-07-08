@@ -201,7 +201,7 @@ async def run() -> None:
             if batch is None or watcher.failed:
                 print(f"[cowork-files] stream failed: {watcher.failed}", flush=True)
                 return
-            if not common.capture_enabled():
+            if not common.capture_enabled("files"):
                 continue
             for path, flags in batch:
                 change = _change_names(flags)

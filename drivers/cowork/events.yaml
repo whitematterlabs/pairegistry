@@ -5,12 +5,15 @@
 # patterns; the fallback PAI receives anything unclaimed. `raw_kind` is the
 # YAML `kind:` field on the event file itself.
 #
-# All three trackers are gated by the `cowork` capability: the kernel
-# projects `capabilities.cowork` into sys/drivers/cowork/capture.freeze
-# (presence = capture disabled) and the processes stop capturing live.
+# Each capture facet is gated by its own capability: the kernel projects
+# `capabilities.cowork_window` / `cowork_clipboard` / `cowork_files` into
+# sys/drivers/cowork/window.freeze / clipboard.freeze / files.freeze
+# (presence = that facet disabled) and the processes stop capturing live.
+# A legacy `cowork:` key in config.yaml seeds all three facets.
 
 driver: cowork
-description: Cowork Mode — ambient window, clipboard, and file activity capture.
+description: Cowork Mode — ambient window, clipboard, and file activity capture,
+  each facet independently toggleable.
 
 processes:
   - slug: cowork-window

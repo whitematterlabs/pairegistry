@@ -4,11 +4,16 @@ The actual OS observation lives in `window_sidecar.py`, a small subprocess,
 because NSWorkspace activation notifications only deliver on a main-thread
 runloop and the kernel's main thread belongs to asyncio (probed 2026-07-07).
 This process supervises the sidecar, turns its JSON lines into ndjson log
-entries and kernel events, and enforces the cowork capability live:
+entries and kernel events, and enforces the cowork capabilities live. The
+sidecar serves two facets — window focus and clipboard sampling — each gated
+by its own freeze file:
 
-- capture.freeze present (capabilities.cowork != yes) → sidecar is not
-  running at all; nothing is captured, not even discarded.
-- freeze removed → sidecar restarts on the watchdog event, no kernel restart.
+- both window.freeze and clipboard.freeze present → sidecar is not running
+  at all; nothing is captured, not even discarded.
+- one facet frozen → sidecar keeps running for the other; the frozen kind
+  is dropped at _handle_line.
+- a freeze removed → sidecar restarts on the watchdog event, no kernel
+  restart.
 """
 import asyncio
 import json
@@ -25,15 +30,15 @@ RESPAWN_BACKOFF = 5.0
 
 
 def _start_freeze_watch(loop, q: asyncio.Queue):
-    """Watchdog observer on the driver state dir: any event touching
-    capture.freeze wakes the supervisor loop. Event-driven, never polled."""
+    """Watchdog observer on the driver state dir: any event touching a
+    freeze file wakes the supervisor loop. Event-driven, never polled."""
     from watchdog.events import FileSystemEventHandler
     from watchdog.observers import Observer
 
     class _Handler(FileSystemEventHandler):
         def on_any_event(self, event):
             paths_ = [getattr(event, "src_path", ""), getattr(event, "dest_path", "")]
-            if any(str(p).endswith("capture.freeze") for p in paths_ if p):
+            if any(str(p).endswith(".freeze") for p in paths_ if p):
                 try:
                     loop.call_soon_threadsafe(q.put_nowait, "freeze-flip")
                 except RuntimeError:
@@ -77,12 +82,16 @@ def _handle_line(raw: bytes) -> str | None:
         else:
             print(f"[cowork-window] sidecar fatal: {reason}; exiting", flush=True)
         return "fatal"
-    if not common.capture_enabled():
-        return None  # race window between freeze write and sidecar kill
+    # Per-facet gate, checked per line: one facet can be frozen while the
+    # sidecar keeps running for the other.
     if kind == "window":
+        if not common.capture_enabled("window"):
+            return None
         common.append_ndjson(WINDOW_LOG, obj)
         P.emit_event({"source": "cowork", "kind": "window_changed", **obj})
     elif kind == "clipboard":
+        if not common.capture_enabled("clipboard"):
+            return None
         content = obj.get("content")
         if isinstance(content, str) and len(content) > common.NDJSON_TEXT_CAP:
             content = content[: common.NDJSON_TEXT_CAP]
@@ -102,6 +111,12 @@ def _handle_line(raw: bytes) -> str | None:
     return None
 
 
+def _sidecar_needed() -> bool:
+    """The sidecar serves the window and clipboard facets; it only stops
+    when both are frozen."""
+    return common.capture_enabled("window") or common.capture_enabled("clipboard")
+
+
 async def run() -> None:
     common.STATE_DIR.mkdir(parents=True, exist_ok=True)
     if not SIDECAR.exists():
@@ -113,11 +128,14 @@ async def run() -> None:
     proc: asyncio.subprocess.Process | None = None
     try:
         while True:
-            if not common.capture_enabled():
-                print("[cowork-window] Cowork Mode off — capture paused", flush=True)
-                while not common.capture_enabled():
+            if not _sidecar_needed():
+                print(
+                    "[cowork-window] window + clipboard capture off — paused",
+                    flush=True,
+                )
+                while not _sidecar_needed():
                     await ctl.get()
-                print("[cowork-window] Cowork Mode on — resuming", flush=True)
+                print("[cowork-window] capture re-enabled — resuming", flush=True)
             proc = await _spawn_sidecar()
             read_task = asyncio.ensure_future(proc.stdout.readline())
             ctl_task = asyncio.ensure_future(ctl.get())
@@ -129,8 +147,8 @@ async def run() -> None:
                     )
                     if ctl_task in done:
                         ctl_task = asyncio.ensure_future(ctl.get())
-                        if not common.capture_enabled():
-                            break  # freeze appeared → stop the sidecar entirely
+                        if not _sidecar_needed():
+                            break  # both facets frozen → stop the sidecar entirely
                     if read_task in done:
                         line = read_task.result()
                         if not line:
@@ -151,7 +169,7 @@ async def run() -> None:
                         await proc.wait()
             if fatal:
                 return
-            if common.capture_enabled():
+            if _sidecar_needed():
                 # sidecar died on its own — back off once, then respawn
                 print(
                     f"[cowork-window] sidecar exited rc={proc.returncode}; "

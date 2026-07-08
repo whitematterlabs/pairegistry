@@ -6,16 +6,25 @@ from pathlib import Path
 from boot import paths
 
 STATE_DIR = paths.PAI_ROOT / "sys" / "drivers" / "cowork"
-FREEZE_PATH = STATE_DIR / "capture.freeze"
+
+# One freeze file per capture facet: the kernel projects the matching
+# `capabilities.cowork_<facet>` flag into it (presence = that facet disabled).
+# The pre-split single capture.freeze is gone — the kernel removes it on
+# every projection pass.
+FREEZE_PATHS = {
+    "window": STATE_DIR / "window.freeze",
+    "clipboard": STATE_DIR / "clipboard.freeze",
+    "files": STATE_DIR / "files.freeze",
+}
 
 NDJSON_TEXT_CAP = 100_000   # per-line safety cap in the on-disk log
 EVENT_TEXT_CAP = 2_000      # cap for text carried inside a kernel event
 
 
-def capture_enabled() -> bool:
-    """Cowork Mode gate: the kernel projects `capabilities.cowork` into
-    capture.freeze (presence = disabled). Cheap stat, checked per event."""
-    return not FREEZE_PATH.exists()
+def capture_enabled(facet: str) -> bool:
+    """Per-facet gate ('window' | 'clipboard' | 'files'). Cheap stat,
+    checked per event."""
+    return not FREEZE_PATHS[facet].exists()
 
 
 def now_iso() -> str:
