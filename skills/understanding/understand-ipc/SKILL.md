@@ -1,6 +1,6 @@
 ---
 name: understand-ipc
-description: How PAIs talk to each other — pai_message and subagent:response, the bin/send-message and bin/subagent CLIs, ephemeral vs persistent subagents.
+description: How PAIs talk to each other — pai_message and subagent:response, the bin/send-message and bin/subagent CLIs.
 ---
 
 # Inter-PAI IPC
@@ -30,43 +30,27 @@ own children.
 # Send a message to PAI at pid 2
 bin/send-message --to 2 --content "fyi: gmail driver restarted"
 
-# Address by slug also works for persubs
-bin/send-message --to pai.memory --content "remember: the owner likes earl grey"
+# Addressing by slug also works
+bin/send-message --to research-flights-2026-07-07 --content "budget is $500"
 
 # Emit a kernel event (no target_pid; broadcast through wake_on)
 bin/paictl reload
 
-# Spawn an ephemeral subagent (one task, then done)
+# Spawn a subagent (one task, then done)
 bin/subagent spawn --slug research-flights \
     --prompt "find me flights to istanbul"
-
-# Spawn a persistent subagent (persub)
-bin/subagent spawn --persistent --slug memory \
-    --prompt "you curate knowledge"   # optional under --persistent
 
 # Child reports back (uses $PAI_PARENT to know where to send)
 bin/subagent reply --content "found: THY 1234 at $452"
 
-# End an ephemeral subagent
+# End a subagent
 bin/subagent kill --slug research-flights
 ```
 
-`bin/subagent kill` is **rejected** for persubs — they live until
-the parent shuts down. See skill `understand-persubs`.
-
-## Subagent flavors
-
-| | Ephemeral | Persub |
-|---|---|---|
-| Lifetime | one task | parent's lifetime |
-| Slug | `<name>-YYYY-MM-DD` | `<parent>.<name>` |
-| Kickoff | `--prompt` becomes `pai_message` | none — boots idle |
-| Self-terminate | `bin/subagent kill` works | rejected |
-| System prompt | `usr/share/prompts/subagent.md` | `subagent-persistent.md` |
-| Spec marker | `persistent: true` only | `persistent: true` + `persub: true` |
-
-A persub is reachable like any other process:
-`bin/send-message --to <parent_slug>.<dep_name> --content "..."`.
+Subagents live for one task: the kickoff `--prompt` arrives as a
+`pai_message`, the child works, replies, and is reaped. Spec marker
+is `persistent: true` (stay alive across turns until killed); system
+prompt fragment is `usr/share/prompts/subagent.md`.
 
 ## Why this matters
 

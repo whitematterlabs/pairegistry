@@ -1,5 +1,0 @@
-name: subagent-persistent
-kind: prompt
-version: 0.1.0
-description: Default persistent subagent (persub) prompt
-entrypoint: prompt.md
