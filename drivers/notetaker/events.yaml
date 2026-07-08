@@ -1,0 +1,82 @@
+# Event spec for the notetaker driver.
+#
+# `kind` is the routing key — the kernel composes `<source>:<kind>` and
+# routes via `wake_on` globs; the fallback PAI receives anything unclaimed.
+#
+# ACTIONS (files, not kernel events): the event bus routes to PAIs, not to
+# driver processes, so the owner/PAI triggers this driver by dropping a YAML
+# command file into sys/drivers/notetaker/commands/:
+#
+#   action: start        # begin recording this call
+#   cloud: true          # optional — opt THIS session up to cloud STT
+#   ---
+#   action: stop         # end recording; transcription starts
+#
+# Command files are consumed (deleted) after processing. Recording only ever
+# happens on an explicit per-session start — the `notetaker` capability
+# (default no) is tier-1 consent, the command is tier-2. While recording, a
+# `recording` marker file at sys/drivers/notetaker/recording drives the
+# console indicator.
+
+driver: notetaker
+description: Owner-triggered local call recording + transcription.
+
+processes:
+  - slug: notetaker
+    module: drivers.notetaker.recorder
+    entrypoint: run
+
+events:
+  - kind: notetaker:recording_started
+    description: A recording session began (owner-triggered). The PAI should
+      announce this in chat so recording is never silent.
+    emitted_by: drivers/notetaker/recorder.py
+    raw_kind: recording_started
+    payload:
+      session_id: string
+      cloud: bool            # this session will use cloud STT
+      mic_captured: bool     # false → system audio only (mic denied/absent)
+      ts: string
+
+  - kind: notetaker:recording_stopped
+    description: Recording ended; transcription is running. The PAI should
+      acknowledge the stop.
+    emitted_by: drivers/notetaker/recorder.py
+    raw_kind: recording_stopped
+    payload:
+      session_id: string
+      ts: string
+
+  - kind: notetaker:transcript_ready
+    description: Transcription succeeded; raw audio has been deleted
+      (privacy default). The PAI reads the transcript and writes the human
+      summary + action items to notes/calls/<date>-<slug>.md in its home.
+    emitted_by: drivers/notetaker/recorder.py
+    raw_kind: transcript_ready
+    payload:
+      session_id: string
+      transcript_path: string   # FHS-relative, e.g. sys/drivers/notetaker/sessions/<id>/transcript.json
+      cloud: bool
+      ts: string
+
+  - kind: notetaker:transcript_failed
+    description: Transcription failed; the raw audio is KEPT in the session
+      dir so transcription can be retried. Surface the failure to the owner
+      — a recorded call is never silently dropped.
+    emitted_by: drivers/notetaker/recorder.py
+    raw_kind: transcript_failed
+    payload:
+      session_id: string
+      error: string
+      ts: string
+
+  - kind: notetaker:start_failed
+    description: A start command was refused (capability disabled, missing
+      System Audio Recording permission, or already recording). Surface the
+      reason to the owner; never a silent no-op.
+    emitted_by: drivers/notetaker/recorder.py
+    raw_kind: start_failed
+    payload:
+      reason: string         # capability_disabled | permission | already_recording | error
+      detail: string
+      ts: string

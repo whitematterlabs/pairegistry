@@ -1,0 +1,11 @@
+name: notetaker
+kind: driver
+version: 0.1.0
+description: "Notetaker: owner-triggered local call recording (Core Audio process tap + mic) and transcription. Default-off capability; records third parties only on explicit instruction."
+# voice provides the whisper.cpp binary/model the local transcription path
+# uses (and its install hook brings ffmpeg + sounddevice deps).
+deps:
+  - voice
+hooks:
+  install:
+    - "bash usr/lib/drivers/notetaker/libexec/install.sh"
