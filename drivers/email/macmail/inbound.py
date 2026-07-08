@@ -150,8 +150,21 @@ def _bootstrap_cursor() -> tuple[int, int]:
         row = conn.execute(
             "SELECT COALESCE(MAX(ROWID), 0) AS m FROM messages"
         ).fetchone()
+        count = int(
+            conn.execute("SELECT COUNT(*) AS c FROM messages").fetchone()["c"]
+        )
     last = int(row["m"])
     # Fresh install: nothing to announce; align both fields to MAX(ROWID).
+    # Everything already in the index is silently skipped by the live sync,
+    # so say so loudly — a missed backfill otherwise surfaces weeks later as
+    # "the archive only goes back to install day" (2026-07-07).
+    if count:
+        print(
+            f"[email-in] fresh cursor at ROWID={last}: {count} already-indexed "
+            "message(s) are NOT in the archive until the one-time backfill "
+            "runs (usr/bin/python -m drivers.email.macmail.backfill)",
+            flush=True,
+        )
     _save_cursor(last, last)
     return last, last
 

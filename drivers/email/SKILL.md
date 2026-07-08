@@ -9,8 +9,8 @@ driver: email
 Use this skill whenever the owner asks you to draft an email, reply to
 an email, prepare outbound mail, recap the inbox/backlog, or find old
 mail. The `email` driver keeps a **complete on-disk archive** of every
-message Mail.app has indexed **since the driver was installed** (see
-"Mail older than the archive" below), so you answer questions by
+message Mail.app has indexed (backfilled at install; see "Mail older
+than the archive" for its horizon), so you answer questions by
 globbing and `rg`-ing files — never by hand-parsing a YAML dump in the
 shell.
 
@@ -116,18 +116,25 @@ don't shell out to `mailsearch`.
 
 # Mail older than the archive
 
-The archive is complete **from the driver's first sync onward**, not
-from the beginning of the owner's mail history. Each account's
-`meta.yaml` has a `created:` date, and there are no date dirs before
-it — mail older than that was never synced and is **not findable from
-here**.
+At install the driver backfills **every message in Mail.app's Envelope
+Index**, and the live sync keeps the tree current from there — so
+history should be deep. The archive's true horizon is its **earliest
+date dir**, which you can check in one command:
 
-When a search comes up empty, check `created:` before digging deeper.
-If the message plausibly predates it, **stop searching and say so**:
-"the archive starts <date>; that message is older than my view." Then
-work around it — e.g. draft a follow-up that references the earlier
-message without quoting it — or let the owner pull it up in Mail.app
-themselves.
+```sh
+ls communication/email/<account>/          # year dirs: 2019 2020 ... 2026
+```
+
+If a search comes up empty, check that horizon before digging deeper.
+A message can legitimately be missing when it predates the earliest
+year dir (backfill never covered it), when Mail.app itself no longer
+holds it, or when only a header stub survives (`body_state: absent`).
+If the horizon looks shallow — only days deep when the owner clearly
+has years of mail — the backfill likely never ran; **tell the owner
+that** instead of hunting elsewhere. Either way, when the archive
+doesn't have it, **stop searching and say so**, then work around it —
+e.g. draft a follow-up that references the earlier message without
+quoting it — or let the owner pull it up in Mail.app themselves.
 
 **Never search Mail.app itself via AppleScript/osascript — no
 exceptions.** A `tell application "Mail" ... every message whose ...`
