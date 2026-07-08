@@ -11,6 +11,9 @@ processes:
   - slug: voice-in
     module: drivers.voice.inbound
     entrypoint: run
+    # Hot mic — never auto-listen. Installing the driver leaves the listener
+    # stopped until the owner turns it on (web voice settings / paictl start).
+    default_active: false
 
 events:
   - kind: voice:listening
