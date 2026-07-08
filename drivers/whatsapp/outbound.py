@@ -33,7 +33,6 @@ reverse-resolve phone→lid from the auth-dir `lid-mapping-*.json` files.
 from __future__ import annotations
 
 import asyncio
-import os
 import re
 from datetime import datetime
 from pathlib import Path
@@ -62,7 +61,6 @@ MESSAGES_ROOT = paths.var_spool_communication() / "whatsapp"
 PEOPLE_ROOT = paths.var_lib_memory() / "people"
 STATE_DIR = paths.PAI_ROOT / "sys" / "drivers" / "whatsapp"
 FREEZE_PATH = STATE_DIR / "outbound.freeze"
-FREEZE_ENV = "PAI_WHATSAPP_SENDS_FROZEN"
 
 # The approvals driver owns this token; a handoff file carrying it is trusted
 # to bypass the freeze. A PAI can't read it (never in a prompt or home view),
@@ -81,28 +79,30 @@ _PHONE_SLUG = re.compile(r"^\d{7,}$")
 _NON_DIGIT = re.compile(r"\D")
 
 
-def _truthy(value: str) -> bool:
-    return value.strip().lower() not in {"", "0", "false", "no", "off"}
-
-
 def _sends_frozen() -> bool:
-    env = os.environ.get(FREEZE_ENV)
-    if env is not None:
-        return _truthy(env)
+    """Frozen unless the owner granted `whatsapp_send: yes` AND no freeze file
+    is present. Capability mode is the live source of truth (matching email-out),
+    so a `yes`→`ask`/`no` downgrade in config.yaml takes effect on the very next
+    send — even before the kernel re-projects the freeze file. This closes the
+    window where a just-removed freeze file (from the prior `yes`) would let a
+    now-downgraded send slip out. The freeze file is kept as a fail-closed
+    backstop: a stray freeze on disk still stops sends even if the config read
+    momentarily disagrees."""
+    if config.capability_modes().get("whatsapp_send", "no") != "yes":
+        return True
     return FREEZE_PATH.exists()
 
 
 def _freeze_reason() -> str:
-    env = os.environ.get(FREEZE_ENV)
-    if env is not None:
-        source = f"${FREEZE_ENV}"
-        detail = env.strip()
-    else:
+    if FREEZE_PATH.exists():
         source = str(FREEZE_PATH)
         try:
             detail = FREEZE_PATH.read_text(encoding="utf-8").strip().splitlines()[0]
         except (FileNotFoundError, IndexError, OSError):
             detail = ""
+    else:
+        source = "capabilities.whatsapp_send"
+        detail = f"mode={config.capability_modes().get('whatsapp_send', 'no')}"
     if detail:
         return f"WhatsApp sends frozen by {source}: {detail}"
     return f"WhatsApp sends frozen by {source}"

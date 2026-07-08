@@ -28,7 +28,6 @@ event. The tailer cursor advances on failure or freeze so we don't retry forever
 from __future__ import annotations
 
 import asyncio
-import os
 import re
 from datetime import datetime
 from pathlib import Path
@@ -54,7 +53,6 @@ MESSAGES_ROOT = paths.var_spool_messages()
 PEOPLE_ROOT = paths.var_lib_memory() / "people"
 STATE_DIR = paths.PAI_ROOT / "sys" / "drivers" / "imessage"
 FREEZE_PATH = STATE_DIR / "outbound.freeze"
-FREEZE_ENV = "PAI_IMESSAGE_SENDS_FROZEN"
 
 # Bracketed prefix — log entries (inbound, canonical me:, kernel notes).
 # Never treated as send requests; only bare lines are.
@@ -64,28 +62,30 @@ BRACKET_LINE = re.compile(r"^\[")
 _PHONE_SLUG = re.compile(r"^\d{7,}$")
 
 
-def _truthy(value: str) -> bool:
-    return value.strip().lower() not in {"", "0", "false", "no", "off"}
-
-
 def _sends_frozen() -> bool:
-    env = os.environ.get(FREEZE_ENV)
-    if env is not None:
-        return _truthy(env)
+    """Frozen unless the owner granted `imessage_send: yes` AND no freeze file
+    is present. Capability mode is the live source of truth (matching email-out),
+    so a `yes`→`ask`/`no` downgrade in config.yaml takes effect on the very next
+    send — even before the kernel re-projects the freeze file. This closes the
+    window where a just-removed freeze file (from the prior `yes`) would let a
+    now-downgraded send slip out. The freeze file is kept as a fail-closed
+    backstop: a stray freeze on disk still stops sends even if the config read
+    momentarily disagrees."""
+    if config.capability_modes().get("imessage_send", "no") != "yes":
+        return True
     return FREEZE_PATH.exists()
 
 
 def _freeze_reason() -> str:
-    env = os.environ.get(FREEZE_ENV)
-    if env is not None:
-        source = f"${FREEZE_ENV}"
-        detail = env.strip()
-    else:
+    if FREEZE_PATH.exists():
         source = str(FREEZE_PATH)
         try:
             detail = FREEZE_PATH.read_text(encoding="utf-8").strip().splitlines()[0]
         except (FileNotFoundError, IndexError, OSError):
             detail = ""
+    else:
+        source = "capabilities.imessage_send"
+        detail = f"mode={config.capability_modes().get('imessage_send', 'no')}"
     if detail:
         return f"iMessage sends frozen by {source}: {detail}"
     return f"iMessage sends frozen by {source}"
