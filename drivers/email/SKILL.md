@@ -9,8 +9,10 @@ driver: email
 Use this skill whenever the owner asks you to draft an email, reply to
 an email, prepare outbound mail, recap the inbox/backlog, or find old
 mail. The `email` driver keeps a **complete on-disk archive** of every
-message Mail.app has indexed, so you answer questions by globbing and
-`rg`-ing files — never by hand-parsing a YAML dump in the shell.
+message Mail.app has indexed **since the driver was installed** (see
+"Mail older than the archive" below), so you answer questions by
+globbing and `rg`-ing files — never by hand-parsing a YAML dump in the
+shell.
 
 For outbound mail, use `write-email` (pick `--draft` or `--send`
 explicitly — see "Drafting and sending" below); it writes a draft YAML
@@ -108,9 +110,34 @@ rg -l '^body_state: absent' communication/email/*/2026/06/
 ```
 
 Keep output bounded: prefer `-c`/`-l` and a date scope over dumping a
-whole month. There is **no `mailsearch` for email** — the archive is
-complete, so `inbox` + `rg` answer everything; don't shell out to
-`mailsearch`.
+whole month. There is **no `mailsearch` for email** — within its date
+range the archive is complete, so `inbox` + `rg` answer everything;
+don't shell out to `mailsearch`.
+
+# Mail older than the archive
+
+The archive is complete **from the driver's first sync onward**, not
+from the beginning of the owner's mail history. Each account's
+`meta.yaml` has a `created:` date, and there are no date dirs before
+it — mail older than that was never synced and is **not findable from
+here**.
+
+When a search comes up empty, check `created:` before digging deeper.
+If the message plausibly predates it, **stop searching and say so**:
+"the archive starts <date>; that message is older than my view." Then
+work around it — e.g. draft a follow-up that references the earlier
+message without quoting it — or let the owner pull it up in Mail.app
+themselves.
+
+**Never search Mail.app itself via AppleScript/osascript — no
+exceptions.** A `tell application "Mail" ... every message whose ...`
+query executes synchronously on Mail.app's main thread. Over a real
+mail store a content search runs for minutes to hours, freezes Mail
+for the owner, and blocks every other Mail integration (including this
+driver's own sync) until Mail is force-quit. Scoping the query to one
+mailbox or to subject/sender does not make it safe — any `whose` scan
+blocks the same way. Mail.app belongs to the driver; your read surface
+is the archive, full stop.
 
 # Events you wake on
 
