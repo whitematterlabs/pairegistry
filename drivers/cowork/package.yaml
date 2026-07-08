@@ -1,0 +1,10 @@
+name: cowork
+kind: driver
+version: 0.1.0
+description: "Cowork Mode: ambient window/app focus, clipboard copy-log, and home-tree file activity. Gated by the cowork capability (default on)."
+# install: put the pyobjc frameworks the trackers import into the FHS venv.
+# paiman runs hooks with cwd=$PAI_ROOT. Idempotent (uv pip no-ops when
+# satisfied).
+hooks:
+  install:
+    - "bash usr/lib/drivers/cowork/libexec/install.sh"

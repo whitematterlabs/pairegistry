@@ -1,0 +1,65 @@
+# Event spec for the cowork driver (Cowork Mode).
+#
+# `kind` is the routing key — the kernel composes `<source>:<kind>` from the
+# event file's `source:` and `kind:` fields and matches it against `wake_on`
+# patterns; the fallback PAI receives anything unclaimed. `raw_kind` is the
+# YAML `kind:` field on the event file itself.
+#
+# All three trackers are gated by the `cowork` capability: the kernel
+# projects `capabilities.cowork` into sys/drivers/cowork/capture.freeze
+# (presence = capture disabled) and the processes stop capturing live.
+
+driver: cowork
+description: Cowork Mode — ambient window, clipboard, and file activity capture.
+
+processes:
+  - slug: cowork-window
+    module: drivers.cowork.window_activity
+    entrypoint: run
+  - slug: cowork-files
+    module: drivers.cowork.file_activity
+    entrypoint: run
+
+events:
+  - kind: cowork:window_changed
+    description: The owner focused a different app/window. Enriched
+      best-effort with the underlying artifact (browser tab URL, or the
+      file open in the focused window) plus idle seconds at capture time.
+      Dwell is derivable from the timestamp gap to the next event/log line.
+    emitted_by: drivers/cowork/window_activity.py
+    raw_kind: window_changed
+    payload:
+      app: string
+      window: string         # focused window title; null if AX gave none
+      pid: int
+      ts: string             # ISO8601 UTC
+      idle_seconds: float    # seconds since last human input
+      url: string            # browsers only, best-effort
+      file_path: string      # editors/viewers only, best-effort
+
+  - kind: cowork:clipboard_changed
+    description: The pasteboard changeCount moved since the last sample
+      (sampled on each app switch — an event-driven copy-log; a copy with
+      no subsequent switch is missed by design, no polling).
+    emitted_by: drivers/cowork/window_activity.py
+    raw_kind: clipboard_changed
+    payload:
+      app: string            # frontmost app now — best-effort attribution
+      content: string        # null for non-string pasteboards; truncated
+      truncated: bool        # true when content was cut at 2000 chars
+      type: string           # "string" | "file-url" | "image" | "other"
+      ts: string
+
+  - kind: cowork:file_changed
+    description: A file under the owner's home changed. `change` is the raw
+      FSEvents flag set, never an inferred operation (no mv-vs-cp guessing).
+      A two-layer denylist (FSEvents exclusion paths + in-callback patterns)
+      keeps the stream human-paced. Full log at
+      sys/drivers/cowork/file_activity.ndjson.
+    emitted_by: drivers/cowork/file_activity.py
+    raw_kind: file_changed
+    payload:
+      path: string
+      change: list           # subset of [created, removed, renamed, modified]
+      source_url: string     # kMDItemWhereFroms xattr (downloads), when present
+      ts: string
