@@ -28,6 +28,10 @@ whatsapp bridge process can reach the socket. So this driver can't deliver
 inline — it hands off email-style, dropping a trusted token'd file under the
 thread's `.outbox/` (via `whatsapp.outbound.stage_approved_handoff`) that the
 whatsapp process ingests and delivers, bypassing the freeze.
+
+Slack is like iMessage: chat.postMessage is a stateless HTTP call, so this
+driver delivers inline — it calls `slack.outbound._send` directly and appends
+the canonical `[HH:MM] me:` line itself. No token'd hand-off.
 """
 
 from __future__ import annotations
@@ -226,6 +230,51 @@ async def _deliver_whatsapp(path: Path, rec: dict) -> None:
     )
 
 
+async def _deliver_slack(path: Path, rec: dict) -> None:
+    """Inline delivery — a Slack send is a stateless HTTP call (not
+    socket-bound), so this driver can reach it directly, like imessage and
+    unlike whatsapp. Send via chat.postMessage, then append the canonical
+    `[HH:MM] me:` line ourselves (Slack never echoes our own bot message back
+    as an inbound the way chat.db does, so we also emit `slack-out:sent`)."""
+    action = rec.get("action") or {}
+    thread = str(action.get("thread") or "").strip()
+    text = str(action.get("text") or "")
+    if not thread:
+        _fail(path, rec, "slack record missing `thread`")
+        return
+    if not text.strip():
+        _fail(path, rec, "slack record has empty `text`")
+        return
+
+    try:
+        from drivers.slack import outbound as slack_outbound
+    except Exception as e:  # noqa: BLE001 — slack driver may not be installed
+        _fail(path, rec, f"slack driver unavailable: {e}")
+        return
+
+    thread_dir = slack_outbound.MESSAGES_ROOT / thread
+    day_file = thread_dir / f"{datetime.now().date().isoformat()}.md"
+    meta = slack_outbound._load_meta(day_file)
+    if not meta or meta.get("channel") != "slack":
+        _fail(path, rec, f"no slack thread {thread!r} (missing/invalid meta.yaml)")
+        return
+
+    try:
+        await slack_outbound._send(meta, text)
+    except Exception as e:  # noqa: BLE001
+        _fail(path, rec, f"send failed: {e}")
+        return
+
+    day_file.parent.mkdir(parents=True, exist_ok=True)
+    slack_outbound._append_canonical(day_file, text)
+    slack_outbound._emit_sent(thread, text)
+
+    rec["status"] = "sent"
+    rec["dispatched_at"] = _now()
+    _atomic_dump(path, rec)
+    print(f"[approvals] {rec.get('id')} approved → sent to slack:{thread}", flush=True)
+
+
 async def _notify_rejected(rec: dict) -> None:
     """Tell the originating channel a queued send was rejected, so the PAI
     hears about it the same way it hears about any other send failure — no
@@ -258,6 +307,21 @@ async def _notify_rejected(rec: dict) -> None:
                 except Exception as e:
                     print(f"[approvals] could not append rejection note: {e}", flush=True)
                 whatsapp_outbound._emit_send_failed(thread, text, reason)
+    elif channel == "slack":
+        thread = str(action.get("thread") or "").strip()
+        text = str(action.get("text") or "")
+        if thread:
+            try:
+                from drivers.slack import outbound as slack_outbound
+            except Exception as e:  # noqa: BLE001 — driver may not be installed
+                print(f"[approvals] slack unavailable for rejection notice: {e}", flush=True)
+            else:
+                day_file = slack_outbound.MESSAGES_ROOT / thread / f"{datetime.now().date().isoformat()}.md"
+                try:
+                    slack_outbound._append_kernel_note(day_file, f"send rejected by owner — {reason}")
+                except Exception as e:  # noqa: BLE001
+                    print(f"[approvals] could not append rejection note: {e}", flush=True)
+                slack_outbound._emit_send_failed(thread, text, reason)
     elif channel == "email":
         source_ref = rec.get("source_ref")
         if source_ref:
@@ -309,6 +373,8 @@ async def _process(path: Path) -> None:
         await _deliver_imessage(path, rec)
     elif channel == "whatsapp":
         await _deliver_whatsapp(path, rec)
+    elif channel == "slack":
+        await _deliver_slack(path, rec)
     else:
         _fail(path, rec, f"channel {channel!r} is not deliverable in approve mode yet")
 

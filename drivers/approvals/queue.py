@@ -79,6 +79,8 @@ def stage_pending(
         label = action.get("thread") or "imessage"
     elif channel == "whatsapp":
         label = action.get("thread") or "whatsapp"
+    elif channel == "slack":
+        label = action.get("thread") or "slack"
     else:
         label = channel
     ident = time.strftime("%Y%m%d-%H%M%S") + "-" + _slug(str(label))

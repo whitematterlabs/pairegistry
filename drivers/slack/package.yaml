@@ -1,0 +1,23 @@
+name: slack
+kind: driver
+version: 0.1.0
+description: "Slack driver: Socket Mode bot for inbound DMs/@mentions + owner-gated outbound."
+deps:
+  - tailer            # shared Tailer class used by slack-out
+  - slack_setup       # TTY token-paste bin, run by the setup hook
+# install: pip-install slack_sdk into the kernel venv. No Node/tunnel — Socket
+# Mode holds an outbound WebSocket, so there is no public URL to provision.
+# setup: the interactive token paste (xapp- app-level + xoxb- bot token). paiman
+# runs setup hooks only in a TTY, offered default-yes and skippable, after
+# install — so a terminal install links the workspace right away while
+# CI/piped installs skip it. Re-running is safe: slack_setup no-ops (or offers
+# re-entry) if tokens are already present.
+hooks:
+  install:
+    - "bash usr/lib/drivers/slack/libexec/install.sh"
+  setup:
+    - "usr/bin/slack_setup"
+home:
+  links:
+    - link: slack-messages
+      target: var/spool/communication/slack

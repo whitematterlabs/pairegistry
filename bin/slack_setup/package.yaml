@@ -1,0 +1,8 @@
+name: slack_setup
+kind: bin
+version: 0.1.0
+description: One-time Slack token setup — paste the xapp- app-level and xoxb- bot tokens, written to sys/drivers/slack/tokens.yaml (chmod 600)
+entrypoint: slack_setup.py
+# Pure stdlib + boot.paths — no third-party deps. Installed as a dep of the
+# slack driver; run via `paiman install slack` (which offers it as the setup
+# hook), or `slack_setup` directly anytime to re-enter tokens.

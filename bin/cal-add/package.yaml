@@ -1,5 +1,0 @@
-name: cal-add
-kind: bin
-version: 0.1.0
-description: Create an event in Apple Calendar via osascript
-entrypoint: cal-add.sh

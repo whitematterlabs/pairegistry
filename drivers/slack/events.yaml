@@ -1,0 +1,73 @@
+# Event spec for the slack driver.
+#
+# `kind` is the routing key — `_route_to_pids` in src/boot/main.py matches it
+# against each PAI's `wake_on` patterns. Use these strings (or globs over them)
+# in a PAI's `wake_on:` list. The kind is formed generically from the emitting
+# event's `source` + `kind` (`slack` + `new` → `slack:new`); there is no
+# hardcoded kernel branch for this driver.
+
+driver: slack
+description: Socket Mode bot — inbound DMs/@mentions and owner-gated outbound.
+
+# Two processes, the iMessage layout. A Slack send is a stateless HTTP call
+# (chat.postMessage), not socket-bound, so outbound runs as its own process and
+# an owner-approved (`ask`-mode) send is delivered inline by the approvals
+# driver — no token'd outbox hand-off (that is the whatsapp divergence, not
+# ours). slack-in holds the Socket Mode WebSocket; slack-out tails the spool.
+processes:
+  - slug: slack-in
+    module: drivers.slack.inbound
+    entrypoint: run
+  - slug: slack-out
+    module: drivers.slack.outbound
+    entrypoint: run
+
+events:
+  - kind: slack:new
+    description: A new DM to the bot (`message.im`) or an @-mention of the bot
+      (`app_mention`) arrived live over Socket Mode. Plain channel messages
+      with no mention are ignored.
+    emitted_by: drivers/slack/inbound.py
+    payload:
+      thread: string          # thread slug (person slug/id for a DM, #channel for a mention)
+      channel: string         # Slack conversation id (Dxxxx / Cxxxx)
+      channel_type: string    # "im" or "channel"
+      sender: string          # resolved display name, else Slack user id
+      text: string
+      thread_ts: string       # Slack thread root ts to reply into (channels); absent for DMs
+      day_file: string        # PAI_ROOT-relative path to the day's .md file
+
+  - kind: slack:backlog
+    description: Messages that landed while slack-in was down, caught up on
+      boot by polling conversations.history from the stored cursor. Coalesced
+      into a single nudge instead of N.
+    emitted_by: drivers/slack/inbound.py
+    payload:
+      since: string           # ISO datetime the backlog was emitted
+      threads:
+        - thread: string
+          inbound: int
+          last_text: string
+          day_files:
+            - string
+      total: int
+
+  - kind: slack-out:sent
+    description: An outbound Slack message was delivered via chat.postMessage.
+      Emitted for a direct (`yes`-mode) send and for an owner-approved
+      (`ask`-mode) send delivered inline by the approvals driver.
+    emitted_by: drivers/slack/outbound.py
+    payload:
+      thread: string
+      text: string
+
+  - kind: slack-out:send_failed
+    description: An outbound message couldn't be delivered — sends frozen (no
+      grant), the thread had no resolvable Slack channel, the API call failed,
+      or the owner rejected a queued approval. The line is already in the thread
+      day-file but was never sent.
+    emitted_by: drivers/slack/outbound.py
+    payload:
+      thread: string
+      text: string
+      reason: string
