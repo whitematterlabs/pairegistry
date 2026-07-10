@@ -13,6 +13,8 @@ enum Actuator {
         case paused                // ForegroundWatcher set isForeground=true
         case secureInput           // password / sudo / 1Password
         case refGone               // ref no longer resolves to an element
+        case frozen(String)        // capability gate: computer_use off, or the
+                                   // attached app's send capability is frozen
         case unsupportedAction(String)
         case axError(String)
 
@@ -22,6 +24,7 @@ enum Actuator {
             case .paused:                return "EPAUSED"
             case .secureInput:           return "ESECUREINPUT"
             case .refGone:               return "EREFGONE"
+            case .frozen(let cap):       return "EFROZEN:\(cap)"
             case .unsupportedAction(let a): return "EACTION:\(a)"
             case .axError(let s):        return "EAX:\(s)"
             }
@@ -37,6 +40,15 @@ enum Actuator {
                         ref: Int,
                         action: String,
                         args: [String: Any]) -> Result<Void, ActError> {
+        // Capability gate first — before any AX touch. `computer_use` must be
+        // granted to actuate at all, and the attached app's send capability
+        // must be granted to actuate a messaging app (so `ax` can't press Send
+        // in a channel the owner froze). Read fresh each call, so a live
+        // capability downgrade is honored immediately. Enforced here because
+        // this is the single funnel every action verb passes through.
+        if let cap = Permissions.denyReason(bundleID: session.bundleID) {
+            return .failure(.frozen(cap))
+        }
         // Pre-flight. Foreground gate is the headline rule; pause + secure
         // input cover the narrower cases where the gate isn't strict enough.
         // A session attached with show_owner waives the gate — the owner

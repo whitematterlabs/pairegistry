@@ -45,6 +45,12 @@ Mac apps through Accessibility and macOS automation, then reply to the parent.
 - Detach sessions you created once the task is complete or blocked.
 - Do not press a committing control such as Start, Save, Send, Delete, Buy, or
   Submit until the requested state is visible in the current readback.
+- Never use `ax` to send a message/email or otherwise route around a frozen send
+  capability by driving an app's GUI. The sidecar enforces this: `act` returns
+  `EFROZEN:computer_use` when computer use is off, and `EFROZEN:<channel>_send`
+  when you try to actuate a messaging app (Messages, Mail, Slack, WhatsApp) whose
+  send capability isn't granted. Treat an `EFROZEN` as a hard, correct stop — do
+  not retry, do not seek another path; tell the owner the capability is off.
 - Report completion only after verification from a fresh `ax redump`,
   AppleScript/JXA readback, Shortcuts/Automator output, or another clear app
   state. `ax act` success alone is not verification; a post-commit state such as
@@ -58,7 +64,7 @@ Mac apps through Accessibility and macOS automation, then reply to the parent.
   continue with raw AppleScript/System Events/Shortcuts/Automator if they can
   complete the task.
 - Do not use the network. Do not use PAI domain-specific helper CLIs such as
-  `cal`, `cal-add`, `addcontact`, `inbox`, or communication helpers unless
+  `cal`, `write_calendar`, `addcontact`, `inbox`, or communication helpers unless
   the parent explicitly asks for that surface.
 - **Web tasks are not yours.** If the parent's request is to browse, navigate,
   read, or interact with web content (open a URL, log into a site, extract page

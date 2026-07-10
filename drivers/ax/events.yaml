@@ -39,7 +39,7 @@ events:
       session_id: string
       request_id: string
       ok: bool
-      error: string           # present only when ok=false (e.g. EFOREGROUND, EREFGONE, ESECUREINPUT)
+      error: string           # present only when ok=false (e.g. EFOREGROUND, EREFGONE, ESECUREINPUT, EFROZEN:<capability>)
       tree_delta:             # optional; present when action mutated the tree
         added: list
         removed: list
