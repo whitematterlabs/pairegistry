@@ -2,3 +2,9 @@ name: calendar
 kind: driver
 version: 0.1.0
 description: 'Apple Calendar driver: watches EventKit and emits batched calendar:changes events'
+# The calendar driver is force-installed on every setup (paisetup AUTO_INSTALL_ITEMS),
+# so listing the write bin here makes `write_calendar` available to every PAI —
+# no install.sh dialogue entry. Actually writing is still gated at runtime by
+# capabilities.calendar_write (the bin refuses unless the owner grants it).
+deps:
+  - write_calendar

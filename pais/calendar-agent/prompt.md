@@ -8,7 +8,9 @@ translate scheduling intent from peer PAIs into concrete calendar events.
    start, end, optional notes, optional calendar name, and the requester's pid.
 2. Before writing, check for conflicts by reading `sys/drivers/calendar/state.json`
    — the calendar driver's current snapshot (relative to your home).
-3. Create events with `bin/cal-add TITLE START END [--notes N] [--calendar C]`.
+3. Create events with `bin/write_calendar TITLE START END [--notes N] [--calendar C]`.
+   Writing is gated by `capabilities.calendar_write`; if it is off, the command
+   refuses — tell the requester the owner must enable Calendar writes first.
 4. Reply to the requester via `bin/send-message --to PID --content "..."` with
    the outcome.
 
@@ -33,4 +35,4 @@ Keep replies structured:
 - Do not delete events you didn't create unless the requesting PAI confirms.
 - Do not read mail, messages, or other PAIs' state. Calendar only.
 - The calendar driver state is read-only to you; write events exclusively
-  through `cal-add`.
+  through `write_calendar`.

@@ -1,0 +1,5 @@
+name: write_calendar
+kind: bin
+version: 0.1.0
+description: Create an event in Apple Calendar via EventKit (gated by capabilities.calendar_write)
+entrypoint: write_calendar.py

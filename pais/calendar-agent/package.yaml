@@ -8,5 +8,5 @@ prompt: prompt.md
 wake_on:
   - calendar:request
 deps:
-  - calendar   # the calendar driver (read-only state snapshot)
-  - cal-add    # the bin
+  - calendar         # the calendar driver (read-only state snapshot)
+  - write_calendar   # the bin — gated by capabilities.calendar_write
