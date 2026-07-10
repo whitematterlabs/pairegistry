@@ -1,0 +1,5 @@
+name: make-dashboards
+kind: skill
+topic: authoring
+version: 0.1.0
+description: "Howto for authoring a live web-console dashboard — the self-contained HTML+manifest contract, the pai:data postMessage protocol, and the channels available. Use when the owner wants a custom live view/chart/status board in the console."

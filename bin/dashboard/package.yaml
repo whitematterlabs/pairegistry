@@ -1,0 +1,5 @@
+name: dashboard
+kind: bin
+version: 0.1.0
+description: Create, list, and remove PAI-authored web-console dashboards (writes /var/lib/dashboards/<slug>.html with a validated manifest).
+entrypoint: dashboard.py
