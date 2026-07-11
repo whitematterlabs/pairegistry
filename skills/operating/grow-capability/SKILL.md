@@ -36,6 +36,7 @@ Installable bundle kinds (from `paiman.py`): **bin, sbin, driver, skill, prompt,
 Answer this first. A reactive capability ("notify me when X changes", "remind me before Y", "wake on Z") needs a driver emitting events. An imperative capability ("run X", "fetch Y", "post Z") doesn't.
 
 - **Reactive + driver already exists** (check `ls /usr/lib/drivers/` and its `events.yaml`) → wire `wake_on:` to its events. No new bundle needed, or a thin skill.
+- **Reactive + a new driver was just installed for a messaging/notification channel** (mail, chat, WhatsApp, Slack, etc.) → wire the driver's events into `wake_on:` on the existing catch-all `pai`, same as any other channel. Do **not** install a new `pai`-kind bundle for this — see the `pai` row below.
 - **Reactive + the surface is a web page or HTTP/RSS feed with no driver** ("watch this listing / stock / page, tell me when it changes") → follow skill `setup-watcher`. That is the sanctioned cheap-poll path: a cron-fired subprocess that diffs the page and wakes the requester *only* when a condition fires. This is **not** "a bin that polls" below — it adds no hot loop and never wakes anyone on a quiet tick.
 - **Reactive + a genuine new primitive surface** (app ABI, system framework, push-capable channel) and no driver → the gap requires a driver bundle/source change. Stop. Don't install a bin that polls a primitive — that's the wrong scope, not a faster path.
 - **Imperative** → continue to Gate 2.
@@ -56,7 +57,7 @@ For imperative work, default to `bin`. Pick from the table below only if `bin` c
 | `lib` | Importable Python shared by ≥2 bins/drivers. Don't reach for this until the duplication actually exists. |
 | `driver` | A new **primitive surface**: app ABI (Mail, Messages), system framework (AddressBook), I/O channel (audio), or a shared long-lived session (headless browser). Two conditions, **both** required: (a) genuinely primitive, not a task; (b) collapsing into an existing driver would lose native event hooks or cost too much ceremony. See `memory/doc/KERNEL.md` for the driver contract. |
 | `subagent` | A reusable research/specialist role spawned ephemerally by other PAIs via `bin/subagent spawn --package <name>` (e.g. `scout`). See `memory/doc/SUBAGENT_BUNDLES.md`. Rare — usually only when a new specialist persona is needed. |
-| `pai` | A dedicated fleet member with its own identity, prompt, and event subscriptions. Pair with a driver when long-horizon turn-taking on that surface is wanted ("a calendar PAI", "an autonomous scheduler"). |
+| `pai` | A dedicated fleet member with its own identity, prompt, and event subscriptions. **Rare — not the default for a new reactive surface.** Wiring `wake_on:` on the existing catch-all `pai` handles turn-taking for a new channel (mail, messages, WhatsApp, Slack) just fine; a new fleet member only earns its cost when the work needs isolation the catch-all can't give it — separate memory/context, a different model tier, or a standing autonomous loop with no owner in it (e.g. `librarian`'s nightly consolidation). "Replies happen whenever a message arrives" is turn-taking, not isolation — that's not sufficient justification. Confirm with the owner before installing a new `pai`. |
 | `sbin` | Owner/root-only fleet-mutation tool. Almost never the answer to a capability request. |
 
 ### Two failure modes
@@ -79,7 +80,7 @@ If an existing bundle matches the need:
 
 - `bin` / `skill` / `prompt` / `lib` / `subagent`: `paiman install <candidate>`.
 - `driver`: `paiman install <candidate>` → `paictl start <name>-in` if it has a runnable process → `reboot`.
-- `pai`: follow skill `kernel-tools`: `paiman install <candidate>` → `paiadd <candidate>` → `paictl start <instance>` → `reboot`.
+- `pai`: confirm with the owner first (rare — see the `pai` row in Step 2). If confirmed, follow skill `kernel-tools`: `paiman install <candidate>` → `paiadd <candidate>` → `paictl start <instance>` → `reboot`.
 
 If no existing bundle matches, do **not** invoke Claude Code, create files in `/usr/lib/`, or hand-author source inside the runtime. Report that the capability requires a source change in `/Users/arda/Projects/pai` or `/Users/arda/Projects/pairegistry`.
 
@@ -130,7 +131,7 @@ No help page = the capability is invisible the next time it's needed.
 - Install or report the gap, then notify. Don't invoke the new capability yourself.
 - Don't message the owner. The requester handles user-facing follow-through.
 - For refinement, ask the **requester**, never the owner.
-- Data is a file, tools are binaries, long-horizon work is a new PAI.
+- Data is a file, tools are binaries. A new channel's turn-taking wires into the existing catch-all PAI via `wake_on:`; a new fleet member is for isolation (memory, model tier, a standing loop with no owner in it), not just "this surface needs replies" — confirm with the owner first.
 
 ## Logging
 
