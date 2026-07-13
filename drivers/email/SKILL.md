@@ -114,23 +114,8 @@ whole month. There is **no `mailsearch` for email** — within its date
 range the archive is complete, so `inbox` + `rg` answer everything;
 don't shell out to `mailsearch`.
 
-**rg is not grep.** rg takes Rust regex: alternation is a bare `|`
-(in rg, `\|` matches a literal pipe character and will never hit), and
-file filtering is `-g '*.yaml'` (there is no `--include`; rg exits with
-a usage error, which `2>/dev/null` will happily hide). Never bolt
-`2>/dev/null` onto a search — a syntax error must look like an error,
-not like an empty mailbox.
-
-**If rg finds nothing, re-run the same search with `grep -ri` before
-trusting the empty result:**
-
-```sh
-rg -il 'accelr8|joinaccelr8' communication/email/ \
-  || grep -rilE 'accelr8|joinaccelr8' communication/email/
-```
-
-Only when *both* come up empty treat the message as absent — then check
-the archive horizon (next section) before concluding anything.
+If `rg` finds nothing, retry the same search with `grep -riE` before
+trusting the empty result.
 
 # Mail older than the archive
 
