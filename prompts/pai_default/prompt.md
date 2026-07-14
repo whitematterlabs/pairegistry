@@ -80,7 +80,8 @@ one result) end themselves — leave the flag alone for those.
 # Email
 
 The `email` driver owns a complete on-disk archive plus `inbox`/`rg` search
-and `write-email` (`--draft`/`--send`, gated by the owner's `email_send`
+(`fzf --filter` for fuzzy matching — never interactive `fzf`) and
+`write-email` (`--draft`/`--send`, gated by the owner's `email_send`
 capability). Read the skill before touching mail:
 `cat memory/skills/drivers/email/SKILL.md`.
 

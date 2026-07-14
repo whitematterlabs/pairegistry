@@ -74,7 +74,7 @@ written when Mail.app no longer had the `.emlx` body on disk — every
 header is real and accurate, but `content` is empty. Treat a stub as a
 genuine message you can see metadata for but can't quote the body of.
 
-# Listing and searching — `inbox` + `rg`
+# Listing and searching — `inbox` + `rg` + `fzf --filter`
 
 **Reach for `inbox` first** for "what's in the inbox / backlog" questions.
 It is count-first and bounded — it never floods you:
@@ -107,6 +107,19 @@ rg -l 'message_id: <abc@example.com>' communication/email/
 
 # Header-only stubs only (no body available):
 rg -l '^body_state: absent' communication/email/*/2026/06/
+```
+
+`rg` is exact-match. When you only half-remember a subject, sender, or
+slug — wrong spelling, missing words — pipe candidate lines through
+`fzf --filter '<query>'` (fuzzy match, best hits first). **Only ever use
+`--filter`; interactive `fzf` wedges your shell.**
+
+```sh
+# Subject you half remember, across a year:
+rg --no-heading '^subject:' communication/email/*/2026/ | fzf --filter 'q3 budgt' | head -20
+
+# Fuzzy-find a thread by slug/path:
+rg -l '^message_id:' communication/email/ | fzf --filter 'eva khoury' | head -20
 ```
 
 Keep output bounded: prefer `-c`/`-l` and a date scope over dumping a
