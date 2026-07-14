@@ -184,20 +184,50 @@ def _build_reply_script(account: str, draft: dict, *, send: bool = False) -> str
     parent = _esc(str(draft.get("in_reply_to") or "").strip().strip("<>"))
     content = _esc(str(draft.get("content") or ""))
     verb = "send replyMsg" if send else "save replyMsg"
+    # App-level `every mailbox` yields only local ("On My Mac") mailboxes —
+    # account mailboxes must be reached via `mailboxes of <account>`, else
+    # a parent that lives in any real account is invisible.
     return (
         'tell application "Mail"\n'
         '  set parentMsgs to {}\n'
-        '  repeat with mb in (every mailbox)\n'
-        '    try\n'
-        f'      set parentMsgs to (messages of mb whose message id is "{parent}")\n'
-        '      if (count of parentMsgs) > 0 then exit repeat\n'
-        '    end try\n'
+        '  repeat with acc in (every account)\n'
+        '    repeat with mb in (mailboxes of acc)\n'
+        '      try\n'
+        f'        set parentMsgs to (messages of mb whose message id is "{parent}")\n'
+        '        if (count of parentMsgs) > 0 then exit repeat\n'
+        '      end try\n'
+        '    end repeat\n'
+        '    if (count of parentMsgs) > 0 then exit repeat\n'
         '  end repeat\n'
+        '  if (count of parentMsgs) is 0 then\n'
+        '    repeat with mb in (every mailbox)\n'
+        '      try\n'
+        f'        set parentMsgs to (messages of mb whose message id is "{parent}")\n'
+        '        if (count of parentMsgs) > 0 then exit repeat\n'
+        '      end try\n'
+        '    end repeat\n'
+        '  end if\n'
         '  if (count of parentMsgs) is 0 then\n'
         '    error "parent message not found"\n'
         '  end if\n'
         '  set parentMsg to item 1 of parentMsgs\n'
         '  set replyMsg to reply parentMsg\n'
+        # Mail's scripted `reply` addresses the From, ignoring Reply-To —
+        # for list/notification mail (e.g. Zulip) that black-holes the
+        # reply at a noreply@ address. Re-point at Reply-To when present.
+        '  try\n'
+        '    set rt to reply to of parentMsg\n'
+        '    if rt is not missing value and rt is not "" then\n'
+        '      set rtAddr to extract address from rt\n'
+        '      if rtAddr is not "" then\n'
+        '        tell replyMsg\n'
+        '          delete every to recipient\n'
+        '          make new to recipient at end of to recipients '
+        'with properties {address:rtAddr}\n'
+        '        end tell\n'
+        '      end if\n'
+        '    end if\n'
+        '  end try\n'
         f'  set sender of replyMsg to "{sender}"\n'
         f'  set content of replyMsg to "{content}"\n'
         f'  {verb}\n'
