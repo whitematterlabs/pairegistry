@@ -1,6 +1,6 @@
 ---
 name: drafting-emails
-description: Draft Mail.app email by writing YAML files; triage inbound email, recap the backlog, and search the on-disk archive with rg.
+description: Draft or send Mail.app email with the write-email command; triage inbound email, recap the backlog, and search the on-disk archive with rg.
 driver: email
 ---
 
@@ -167,6 +167,8 @@ is the archive, full stop.
 - **`email:draft_failed`** — read `draft_error` on the yaml at
   `payload.path`. Trivial fix → patch the yaml and clear
   `draft_state`/`draft_error`. Anything else → surface to the owner.
+  Never work around a failed reply by rerouting it to a
+  `noreply@`/notification address (see "Drafting and sending").
 
 # Drafting and sending
 
@@ -240,10 +242,19 @@ printf '%s\n' "Thanks, Friday works for me." \
       --wait
 ```
 
-If `write-email` is unavailable, write the draft manually to
-`~/drafts/<name>.yaml` (add `action: send` to deliver, omit it to draft).
-Pick a descriptive `<name>` like
-`re-bob-q3-budget` — it's just a filename, not exposed anywhere.
+**If a reply fails terminally (`draft_state: failed`), never improvise a
+recipient to get something out the door.** In particular, never mail a
+`noreply@`/notification address — that's a black hole and the human never
+sees it. Retry as a plain `--to` send only when the parent yaml has a
+real `reply_to:` or a human `from:` address; otherwise surface the
+failure to the owner and stop.
+
+`write-email` is the only way you produce outbound mail — depend on the
+command, don't hand-roll draft YAMLs or invent another path. If
+`write-email` is missing or broken, that's a broken install: tell the
+owner instead of working around it. For reference — e.g. when patching a
+failed draft in place after `email:draft_failed` — the YAML it writes
+looks like:
 
 ```yaml
 from: owner@example.com               # must match a Mail.app account
@@ -255,25 +266,11 @@ in_reply_to: <message-id-of-parent>   # required for replies
 references:                           # parent's references + parent's message_id
   - <root@example.com>
   - <message-id-of-parent>
+action: send                          # written by --send; absent for --draft
 content: |
   Plain text body. Multi-paragraph is fine.
 
   Don't add a signature — Mail.app appends the owner's automatically.
-```
-
-For a brand-new outbound email, omit `in_reply_to` and `references`:
-
-```yaml
-from: owner@example.com
-to: [alex@example.com]
-cc: []
-bcc: []
-subject: "Interested in the room"
-content: |
-  Hi Alex,
-
-  I saw your listing and wanted to ask whether the room is still
-  available.
 ```
 
 **Threading.** Copy parent's `message_id` → your `in_reply_to`. Copy

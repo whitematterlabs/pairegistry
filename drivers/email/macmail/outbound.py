@@ -178,7 +178,10 @@ def _build_reply_script(account: str, draft: dict, *, send: bool = False) -> str
     we close it after `save`/`send`.
     """
     sender = _esc(account)
-    parent = _esc(str(draft.get("in_reply_to") or ""))
+    # The archive stores RFC Message-IDs with angle brackets (`<abc@x>`),
+    # but Mail's `message id` property is bare — strip them or the
+    # `whose message id is` match can never succeed.
+    parent = _esc(str(draft.get("in_reply_to") or "").strip().strip("<>"))
     content = _esc(str(draft.get("content") or ""))
     verb = "send replyMsg" if send else "save replyMsg"
     return (
