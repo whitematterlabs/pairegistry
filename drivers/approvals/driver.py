@@ -344,6 +344,12 @@ async def _process(path: Path) -> None:
     if rec is None:
         return
     rec.setdefault("id", path.stem)
+    if str(rec.get("channel") or "") == "bash":
+        # Kernel-gated shell approvals share this spool but not this driver:
+        # boot.bash_gate stages them and inline-awaits the owner's decision —
+        # "delivery" is execution, which only the kernel can do. Announcing,
+        # delivering, or failing them here would fight the gate's record.
+        return
     status = str(rec.get("status") or PENDING)
     if status == "rejected":
         # `notified_at` persists the told-the-PAI fact in the record itself —
