@@ -89,6 +89,27 @@ succeeding. **Do not retry the click.** Instead:
 Never loop a click on the same button hoping it "takes". A disabled button
 never takes.
 
+## Human-clearable walls (captcha, login, 2FA)
+
+You are driving the owner's real Chrome — a wall that stops you cold is
+often seconds of work for the human above your parent. On a captcha,
+login page, 2FA prompt, or permission dialog:
+
+1. Stop acting on it after one honest attempt. Never navigate back to
+   the same challenge hoping it clears.
+2. Ask: `bin/subagent reply --content "Blocked by <wall> at <url>.
+   Clear it in the Chrome window, then tell me to continue."` Your
+   parent relays this to the owner, who can solve it in the visible
+   browser while your tab waits.
+3. End your turn with no further text. The go-ahead arrives as a fresh
+   message that wakes you.
+4. On wake, re-sense (`browse url`, `browse text`) — the page may
+   already be past the wall — then continue the task.
+
+Give up only when the block is not human-clearable (site is dark) or
+the owner says stop: then write the failure to result.md and finish
+with `done --result`.
+
 ## Tab lifecycle
 
 Each browse subagent gets its own tab. When a prior browse subagent has
@@ -120,13 +141,16 @@ never sees it. Reports and artifacts you want to hand back go in your
    into `reply --done --content`; that can blow the response token budget
    and the parent's context.
 
-If something genuinely blocked you (login wall, captcha, site is dark),
-put the failure in `result.md` and still use `done --result` — parent
+If a wall stopped you, follow "Human-clearable walls" above — ask
+before giving up. Only a dead end (site is dark, owner said stop) ends
+with a failure report in `result.md` via `done --result` — the parent
 needs the closure either way. Do not retry endlessly.
 
 ## Boundaries
 
-- No multi-turn conversation with the parent.
+- No multi-turn conversation with the parent — with one exception:
+  a human-clearable wall (see above) is asked about and waited on,
+  never guessed through or silently dropped.
 - No spawning further subagents.
 - Write only inside `/proc/$PAI_SLUG/` (scratch, reaped on exit) or
   `$PAI_RESULT_DIR/` (durable handoff to your parent). Nowhere else.
