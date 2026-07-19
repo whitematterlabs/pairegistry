@@ -48,55 +48,31 @@ handles: ["+13105551234"]
 write-imessage --to <thread> --body "thurs after 6 works"
 ```
 
-- `--to` takes a thread slug, a `memory/people/` slug, a raw phone
-  number, or an email address. New contacts are set up automatically
-  (thread dir + meta.yaml from the person's `about.yaml` handles);
-  for someone with no people entry, run `addcontact` first or pass
-  their phone/email directly.
-- One invocation = exactly one message. Multi-line bodies stay one
-  message — pass real newlines (`--body-file`, stdin, or `$'...\n...'`)
-  and the tool handles the rest. To send several messages, invoke
-  several times.
-- It waits (default 15s) and prints the outcome: `state: sent`,
-  `pending_approval`, `send_blocked`, or `failed` (with a `detail`
-  reason). Trust the state — under `pending_approval`, tell the owner
-  you sent it for approval, never that it was delivered.
+- `--to`: a thread slug, a `memory/people/` slug, a phone number, or
+  an email address. For someone with no people entry, run `addcontact`
+  first or pass their phone/email directly.
+- One invocation = exactly one message, even multi-line. Pass real
+  newlines (`--body-file`, stdin, or `$'...\n...'`). To send several
+  messages, invoke several times.
+- The printed `state` is the outcome: `sent`, `pending_approval`,
+  `send_blocked`, or `failed` (with a `detail` reason). Trust the
+  state — under `pending_approval`, tell the owner you sent it for
+  approval, never that it was delivered.
 
-Whether you may send is decided by the owner's `imessage_send` capability,
-stated in your `<capabilities>` block. Invoke `write-imessage` the same
-way regardless of mode:
-- Send granted (`yes`) — delivered via Messages.app.
-- Approval required (`ask`) — the driver queues your message in the
-  owner's approval tray instead of sending (see the `approvals` skill).
-- Not granted (`no`) — the send is frozen and nothing is delivered
-  (`state: send_blocked`, plus an `imessage:send_failed` event).
-
-If your `<capabilities>` block says iMessage is read-only, don't attempt
-sends; never retry a frozen or rejected send.
+Invoke it the same way regardless of your `imessage_send` capability
+mode; the state tells you what happened. If your `<capabilities>` block
+says iMessage is read-only, don't attempt sends; never retry a
+`send_blocked`, `failed`, or owner-rejected send.
 
 **Read a thread.** Read today's day-file. For deeper history, read
-yesterday's, and so on. Don't grep all threads unless asked.
-
-# Under the hood (the day-file protocol)
-
-`write-imessage` just writes the protocol for you: a **bare line**
-(no `[HH:MM] sender:` prefix) appended to today's day-file is a send
-request; the driver sends it and writes back the canonical
-`[HH:MM] me: <text>` record. Bracketed lines are log entries only and
-never get sent. One bare line = exactly one message; the ` ↵ ` marker
-(space, ↵, space) is a line break *inside* one message, expanded to a
-real newline at send time. Inbound multi-line texts are flattened the
-same way, so the log round-trips: `Here's the plan: ↵ 1. rent ↵ 2. profit`
-arrives as three lines in one message.
-
-You'll see driver verdicts in the day-file as `[HH:MM] kernel: ...`
-notes (`queued for owner approval`, `send frozen`, `send failed`).
+yesterday's, and so on. Don't grep all threads unless asked. In the
+log, ` ↵ ` marks a line break inside a single message.
 
 # Events you wake on
 
 - **`imessage:new`** — one inbound message. Read the day-file, then
   reply, surface, or stay silent (your role prompt decides).
-- **`imessage:owner`** — the owner DM'd you through the TUI (`thread
+- **`imessage:owner`** — the owner DM'd you through the console (`thread
   = "me"`). Treat it as a conversation with them.
 - **`imessage:backlog`** — kernel just booted with unread messages.
   Write an offline report to the owner thread.

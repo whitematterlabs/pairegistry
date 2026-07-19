@@ -39,54 +39,29 @@ recipient's phone number) back into it.
 write-whatsapp --to <thread> --body "bakacam birazdan"
 ```
 
-- `--to` takes a thread slug, a `memory/people/` slug (`handles:` phone
-  number in about.yaml), or a raw phone number. New contacts are set up
-  automatically; for someone with no people entry, run `addcontact`
-  first or pass their phone number directly. WhatsApp recipients are
-  phone-based — emails don't work. (Known limit: contacts reachable
-  only via a WhatsApp `@lid` — not a phone number — can't be addressed
-  yet.)
-- One invocation = exactly one message. Multi-line bodies stay one
-  message — pass real newlines (`--body-file`, stdin, or `$'...\n...'`)
-  and the tool handles the rest. To send several messages, invoke
-  several times.
-- It waits (default 15s) and prints the outcome: `state: sent`,
-  `pending_approval`, `send_blocked`, or `failed` (with a `detail`
-  reason). Trust the state — under `pending_approval`, tell the owner
-  you sent it for approval, never that it was delivered.
+- `--to`: a thread slug, a `memory/people/` slug (`handles:` phone
+  number in about.yaml), or a raw phone number. For someone with no
+  people entry, run `addcontact` first or pass their phone number
+  directly. WhatsApp recipients are phone-based — emails don't work.
+  (Known limit: contacts reachable only via a WhatsApp `@lid` — not a
+  phone number — can't be addressed yet.)
+- One invocation = exactly one message, even multi-line. Pass real
+  newlines (`--body-file`, stdin, or `$'...\n...'`). To send several
+  messages, invoke several times.
+- The printed `state` is the outcome: `sent`, `pending_approval`,
+  `send_blocked`, or `failed` (with a `detail` reason). Trust the
+  state — under `pending_approval`, tell the owner you sent it for
+  approval, never that it was delivered.
 
-Whether you may send is decided by the owner's `whatsapp_send` capability,
-stated in your `<capabilities>` block. Invoke `write-whatsapp` the same
-way regardless of mode:
-- Send granted (`yes`) — delivered via the WhatsApp socket.
-- Approval required (`ask`) — the driver queues your message in the
-  owner's approval tray instead of sending (see the `approvals` skill).
-- Not granted (`no`, the default) — the send is frozen and nothing is
-  delivered (`state: send_blocked`, plus a `whatsapp-out:send_failed`
-  event). The spool defaults to DENY: with no grant, nothing you write
-  is ever sent.
-
-If your `<capabilities>` block says WhatsApp is read-only, don't attempt
-sends; never retry a frozen or rejected send.
+Invoke it the same way regardless of your `whatsapp_send` capability
+mode; the state tells you what happened. If your `<capabilities>` block
+says WhatsApp is read-only, don't attempt sends; never retry a
+`send_blocked`, `failed`, or owner-rejected send.
 
 **Read a thread.** For a live `whatsapp:new` event, read the event's
 `day_file`. Without an event path, read today's day-file first, then
-yesterday's, and so on. Don't grep all threads unless asked.
-
-# Under the hood (the day-file protocol)
-
-`write-whatsapp` just writes the protocol for you: a **bare line**
-(no `[HH:MM] sender:` prefix) appended to today's day-file is a send
-request; the driver sends it and writes back the canonical
-`[HH:MM] me: <text>` record. Bracketed lines are log entries only and
-never get sent. One bare line = exactly one message; the ` ↵ ` marker
-(space, ↵, space) is a line break *inside* one outbound message,
-expanded to a real newline at send time. (Asymmetry to know about:
-*inbound* multi-line texts appear as several `[HH:MM] Sender:` lines
-with the same prefix, not as one ↵-marked line.)
-
-You'll see driver verdicts in the day-file as `[HH:MM] kernel: ...`
-notes (`queued for owner approval`, `send frozen`, `send failed`).
+yesterday's, and so on. Don't grep all threads unless asked. In `me:`
+lines, ` ↵ ` marks a line break inside a single message.
 
 # Events you wake on
 
