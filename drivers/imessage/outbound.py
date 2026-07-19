@@ -41,6 +41,11 @@ from boot import processes as P
 
 from boot import paths
 
+try:
+    from boot import recipient_allowlist
+except ImportError:  # kernel predates send_allowlist — fail closed, always ask
+    recipient_allowlist = None
+
 from drivers.approvals import queue as approvals_queue
 
 from tailer import Tailer
@@ -94,6 +99,20 @@ def _freeze_reason() -> str:
     if detail:
         return f"iMessage sends frozen by {source}: {detail}"
     return f"iMessage sends frozen by {source}"
+
+
+def _recipient_allowlisted(meta: dict) -> bool:
+    """True iff this thread's delivery target (chat guid for groups,
+    first handle for 1:1) matches the owner's `send_allowlist.imessage`
+    rules. Consulted only in `ask` mode — a match sends without staging."""
+    if recipient_allowlist is None or not hasattr(config, "send_allowlist"):
+        return False
+    if meta.get("group"):
+        cand = str(meta.get("chat_guid") or "")
+    else:
+        handles = meta.get("handles") or []
+        cand = str(handles[0]) if handles else ""
+    return recipient_allowlist.handle_allowed(cand, config.send_allowlist("imessage"))
 
 
 def _load_meta(day_file: Path) -> Optional[dict]:
@@ -245,9 +264,12 @@ async def _process_send(path: Path, text: str) -> bool:
     if not meta or meta.get("channel") != "imessage":
         return False
     thread = path.parent.name
+    allowlisted = False
     if _sends_frozen():
         mode = config.capability_modes().get("imessage_send", "no")
-        if mode == "ask":
+        if mode == "ask" and _recipient_allowlisted(meta):
+            allowlisted = True
+        elif mode == "ask":
             approvals_queue.stage_pending("imessage", {"thread": thread, "text": text})
             print(f"[imessage-out] queued for owner approval: {thread}: {text[:80]}", flush=True)
             try:
@@ -255,14 +277,15 @@ async def _process_send(path: Path, text: str) -> bool:
             except Exception as note_err:
                 print(f"[imessage-out] could not append kernel note: {note_err}", flush=True)
             return False
-        reason = _freeze_reason()
-        print(f"[imessage-out] send frozen for {thread}: {text[:80]}", flush=True)
-        try:
-            _append_kernel_note(path, f"send frozen — not sent — {reason}")
-        except Exception as note_err:
-            print(f"[imessage-out] could not append kernel note: {note_err}", flush=True)
-        _emit_send_failed(thread, text, reason)
-        return False
+        else:
+            reason = _freeze_reason()
+            print(f"[imessage-out] send frozen for {thread}: {text[:80]}", flush=True)
+            try:
+                _append_kernel_note(path, f"send frozen — not sent — {reason}")
+            except Exception as note_err:
+                print(f"[imessage-out] could not append kernel note: {note_err}", flush=True)
+            _emit_send_failed(thread, text, reason)
+            return False
     try:
         service = await _send(meta, text)
     except Exception as e:
@@ -275,6 +298,11 @@ async def _process_send(path: Path, text: str) -> bool:
         _emit_send_failed(thread, text, reason)
         return False
     print(f"[imessage-out] sent to {thread} via {service}: {text[:80]}", flush=True)
+    if allowlisted:
+        try:
+            _append_kernel_note(path, "sent (allowlisted recipient)")
+        except Exception as note_err:
+            print(f"[imessage-out] could not append kernel note: {note_err}", flush=True)
     _emit_sent(thread, text, service)
     return True
 

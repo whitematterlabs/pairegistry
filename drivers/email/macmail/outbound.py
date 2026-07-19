@@ -52,6 +52,11 @@ from boot import config
 from boot import paths
 from boot import processes as P
 
+try:
+    from boot import recipient_allowlist
+except ImportError:  # kernel predates send_allowlist — fail closed, always ask
+    recipient_allowlist = None
+
 from drivers.approvals import queue as approvals_queue
 
 from .. import shared
@@ -238,6 +243,29 @@ def _build_reply_script(account: str, draft: dict, *, send: bool = False) -> str
     )
 
 
+def _recipients_allowlisted(draft: dict) -> bool:
+    """True iff every explicit recipient (to+cc+bcc) matches the owner's
+    `send_allowlist.email` rules. Consulted only in `ask` mode. Replies
+    never match: Mail's scripted `reply` addresses the parent's From /
+    Reply-To, which this driver cannot see at gate time — fail closed."""
+    if recipient_allowlist is None or not hasattr(config, "send_allowlist"):
+        return False
+    if draft.get("in_reply_to"):
+        return False
+
+    def _as_list(v) -> list:
+        if isinstance(v, str):
+            return [v]
+        return list(v) if isinstance(v, list) else []
+
+    addrs = [
+        *(_as_list(draft.get("to"))),
+        *(_as_list(draft.get("cc"))),
+        *(_as_list(draft.get("bcc"))),
+    ]
+    return recipient_allowlist.emails_allowed(addrs, config.send_allowlist("email"))
+
+
 async def _run_osascript(script: str) -> tuple[int, str]:
     proc = await asyncio.create_subprocess_exec(
         "osascript", "-e", script,
@@ -354,6 +382,14 @@ async def _process(path: Path) -> None:
             if mode == "yes":
                 do_send = True
                 draft.pop("send_blocked", None)
+            elif mode == "ask" and _recipients_allowlisted(draft):
+                do_send = True
+                draft.pop("send_blocked", None)
+                print(
+                    f"[email-out] all recipients allowlisted — sending without "
+                    f"approval ({account}/{path.name})",
+                    flush=True,
+                )
             elif mode == "ask":
                 action: dict = {
                     "from": account,

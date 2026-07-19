@@ -51,6 +51,11 @@ from boot import config
 from boot import paths
 from boot import processes as P
 
+try:
+    from boot import recipient_allowlist
+except ImportError:  # kernel predates send_allowlist — fail closed, always ask
+    recipient_allowlist = None
+
 from drivers.approvals import queue as approvals_queue
 
 from tailer import Tailer
@@ -149,6 +154,18 @@ def _digits(value: str) -> str:
 def _expand_newlines(text: str) -> str:
     """Expand ` ↵ ` markers (and bare `↵`) into real newlines for delivery."""
     return text.replace(f" {NEWLINE_MARK} ", "\n").replace(NEWLINE_MARK, "\n")
+
+
+def _recipient_allowlisted(meta: dict, slug: str) -> bool:
+    """True iff this thread's resolved JID matches the owner's
+    `send_allowlist.whatsapp` rules (phone rules match `<digits>@s.whatsapp.net`;
+    group JIDs match exact-string only). Consulted only in `ask` mode."""
+    if recipient_allowlist is None or not hasattr(config, "send_allowlist"):
+        return False
+    jid = _resolve_jid(meta, slug)
+    if not jid:
+        return False
+    return recipient_allowlist.handle_allowed(jid, config.send_allowlist("whatsapp"))
 
 
 def _resolve_jid(meta: dict, slug: str) -> Optional[str]:
@@ -278,9 +295,12 @@ async def _process_send(path: Path, text: str, client: "BridgeClient") -> bool:
     if not meta or meta.get("channel") != "whatsapp":
         return False
 
+    allowlisted = False
     if _sends_frozen():
         mode = config.capability_modes().get("whatsapp_send", "no")
-        if mode == "ask":
+        if mode == "ask" and _recipient_allowlisted(meta, thread):
+            allowlisted = True
+        elif mode == "ask":
             approvals_queue.stage_pending("whatsapp", {"thread": thread, "text": text})
             print(f"[whatsapp-out] queued for owner approval: {thread}: {text[:80]}", flush=True)
             try:
@@ -288,14 +308,15 @@ async def _process_send(path: Path, text: str, client: "BridgeClient") -> bool:
             except Exception as note_err:
                 print(f"[whatsapp-out] could not append kernel note: {note_err}", flush=True)
             return False
-        reason = _freeze_reason()
-        print(f"[whatsapp-out] send frozen for {thread}: {text[:80]}", flush=True)
-        try:
-            _append_kernel_note(path, f"send frozen — not sent — {reason}")
-        except Exception as note_err:
-            print(f"[whatsapp-out] could not append kernel note: {note_err}", flush=True)
-        _emit_send_failed(thread, text, reason)
-        return False
+        else:
+            reason = _freeze_reason()
+            print(f"[whatsapp-out] send frozen for {thread}: {text[:80]}", flush=True)
+            try:
+                _append_kernel_note(path, f"send frozen — not sent — {reason}")
+            except Exception as note_err:
+                print(f"[whatsapp-out] could not append kernel note: {note_err}", flush=True)
+            _emit_send_failed(thread, text, reason)
+            return False
 
     jid = _resolve_jid(meta, thread)
     if not jid:
@@ -321,6 +342,11 @@ async def _process_send(path: Path, text: str, client: "BridgeClient") -> bool:
         return False
 
     print(f"[whatsapp-out] sent to {thread} ({jid}): {text[:80]}", flush=True)
+    if allowlisted:
+        try:
+            _append_kernel_note(path, "sent (allowlisted recipient)")
+        except Exception as note_err:
+            print(f"[whatsapp-out] could not append kernel note: {note_err}", flush=True)
     _emit_sent(thread, text)
     return True
 
