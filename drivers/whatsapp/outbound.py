@@ -80,6 +80,11 @@ OUTBOX_ROOT = STATE_DIR / "outbox"
 # Bracketed prefix — log entries (inbound, canonical me:, kernel notes).
 # Never treated as send requests; only bare lines are.
 BRACKET_LINE = re.compile(r"^\[")
+# Intra-message line break marker on outbound bare lines, matching the
+# imessage driver: one bare line is always exactly one message; ` ↵ `
+# expands to a real newline at send time. (Inbound multi-line texts use
+# repeated-prefix lines instead — see inbound._write_message.)
+NEWLINE_MARK = "↵"
 # Phone slug = all digits (WhatsApp threads for unknown contacts are named
 # by the raw phone number).
 _PHONE_SLUG = re.compile(r"^\d{7,}$")
@@ -139,6 +144,11 @@ def _owned(path: Path) -> bool:
 
 def _digits(value: str) -> str:
     return _NON_DIGIT.sub("", value or "")
+
+
+def _expand_newlines(text: str) -> str:
+    """Expand ` ↵ ` markers (and bare `↵`) into real newlines for delivery."""
+    return text.replace(f" {NEWLINE_MARK} ", "\n").replace(NEWLINE_MARK, "\n")
 
 
 def _resolve_jid(meta: dict, slug: str) -> Optional[str]:
@@ -299,7 +309,7 @@ async def _process_send(path: Path, text: str, client: "BridgeClient") -> bool:
         return False
 
     try:
-        await client.send(jid, text)
+        await client.send(jid, _expand_newlines(text))
     except Exception as e:
         reason = str(e)
         print(f"[whatsapp-out] send failed to {thread}: {reason}", flush=True)
@@ -404,7 +414,7 @@ async def _process_outbox(path: Path, client: "BridgeClient") -> None:
         return
 
     try:
-        await client.send(jid, text)
+        await client.send(jid, _expand_newlines(text))
     except Exception as e:
         # Leave the handoff file so a later driver boot retries; the owner
         # already approved it and we don't want to silently drop it.

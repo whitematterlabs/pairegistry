@@ -1,0 +1,5 @@
+name: write-whatsapp
+kind: bin
+version: 0.1.0
+description: Send a WhatsApp message through the whatsapp driver (thread setup, ↵ flattening, and capability-gate verdict handled for you).
+entrypoint: write_whatsapp.py
