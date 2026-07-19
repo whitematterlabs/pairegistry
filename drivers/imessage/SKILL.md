@@ -48,6 +48,14 @@ up bare lines, sends via Messages.app, then writes the canonical
 `[HH:MM] me: <text>` record itself. Bracketed lines are log entries
 only and never get sent. Create today's file if it doesn't exist.
 
+**One bare line = exactly one message.** Never append a multi-line
+block — each line would go out (or queue for approval) as a separate
+message. For a line break *inside* one message, use the ` ↵ ` marker
+(space, ↵, space); the driver expands it to a real newline at send
+time. Inbound multi-line texts appear the same way, so the log
+round-trips: `Here's the plan: ↵ 1. rent ↵ 2. profit` arrives as
+three lines in one message.
+
 Whether you may send is decided by the owner's `imessage_send` capability,
 stated in your `<capabilities>` block. Always append the same bare line
 regardless of mode:

@@ -57,6 +57,11 @@ FREEZE_PATH = STATE_DIR / "outbound.freeze"
 # Bracketed prefix — log entries (inbound, canonical me:, kernel notes).
 # Never treated as send requests; only bare lines are.
 BRACKET_LINE = re.compile(r"^\[")
+# Intra-message line break marker. Inbound flattens multi-line texts to a
+# single day-file line with ` ↵ ` (messages._append_day_file); outbound
+# expands the same marker back to real newlines at send time, so one bare
+# line is always exactly one message and the log round-trips symmetrically.
+NEWLINE_MARK = "↵"
 # Phone slug = all digits (after earlier `h`-prefix removal); email slug
 # contains `@` (unusual but handled).
 _PHONE_SLUG = re.compile(r"^\d{7,}$")
@@ -113,10 +118,24 @@ def _owned(path: Path) -> bool:
     return meta.get("channel") == "imessage"
 
 
+def _expand_newlines(text: str) -> str:
+    """Expand ` ↵ ` markers (and bare `↵`) into real newlines for delivery."""
+    return text.replace(f" {NEWLINE_MARK} ", "\n").replace(NEWLINE_MARK, "\n")
+
+
+def _escape_applescript(text: str) -> str:
+    # Interpolated into an AppleScript double-quoted string. Newlines can't
+    # sit raw inside the literal — splice them as `" & linefeed & "`.
+    return (
+        text.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", '" & linefeed & "')
+    )
+
+
 def _applescript_for_1to1(handle: str, text: str, service_type: str) -> str:
-    # Both strings are interpolated into AppleScript double-quoted strings.
     h = handle.replace("\\", "\\\\").replace('"', '\\"')
-    t = text.replace("\\", "\\\\").replace('"', '\\"')
+    t = _escape_applescript(text)
     return (
         'tell application "Messages"\n'
         f'  set targetService to 1st service whose service type = {service_type}\n'
@@ -128,7 +147,7 @@ def _applescript_for_1to1(handle: str, text: str, service_type: str) -> str:
 
 def _applescript_for_group(chat_guid: str, text: str) -> str:
     g = chat_guid.replace("\\", "\\\\").replace('"', '\\"')
-    t = text.replace("\\", "\\\\").replace('"', '\\"')
+    t = _escape_applescript(text)
     return (
         'tell application "Messages"\n'
         f'  set targetChat to chat id "{g}"\n'
@@ -157,7 +176,12 @@ def _append_kernel_note(day_file: Path, note: str) -> None:
 
 
 async def _send(meta: dict, text: str) -> str:
-    """Send one line; return the service used. Raises on permanent failure."""
+    """Send one line; return the service used. Raises on permanent failure.
+
+    `text` is the day-file form (single line, ` ↵ ` markers); the delivered
+    message carries real newlines. Covers both the tailer path and the
+    approvals driver, which calls `_send` directly on approve."""
+    text = _expand_newlines(text)
     if meta.get("group"):
         chat_guid = meta.get("chat_guid")
         if not chat_guid:
