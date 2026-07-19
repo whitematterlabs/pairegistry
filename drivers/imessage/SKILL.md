@@ -42,47 +42,55 @@ handles: ["+13105551234"]
 
 # How to do things
 
-**Reply to a thread.** Append a **bare line** — just the message
-text, no `[HH:MM] me:` prefix — to today's day-file. The driver picks
-up bare lines, sends via Messages.app, then writes the canonical
-`[HH:MM] me: <text>` record itself. Bracketed lines are log entries
-only and never get sent. Create today's file if it doesn't exist.
+**Send a message.** Use `write-imessage`:
 
-**One bare line = exactly one message.** Never append a multi-line
-block — each line would go out (or queue for approval) as a separate
-message. For a line break *inside* one message, use the ` ↵ ` marker
-(space, ↵, space); the driver expands it to a real newline at send
-time. Inbound multi-line texts appear the same way, so the log
-round-trips: `Here's the plan: ↵ 1. rent ↵ 2. profit` arrives as
-three lines in one message.
+```
+write-imessage --to <thread> --body "thurs after 6 works"
+```
+
+- `--to` takes a thread slug, a `memory/people/` slug, a raw phone
+  number, or an email address. New contacts are set up automatically
+  (thread dir + meta.yaml from the person's `about.yaml` handles);
+  for someone with no people entry, run `addcontact` first or pass
+  their phone/email directly.
+- One invocation = exactly one message. Multi-line bodies stay one
+  message — pass real newlines (`--body-file`, stdin, or `$'...\n...'`)
+  and the tool handles the rest. To send several messages, invoke
+  several times.
+- It waits (default 15s) and prints the outcome: `state: sent`,
+  `pending_approval`, `send_blocked`, or `failed` (with a `detail`
+  reason). Trust the state — under `pending_approval`, tell the owner
+  you sent it for approval, never that it was delivered.
 
 Whether you may send is decided by the owner's `imessage_send` capability,
-stated in your `<capabilities>` block. Always append the same bare line
-regardless of mode:
-- Send granted (`yes`) — delivered via Messages.app as described above.
-- Approval required (`ask`) — the driver detects the gate and automatically
-  queues your message in the owner's approval tray instead of sending (see
-  the `approvals` skill); it appends a `kernel: queued for owner approval`
-  note. Tell the owner you sent it for approval, not that it was delivered.
-- Not granted (`no`) — the driver consumes the line, appends a
-  `kernel: send frozen` note, emits `imessage:send_failed`, and does not call
-  Messages.app.
+stated in your `<capabilities>` block. Invoke `write-imessage` the same
+way regardless of mode:
+- Send granted (`yes`) — delivered via Messages.app.
+- Approval required (`ask`) — the driver queues your message in the
+  owner's approval tray instead of sending (see the `approvals` skill).
+- Not granted (`no`) — the send is frozen and nothing is delivered
+  (`state: send_blocked`, plus an `imessage:send_failed` event).
 
 If your `<capabilities>` block says iMessage is read-only, don't attempt
 sends; never retry a frozen or rejected send.
 
-```
-echo "thurs after 6 works" >> /home/pai/messages/<thread>/<today>.md
-```
-
 **Read a thread.** Read today's day-file. For deeper history, read
 yesterday's, and so on. Don't grep all threads unless asked.
 
-**New contact (thread doesn't exist yet).** Create
-`/home/pai/messages/<slug>/meta.yaml` with `display_name`, `channel:
-imessage`, `group: false`, and the handle. Then append to today's
-day-file as normal. Slug = lowercase first name, or lowercase
-first-last if needed for disambiguation.
+# Under the hood (the day-file protocol)
+
+`write-imessage` just writes the protocol for you: a **bare line**
+(no `[HH:MM] sender:` prefix) appended to today's day-file is a send
+request; the driver sends it and writes back the canonical
+`[HH:MM] me: <text>` record. Bracketed lines are log entries only and
+never get sent. One bare line = exactly one message; the ` ↵ ` marker
+(space, ↵, space) is a line break *inside* one message, expanded to a
+real newline at send time. Inbound multi-line texts are flattened the
+same way, so the log round-trips: `Here's the plan: ↵ 1. rent ↵ 2. profit`
+arrives as three lines in one message.
+
+You'll see driver verdicts in the day-file as `[HH:MM] kernel: ...`
+notes (`queued for owner approval`, `send frozen`, `send failed`).
 
 # Events you wake on
 

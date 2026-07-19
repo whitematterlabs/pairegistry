@@ -1,0 +1,5 @@
+name: write-imessage
+kind: bin
+version: 0.1.0
+description: Send an iMessage through the imessage driver (thread setup, ↵ flattening, and capability-gate verdict handled for you).
+entrypoint: write_imessage.py
