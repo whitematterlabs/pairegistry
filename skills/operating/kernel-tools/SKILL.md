@@ -95,7 +95,7 @@ no separate reload CLI — reconcile runs at every boot.
 
 ```sh
 subagent spawn --slug <name> --prompt "..."   # optionally --package <name>
-subagent reply --content "..."        # from inside the child
+subagent done --result result.md      # from inside the child, to finish
 subagent kill --slug <name>           # end a child
 ```
 

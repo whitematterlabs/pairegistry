@@ -14,7 +14,7 @@ goes through the **event bus** as a directed event with a
 | Kind | Direction | Emitter | Use |
 |---|---|---|---|
 | `pai_message` | any → any | `bin/send-message --to <pid> --content "..."` | generic peer IPC |
-| `subagent:response` | child → parent | `bin/subagent reply --content "..."` | child reporting back |
+| `subagent:response` | child → parent | `bin/subagent done --result result.md` | child finishing (kernel also synthesizes it) |
 
 Spawn kickoff prompts ride `pai_message` — the parent's first IPC
 to a newborn child is just a regular message.
@@ -40,8 +40,8 @@ bin/paictl reload
 bin/subagent spawn --slug research-flights \
     --prompt "find me flights to istanbul"
 
-# Child reports back (uses $PAI_PARENT to know where to send)
-bin/subagent reply --content "found: THY 1234 at $452"
+# Child reports back mid-task (parent is just another pid)
+bin/send-message --to $PAI_PARENT --content 'found: THY 1234 at $452'
 
 # End a subagent
 bin/subagent kill --slug research-flights

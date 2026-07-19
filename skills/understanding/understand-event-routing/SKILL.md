@@ -30,8 +30,10 @@ Two kinds bypass the glob system and route point-to-point via a
 - `pai_message` — generic peer IPC. Sent by `bin/send-message --to <pid>`.
   Used in either direction by any PAI talking to any other PAI.
 - `subagent:response` — child→parent only. Emitted by
-  `bin/subagent reply`; the parent receives a nudge tagged
-  `reason: subagent response`.
+  `bin/subagent done` (or synthesized by the kernel when a child ends
+  with plain text or dies); the parent receives a nudge tagged
+  `reason: subagent response`. Mid-task child→parent chatter is plain
+  `pai_message` via `bin/send-message --to $PAI_PARENT`.
 
 Spawn kickoff prompts ride `pai_message` — that's just the parent's
 first IPC to a newborn child.

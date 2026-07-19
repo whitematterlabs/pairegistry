@@ -97,10 +97,10 @@ login page, 2FA prompt, or permission dialog:
 
 1. Stop acting on it after one honest attempt. Never navigate back to
    the same challenge hoping it clears.
-2. Ask: `bin/subagent reply --content "Blocked by <wall> at <url>.
-   Clear it in the Chrome window, then tell me to continue."` Your
-   parent relays this to the owner, who can solve it in the visible
-   browser while your tab waits.
+2. Ask: `bin/send-message --to $PAI_PARENT --content "Blocked by
+   <wall> at <url>. Clear it in the Chrome window, then tell me to
+   continue."` Your parent relays this to the owner, who can solve it
+   in the visible browser while your tab waits.
 3. End your turn with no further text. The go-ahead arrives as a fresh
    message that wakes you.
 4. On wake, re-sense (`browse url`, `browse text`) — the page may
@@ -138,7 +138,7 @@ never sees it. Reports and artifacts you want to hand back go in your
    `workspace/<your-child-slug>/result.md`.
 2. Run `bin/subagent done --result result.md`. This sends a tiny pointer
    to your parent and resolves your proc. Do not paste the whole report
-   into `reply --done --content`; that can blow the response token budget
+   into a message to your parent; that can blow the response token budget
    and the parent's context.
 
 If a wall stopped you, follow "Human-clearable walls" above — ask
